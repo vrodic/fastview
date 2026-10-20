@@ -8,6 +8,8 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
 
     private var navigationManager: NavigationManager?
     private let loadQueue = DispatchQueue(label: "com.fastview.directoryload", qos: .userInitiated)
+    private var currentDirectoryLoadItem: DispatchWorkItem?
+    private let lock = NSLock()
     private static let sidebarWidthKey = "FastViewSidebarWidth"
 
     public var showFavoritesOnly: Bool = false {
@@ -62,18 +64,29 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         reloadDirectoryContentsAsync(targetSelectedItemPath: targetSelectedItemPath)
     }
 
+    public func cancelAllIOOperations() {
+        lock.lock()
+        currentDirectoryLoadItem?.cancel()
+        currentDirectoryLoadItem = nil
+        lock.unlock()
+        ThumbnailGenerator.shared.cancelAllPendingTasks()
+    }
+
     private func reloadDirectoryContentsAsync(targetSelectedItemPath: String? = nil) {
         guard let navMgr = navigationManager else { return }
-        ThumbnailGenerator.shared.cancelAllPendingTasks()
+        cancelAllIOOperations()
 
         let startTime = CFAbsoluteTimeGetCurrent()
         let path = navMgr.currentLocation.physicalPath
         FileLogger.shared.log("DIR_OPEN_START", path: path)
 
-        loadQueue.async { [weak self] in
-            guard let self = self, let mgr = self.navigationManager else { return }
+        var workItem: DispatchWorkItem!
+        workItem = DispatchWorkItem { [weak self] in
+            guard let self = self, !workItem.isCancelled, let mgr = self.navigationManager else { return }
 
             var items = mgr.contents()
+            if workItem.isCancelled { return }
+
             if self.showFavoritesOnly {
                 items = items.filter { item in
                     if item.type == .parentDirectory { return true }
@@ -85,12 +98,15 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
                 }
             }
 
+            if workItem.isCancelled { return }
+
             let elapsedTime = (CFAbsoluteTimeGetCurrent() - startTime) * 1000.0
             FileLogger.shared.log("DIR_OPEN_END", path: path, durationMs: elapsedTime)
 
             let imageItems = items.filter { $0.type == .image }
 
             DispatchQueue.main.async {
+                if workItem.isCancelled { return }
                 self.sidebarVC.setItems(items, selectFirst: targetSelectedItemPath == nil)
 
                 let parentName = (path as NSString).lastPathComponent
@@ -105,6 +121,12 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
                 }
             }
         }
+
+        lock.lock()
+        currentDirectoryLoadItem = workItem
+        lock.unlock()
+
+        loadQueue.async(execute: workItem)
     }
 
     private func containsFavoriteRecursive(item: FileItem) -> Bool {
@@ -156,7 +178,6 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
             self.mainImageView.setImage(image, keepZoom: true)
             self.statusBarView.updateImageInfo(item: item, image: image, currentIndex: currentIndex, totalImages: totalImages, parentName: parentName)
 
-            // Instantly update thumbnail in sidebar cell if available
             if let image = image {
                 let cacheKey = "thumb_\(item.id)_256.0x256.0"
                 let cost = Int(image.size.width * image.size.height * 4)
@@ -189,6 +210,7 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         } else if item.type == .parentDirectory {
             navigateUp()
         } else if item.isDirectory || item.type == .archiveZip || item.type == .archiveRar {
+            cancelAllIOOperations()
             if let _ = navMgr.navigateTo(item) {
                 reloadDirectoryContentsAsync()
             }
@@ -211,6 +233,7 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         if selectedRow >= 0 && selectedRow < currentItems.count - 1 {
             sidebarVC.selectNext()
         } else {
+            cancelAllIOOperations()
             let result = navMgr.navigateUp()
             let parentLocation = navMgr.currentLocation
             let parentMgr = NavigationManager(initialLocation: parentLocation)
@@ -239,6 +262,7 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
 
     public func navigateUp() {
         guard let navMgr = navigationManager else { return }
+        cancelAllIOOperations()
         let result = navMgr.navigateUp()
         reloadDirectoryContentsAsync(targetSelectedItemPath: result.exitedItemPath)
     }
