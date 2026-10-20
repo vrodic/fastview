@@ -26,7 +26,7 @@ public class SQLiteCache {
             return
         }
 
-        let createTableQuery = """
+        let createDirectoryTable = """
         CREATE TABLE IF NOT EXISTS directory_entries (
             cache_key TEXT PRIMARY KEY,
             json_data TEXT,
@@ -34,11 +34,77 @@ public class SQLiteCache {
         );
         """
 
-        if sqlite3_exec(db, createTableQuery, nil, nil, nil) != SQLITE_OK {
-            print("[SQLiteCache] Failed to create directory_entries table")
-        } else {
-            print("[SQLiteCache] Database initialized at \(dbPath)")
+        let createFavoritesTable = """
+        CREATE TABLE IF NOT EXISTS favorites (
+            path TEXT PRIMARY KEY,
+            timestamp REAL
+        );
+        """
+
+        sqlite3_exec(db, createDirectoryTable, nil, nil, nil)
+        sqlite3_exec(db, createFavoritesTable, nil, nil, nil)
+    }
+
+    public func isFavorite(path: String) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+
+        guard db != nil else { return false }
+
+        let query = "SELECT path FROM favorites WHERE path = ?;"
+        var statement: OpaquePointer?
+
+        var result = false
+        if sqlite3_prepare_v2(db, query, -1, &statement, nil) == SQLITE_OK {
+            sqlite3_bind_text(statement, 1, (path as NSString).utf8String, -1, nil)
+            if sqlite3_step(statement) == SQLITE_ROW {
+                result = true
+            }
         }
+        sqlite3_finalize(statement)
+        return result
+    }
+
+    public func toggleFavorite(path: String) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+
+        guard db != nil else { return false }
+
+        if isFavoriteUnlocked(path: path) {
+            let deleteQuery = "DELETE FROM favorites WHERE path = ?;"
+            var statement: OpaquePointer?
+            if sqlite3_prepare_v2(db, deleteQuery, -1, &statement, nil) == SQLITE_OK {
+                sqlite3_bind_text(statement, 1, (path as NSString).utf8String, -1, nil)
+                sqlite3_step(statement)
+            }
+            sqlite3_finalize(statement)
+            return false
+        } else {
+            let insertQuery = "INSERT OR REPLACE INTO favorites (path, timestamp) VALUES (?, ?);"
+            var statement: OpaquePointer?
+            if sqlite3_prepare_v2(db, insertQuery, -1, &statement, nil) == SQLITE_OK {
+                sqlite3_bind_text(statement, 1, (path as NSString).utf8String, -1, nil)
+                sqlite3_bind_double(statement, 2, Date().timeIntervalSince1970)
+                sqlite3_step(statement)
+            }
+            sqlite3_finalize(statement)
+            return true
+        }
+    }
+
+    private func isFavoriteUnlocked(path: String) -> Bool {
+        let query = "SELECT path FROM favorites WHERE path = ?;"
+        var statement: OpaquePointer?
+        var result = false
+        if sqlite3_prepare_v2(db, query, -1, &statement, nil) == SQLITE_OK {
+            sqlite3_bind_text(statement, 1, (path as NSString).utf8String, -1, nil)
+            if sqlite3_step(statement) == SQLITE_ROW {
+                result = true
+            }
+        }
+        sqlite3_finalize(statement)
+        return result
     }
 
     public func getDirectoryContents(key: String) -> [FileItem]? {
@@ -102,7 +168,6 @@ public class SQLiteCache {
 
         guard db != nil else { return }
         sqlite3_exec(db, "DELETE FROM directory_entries;", nil, nil, nil)
-        print("[SQLiteCache] Cleared directory cache")
     }
 }
 

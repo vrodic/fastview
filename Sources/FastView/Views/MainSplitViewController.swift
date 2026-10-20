@@ -10,6 +10,12 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
     private let loadQueue = DispatchQueue(label: "com.fastview.directoryload", qos: .userInitiated)
     private static let sidebarWidthKey = "FastViewSidebarWidth"
 
+    public var showFavoritesOnly: Bool = false {
+        didSet {
+            reloadDirectoryContentsAsync()
+        }
+    }
+
     override public func viewDidLoad() {
         super.viewDidLoad()
         setupUI()
@@ -67,7 +73,11 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         loadQueue.async { [weak self] in
             guard let self = self, let mgr = self.navigationManager else { return }
 
-            let items = mgr.contents()
+            var items = mgr.contents()
+            if self.showFavoritesOnly {
+                items = items.filter { $0.type == .parentDirectory || SQLiteCache.shared.isFavorite(path: $0.path) }
+            }
+
             let elapsedTime = (CFAbsoluteTimeGetCurrent() - startTime) * 1000.0
             FileLogger.shared.log("DIR_OPEN_END", path: path, durationMs: elapsedTime)
 
@@ -76,7 +86,8 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
             DispatchQueue.main.async {
                 self.sidebarVC.setItems(items, selectFirst: targetSelectedItemPath == nil)
 
-                self.statusBarView.updateDirectoryStats(imageCount: imageItems.count, totalSizeBytes: 0)
+                let parentName = (path as NSString).lastPathComponent
+                self.statusBarView.updateDirectoryStats(imageCount: imageItems.count, totalSizeBytes: 0, locationName: parentName)
 
                 if let targetPath = targetSelectedItemPath,
                    let idx = items.firstIndex(where: { $0.path == targetPath || $0.id == targetPath }) {
@@ -96,6 +107,13 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         let currentIndex = imageItems.firstIndex(where: { $0.id == item.id }).map { $0 + 1 }
         let totalImages = imageItems.count
 
+        let parentName: String
+        if let nav = navigationManager {
+            parentName = (nav.currentLocation.physicalPath as NSString).lastPathComponent
+        } else {
+            parentName = ""
+        }
+
         if item.type == .archiveZip || item.type == .archiveRar {
             loadQueue.async { [weak self] in
                 let archiveItems: [FileItem]
@@ -105,7 +123,7 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
                     archiveItems = ArchiveReader.listAllRarImages(archivePath: item.path)
                 }
                 DispatchQueue.main.async {
-                    self?.statusBarView.updateDirectoryStats(imageCount: archiveItems.count, totalSizeBytes: item.fileSize)
+                    self?.statusBarView.updateDirectoryStats(imageCount: archiveItems.count, totalSizeBytes: item.fileSize, locationName: parentName)
                 }
             }
         }
@@ -113,9 +131,8 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         ThumbnailGenerator.shared.loadFullImage(for: item) { [weak self] image in
             guard let self = self else { return }
             self.mainImageView.setImage(image, keepZoom: true)
-            self.statusBarView.updateImageInfo(item: item, image: image, currentIndex: currentIndex, totalImages: totalImages)
+            self.statusBarView.updateImageInfo(item: item, image: image, currentIndex: currentIndex, totalImages: totalImages, parentName: parentName)
 
-            // Ensure sidebar cell thumbnail updates if missing
             if let image = image {
                 let cacheKey = "thumb_\(item.id)_256.0x256.0"
                 if MemoryLRUCache.shared.object(forKey: cacheKey) == nil {
@@ -123,6 +140,13 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
                     MemoryLRUCache.shared.setObject(image, forKey: cacheKey, cost: cost)
                 }
             }
+        }
+    }
+
+    public func toggleFavoriteOnSelectedItem() {
+        if let item = sidebarVC.selectedItem {
+            _ = SQLiteCache.shared.toggleFavorite(path: item.path)
+            reloadDirectoryContentsAsync()
         }
     }
 
@@ -138,7 +162,6 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
     public func handleActivation(of item: FileItem) {
         guard let navMgr = navigationManager else { return }
         if item.type == .image {
-            // Pressing Enter on an image advances to the next item
             selectNextImage()
         } else if item.type == .parentDirectory {
             navigateUp()

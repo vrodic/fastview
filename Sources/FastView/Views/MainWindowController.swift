@@ -34,7 +34,6 @@ public class MainWindowController: NSWindowController, NSWindowDelegate {
         window.delegate = self
         window.contentViewController = splitVC
 
-        // Frame autosave setup using method setFrameAutosaveName
         window.setFrameAutosaveName("FastMainWindow")
         if !window.setFrameUsingName("FastMainWindow") {
             window.setFrame(initialFrame, display: true)
@@ -54,7 +53,7 @@ public class MainWindowController: NSWindowController, NSWindowDelegate {
             case 126: // Up arrow
                 self.splitVC.selectPreviousImage()
                 return nil
-            case 36: // Return / Enter
+            case 124, 36: // Right Arrow or Return / Enter
                 self.splitVC.activateSelectedItem()
                 return nil
             case 123, 51: // Left Arrow or Backspace

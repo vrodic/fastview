@@ -83,6 +83,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         let fileMenu = NSMenu(title: "File")
         fileMenuItem.submenu = fileMenu
         fileMenu.addItem(withTitle: "Open…", action: #selector(openDocument(_:)), keyEquivalent: "o")
+        fileMenu.addItem(withTitle: "Toggle Favorite", action: #selector(toggleFavoriteAction(_:)), keyEquivalent: "f")
         fileMenu.addItem(NSMenuItem.separator())
         fileMenu.addItem(withTitle: "Close Window", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
 
@@ -92,6 +93,9 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         let viewMenu = NSMenu(title: "View")
         viewMenuItem.submenu = viewMenu
 
+        viewMenu.addItem(withTitle: "Show All Items", action: #selector(showAllItemsAction(_:)), keyEquivalent: "")
+        viewMenu.addItem(withTitle: "Show Favorites Only", action: #selector(showFavoritesOnlyAction(_:)), keyEquivalent: "")
+        viewMenu.addItem(NSMenuItem.separator())
         viewMenu.addItem(withTitle: "Zoom In", action: #selector(zoomInAction), keyEquivalent: "+")
         viewMenu.addItem(withTitle: "Zoom Out", action: #selector(zoomOutAction), keyEquivalent: "-")
         viewMenu.addItem(withTitle: "Actual Size", action: #selector(actualSizeAction), keyEquivalent: "1")
@@ -130,6 +134,18 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.windowController?.splitVC.loadLocation(loc)
             }
         }
+    }
+
+    @objc private func toggleFavoriteAction(_ sender: Any?) {
+        windowController?.splitVC.toggleFavoriteOnSelectedItem()
+    }
+
+    @objc private func showAllItemsAction(_ sender: Any?) {
+        windowController?.splitVC.showFavoritesOnly = false
+    }
+
+    @objc private func showFavoritesOnlyAction(_ sender: Any?) {
+        windowController?.splitVC.showFavoritesOnly = true
     }
 
     @objc private func zoomInAction() {

@@ -44,8 +44,10 @@ public class StatusBarView: NSView {
         ])
     }
 
-    public func updateDirectoryStats(imageCount: Int, totalSizeBytes: UInt64) {
-        if totalSizeBytes > 0 {
+    public func updateDirectoryStats(imageCount: Int, totalSizeBytes: UInt64, locationName: String? = nil) {
+        if let name = locationName, !name.isEmpty {
+            leftLabel.stringValue = name
+        } else if totalSizeBytes > 0 {
             let sizeString = ByteCountFormatter.string(fromByteCount: Int64(totalSizeBytes), countStyle: .file)
             leftLabel.stringValue = "\(imageCount) items • Total \(sizeString)"
         } else {
@@ -53,7 +55,11 @@ public class StatusBarView: NSView {
         }
     }
 
-    public func updateImageInfo(item: FileItem, image: NSImage?, currentIndex: Int? = nil, totalImages: Int? = nil) {
+    public func updateImageInfo(item: FileItem, image: NSImage?, currentIndex: Int? = nil, totalImages: Int? = nil, parentName: String? = nil) {
+        if let parent = parentName, !parent.isEmpty {
+            leftLabel.stringValue = parent
+        }
+
         var infoParts: [String] = []
 
         if let index = currentIndex, let total = totalImages, total > 0 {
