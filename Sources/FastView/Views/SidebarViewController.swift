@@ -102,6 +102,11 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
         let visibleRows = tableView.rows(in: scrollView.contentView.bounds)
         guard visibleRows.length > 0 else { return }
 
+        // Drop every pending background thumbnail so that visible rows always
+        // land at the front of the serial thumbnailQueue.  Cached items are
+        // returned immediately, so re-queuing them here costs nothing.
+        ThumbnailGenerator.shared.cancelAllThumbnailTasks()
+
         for row in visibleRows.location..<NSMaxRange(visibleRows) {
             guard row >= 0 && row < items.count else { continue }
             let item = items[row]
@@ -200,6 +205,10 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
         let selectedRow = tableView.selectedRow
         guard selectedRow >= 0 && selectedRow < items.count else { return }
         let selectedItem = items[selectedRow]
+
+        // Kill background thumbnail work so that the priority queue (full-image
+        // and archive-open IO) is not starved by a backlog of thumbnails.
+        ThumbnailGenerator.shared.cancelAllThumbnailTasks()
 
         if let cell = tableView.view(atColumn: 0, row: selectedRow, makeIfNecessary: false) as? SidebarTableCellView {
             cell.loadThumbnailOnSelection(for: selectedItem)

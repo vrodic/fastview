@@ -236,6 +236,11 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
             statusBarView.updateSelectedItemStats(item: item, containedImagesCount: nil, parentName: parentName)
             mainImageView.showLoading(fileSizeBytes: item.fileSize, pastSpeedMBs: lastMeasuredSpeedMBs)
 
+            // Count images in the archive for the status bar.  This runs on a
+            // plain background queue (not the priority IO queue) because it only
+            // reads the central directory, which is already cached after the
+            // first open.  It must not race with currentDirectoryLoadItem, so
+            // store it in the same slot for cancellation purposes.
             var workItem: DispatchWorkItem!
             workItem = DispatchWorkItem { [weak self] in
                 guard let self = self, !workItem.isCancelled else { return }
@@ -269,6 +274,9 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
 
         let readStartTime = CFAbsoluteTimeGetCurrent()
 
+        // loadFullImage internally cancels all queued thumbnail work before
+        // dispatching onto the priority queue, ensuring the selected image is
+        // never blocked behind background thumbnails.
         ThumbnailGenerator.shared.loadFullImage(for: item) { [weak self] image in
             guard let self = self else { return }
             guard self.sidebarVC.selectedItem?.id == item.id else { return }

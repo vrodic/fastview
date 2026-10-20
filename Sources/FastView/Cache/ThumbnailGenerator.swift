@@ -5,23 +5,52 @@ import ImageIO
 public class ThumbnailGenerator {
     public static let shared = ThumbnailGenerator()
 
-    private let ioQueue: OperationQueue = {
+    // High-priority queue for the currently-selected image and archive opens.
+    // Serial so that only one priority IO runs at a time and is never starved
+    // by background thumbnail work.
+    private let priorityQueue: OperationQueue = {
         let q = OperationQueue()
-        q.name = "com.fastview.ioqueue"
+        q.name = "com.fastview.priorityqueue"
         q.maxConcurrentOperationCount = 1
-        q.qualityOfService = .userInitiated
+        q.qualityOfService = .userInteractive
         return q
     }()
 
+    // Low-priority queue for background thumbnail generation.
+    // Serial (maxConcurrentOperationCount = 1) to avoid saturating a remote /
+    // network-backed disk with parallel reads.  The priority queue can still
+    // run independently because it lives on a separate OperationQueue.
+    private let thumbnailQueue: OperationQueue = {
+        let q = OperationQueue()
+        q.name = "com.fastview.thumbnailqueue"
+        q.maxConcurrentOperationCount = 1
+        q.qualityOfService = .utility
+        return q
+    }()
+
+    // Tracks in-flight ops by their opKey so duplicates can be cancelled.
     private var activeOperations = [String: Operation]()
     private let lock = NSLock()
     public private(set) var isLoadingMainImage: Bool = false
 
+    // Cancel every pending thumbnail and full-image operation.
     public func cancelAllPendingTasks() {
         lock.lock()
-        ioQueue.cancelAllOperations()
+        priorityQueue.cancelAllOperations()
+        thumbnailQueue.cancelAllOperations()
         activeOperations.removeAll()
         isLoadingMainImage = false
+        lock.unlock()
+    }
+
+    // Cancel only background thumbnail operations, leaving any in-flight
+    // priority (full-image / archive-open) work untouched.
+    public func cancelAllThumbnailTasks() {
+        lock.lock()
+        thumbnailQueue.cancelAllOperations()
+        // Remove thumbnail keys from the tracking dict so stale completions
+        // are never delivered.
+        activeOperations = activeOperations.filter { $0.key.hasPrefix("full_") }
         lock.unlock()
     }
 
@@ -42,6 +71,8 @@ public class ThumbnailGenerator {
         let opKey = "thumb_\(item.id)"
 
         lock.lock()
+        // Cancel any previous thumbnail request for the same item before
+        // queuing a new one – avoids duplicate IO for the same entry.
         if let existing = activeOperations[opKey] {
             existing.cancel()
         }
@@ -72,7 +103,9 @@ public class ThumbnailGenerator {
         activeOperations[opKey] = op
         lock.unlock()
 
-        ioQueue.addOperation(op)
+        // Thumbnail ops go on the background queue so they never block the
+        // priority queue that loads the full selected image.
+        thumbnailQueue.addOperation(op)
     }
 
     public func peekFirstImage(in item: FileItem) -> FileItem? {
@@ -80,6 +113,8 @@ public class ThumbnailGenerator {
 
         var entries: [FileItem] = []
         if item.type == .archiveZip {
+            // listZipContents caches after the first open, so subsequent calls
+            // for the same archive cost no disk IO.
             entries = ArchiveReader.listZipContents(archivePath: item.path)
         } else if item.type == .archiveRar {
             entries = ArchiveReader.listRarContents(archivePath: item.path)
@@ -154,7 +189,11 @@ public class ThumbnailGenerator {
         let options: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceThumbnailMaxPixelSize: maxDimension,
-            kCGImageSourceCreateThumbnailWithTransform: true
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            // Hint the JPEG decoder to subsample rather than decode full
+            // resolution; dramatically reduces memory and CPU for large images.
+            kCGImageSourceShouldAllowFloat: false,
+            kCGImageSourceShouldCache: false
         ]
 
         return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
@@ -168,7 +207,11 @@ public class ThumbnailGenerator {
             return
         }
 
+        // Cancel all queued background thumbnail work so the priority queue
+        // can service this request without waiting for a backlog of thumbnails.
+        cancelAllThumbnailTasks()
         setMainImageLoading(true)
+
         let opKey = "full_\(item.id)"
 
         lock.lock()
@@ -234,6 +277,8 @@ public class ThumbnailGenerator {
         activeOperations[opKey] = op
         lock.unlock()
 
-        ioQueue.addOperation(op)
+        // Full-image and archive-open operations run on the priority queue so
+        // they are never blocked behind queued thumbnail work.
+        priorityQueue.addOperation(op)
     }
 }
