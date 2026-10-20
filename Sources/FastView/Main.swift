@@ -33,14 +33,10 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
             saveLastOpenedPath(path)
             let loc = NavigationManager.locationForPath(path)
 
-            var targetItem: FileItem? = nil
             let type = ArchiveReader.fileType(for: URL(fileURLWithPath: path))
-            if type == .image {
-                let name = (path as NSString).lastPathComponent
-                targetItem = FileItem(id: path, name: name, path: path, type: .image)
-            }
+            let targetPath = (type == .image) ? path : nil
 
-            windowController.splitVC.loadLocation(loc, targetSelectedItem: targetItem)
+            windowController.splitVC.loadLocation(loc, targetSelectedItemPath: targetPath)
         }
     }
 

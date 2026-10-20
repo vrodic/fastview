@@ -34,8 +34,8 @@ public class MainWindowController: NSWindowController, NSWindowDelegate {
         window.delegate = self
         window.contentViewController = splitVC
 
-        // Frame autosave setup
-        window.frameAutosaveName = NSWindow.FrameAutosaveName("FastMainWindow")
+        // Frame autosave setup using method setFrameAutosaveName
+        window.setFrameAutosaveName("FastMainWindow")
         if !window.setFrameUsingName("FastMainWindow") {
             window.setFrame(initialFrame, display: true)
         }
