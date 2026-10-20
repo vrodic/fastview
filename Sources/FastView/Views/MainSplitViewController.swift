@@ -12,6 +12,8 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
     private let lock = NSLock()
     private static let sidebarWidthKey = "FastViewSidebarWidth"
 
+    public private(set) var lastMeasuredSpeedMBs: Double = 25.0 // Initial speed baseline (25 MB/s)
+
     public var showFavoritesOnly: Bool = false {
         didSet {
             reloadDirectoryContentsAsync()
@@ -149,8 +151,6 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
     }
 
     public func displayItem(_ item: FileItem) {
-        mainImageView.showLoading()
-
         let parentName: String
         if let nav = navigationManager {
             parentName = (nav.currentLocation.physicalPath as NSString).lastPathComponent
@@ -158,7 +158,18 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
             parentName = ""
         }
 
-        if item.type == .archiveZip || item.type == .archiveRar {
+        let imageItems = sidebarVC.items.filter { $0.type == .image }
+        let currentIndex = imageItems.firstIndex(where: { $0.id == item.id }).map { $0 + 1 }
+        let totalImages = imageItems.count
+
+        // Update status bar IMMEDIATELY for selected item
+        if item.type == .image {
+            statusBarView.updateImageInfo(item: item, image: nil, currentIndex: currentIndex, totalImages: totalImages, parentName: parentName)
+            mainImageView.showLoading(fileSizeBytes: item.fileSize, pastSpeedMBs: lastMeasuredSpeedMBs)
+        } else if item.type == .archiveZip || item.type == .archiveRar {
+            statusBarView.updateSelectedItemStats(item: item, containedImagesCount: nil, parentName: parentName)
+            mainImageView.showLoading(fileSizeBytes: item.fileSize, pastSpeedMBs: lastMeasuredSpeedMBs)
+
             loadQueue.async { [weak self] in
                 let archiveItems: [FileItem]
                 if item.type == .archiveZip {
@@ -176,12 +187,17 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
             return
         }
 
-        let imageItems = sidebarVC.items.filter { $0.type == .image }
-        let currentIndex = imageItems.firstIndex(where: { $0.id == item.id }).map { $0 + 1 }
-        let totalImages = imageItems.count
+        let readStartTime = CFAbsoluteTimeGetCurrent()
 
         ThumbnailGenerator.shared.loadFullImage(for: item) { [weak self] image in
             guard let self = self else { return }
+
+            let duration = CFAbsoluteTimeGetCurrent() - readStartTime
+            if duration > 0 && item.fileSize > 0 {
+                let speedMBs = (Double(item.fileSize) / (1024.0 * 1024.0)) / duration
+                self.lastMeasuredSpeedMBs = (self.lastMeasuredSpeedMBs * 0.7) + (speedMBs * 0.3)
+            }
+
             self.mainImageView.setImage(image, keepZoom: true)
             self.statusBarView.updateImageInfo(item: item, image: image, currentIndex: currentIndex, totalImages: totalImages, parentName: parentName)
 

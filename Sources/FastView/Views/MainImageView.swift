@@ -21,6 +21,10 @@ public class MainImageView: NSView {
     private let progressBar = NSProgressIndicator()
     private let speedLabel = NSTextField(labelWithString: "")
 
+    private var progressTimer: Timer?
+    private var estimatedDuration: Double = 0
+    private var elapsedProgressTime: Double = 0
+
     override public init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         setupUI()
@@ -54,7 +58,10 @@ public class MainImageView: NSView {
 
         progressBar.translatesAutoresizingMaskIntoConstraints = false
         progressBar.style = .bar
-        progressBar.isIndeterminate = true
+        progressBar.isIndeterminate = false
+        progressBar.minValue = 0
+        progressBar.maxValue = 100
+        progressBar.doubleValue = 0
         progressBar.isHidden = true
 
         speedLabel.translatesAutoresizingMaskIntoConstraints = false
@@ -89,27 +96,44 @@ public class MainImageView: NSView {
         ])
     }
 
-    public func showLoading(transferSpeedMBs: Double? = nil) {
+    public func showLoading(fileSizeBytes: UInt64, pastSpeedMBs: Double) {
+        progressTimer?.invalidate()
+        elapsedProgressTime = 0
+
+        let speed = max(0.5, pastSpeedMBs)
+        let sizeMB = Double(fileSizeBytes) / (1024.0 * 1024.0)
+        estimatedDuration = max(0.3, sizeMB / speed)
+
+        // Only show progress UI for operations expected to take > 250ms
+        if estimatedDuration < 0.25 {
+            return
+        }
+
         loadingIndicator.isHidden = false
         loadingIndicator.startAnimation(nil)
 
+        progressBar.doubleValue = 0
         progressBar.isHidden = false
-        progressBar.startAnimation(nil)
 
-        if let speed = transferSpeedMBs, speed > 0 {
-            speedLabel.stringValue = String(format: "Loading... %.1f MB/s", speed)
-            speedLabel.isHidden = false
-        } else {
-            speedLabel.stringValue = "Loading..."
-            speedLabel.isHidden = false
+        speedLabel.stringValue = String(format: "Loading... (%.1f MB/s)", speed)
+        speedLabel.isHidden = false
+
+        progressTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
+            guard let self = self else { return }
+            self.elapsedProgressTime += 0.05
+            let progress = min(95.0, (self.elapsedProgressTime / self.estimatedDuration) * 100.0)
+            self.progressBar.doubleValue = progress
         }
     }
 
     public func hideLoading() {
+        progressTimer?.invalidate()
+        progressTimer = nil
+
         loadingIndicator.stopAnimation(nil)
         loadingIndicator.isHidden = true
 
-        progressBar.stopAnimation(nil)
+        progressBar.doubleValue = 100
         progressBar.isHidden = true
 
         speedLabel.isHidden = true
