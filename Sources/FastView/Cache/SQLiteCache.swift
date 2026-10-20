@@ -46,6 +46,7 @@ public class SQLiteCache {
         let createFavoritesTable = """
         CREATE TABLE IF NOT EXISTS favorites (
             path TEXT PRIMARY KEY,
+            item_json TEXT,
             timestamp REAL
         );
         """
@@ -75,12 +76,13 @@ public class SQLiteCache {
         return result
     }
 
-    public func toggleFavorite(path: String) -> Bool {
+    public func toggleFavorite(item: FileItem) -> Bool {
         lock.lock()
         defer { lock.unlock() }
 
         guard db != nil else { return false }
 
+        let path = item.path
         if isFavoriteUnlocked(path: path) {
             let deleteQuery = "DELETE FROM favorites WHERE path = ?;"
             var statement: OpaquePointer?
@@ -91,16 +93,48 @@ public class SQLiteCache {
             sqlite3_finalize(statement)
             return false
         } else {
-            let insertQuery = "INSERT OR REPLACE INTO favorites (path, timestamp) VALUES (?, ?);"
+            let codable = CodableFileItem(from: item)
+            guard let jsonData = try? JSONEncoder().encode(codable),
+                  let jsonString = String(data: jsonData, encoding: .utf8) else {
+                return false
+            }
+
+            let insertQuery = "INSERT OR REPLACE INTO favorites (path, item_json, timestamp) VALUES (?, ?, ?);"
             var statement: OpaquePointer?
             if sqlite3_prepare_v2(db, insertQuery, -1, &statement, nil) == SQLITE_OK {
                 sqlite3_bind_text(statement, 1, (path as NSString).utf8String, -1, nil)
-                sqlite3_bind_double(statement, 2, Date().timeIntervalSince1970)
+                sqlite3_bind_text(statement, 2, (jsonString as NSString).utf8String, -1, nil)
+                sqlite3_bind_double(statement, 3, Date().timeIntervalSince1970)
                 sqlite3_step(statement)
             }
             sqlite3_finalize(statement)
             return true
         }
+    }
+
+    public func getAllFavorites() -> [FileItem] {
+        lock.lock()
+        defer { lock.unlock() }
+
+        guard db != nil else { return [] }
+
+        let query = "SELECT item_json FROM favorites ORDER BY timestamp DESC;"
+        var statement: OpaquePointer?
+        var items: [FileItem] = []
+
+        if sqlite3_prepare_v2(db, query, -1, &statement, nil) == SQLITE_OK {
+            while sqlite3_step(statement) == SQLITE_ROW {
+                if let cString = sqlite3_column_text(statement, 0) {
+                    let jsonString = String(cString: cString)
+                    if let data = jsonString.data(using: .utf8),
+                       let decoded = try? JSONDecoder().decode(CodableFileItem.self, from: data) {
+                        items.append(decoded.toFileItem())
+                    }
+                }
+            }
+        }
+        sqlite3_finalize(statement)
+        return items
     }
 
     private func isFavoriteUnlocked(path: String) -> Bool {

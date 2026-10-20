@@ -84,6 +84,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         fileMenuItem.submenu = fileMenu
         fileMenu.addItem(withTitle: "Open…", action: #selector(openDocument(_:)), keyEquivalent: "o")
         fileMenu.addItem(withTitle: "Toggle Favorite", action: #selector(toggleFavoriteAction(_:)), keyEquivalent: "f")
+        fileMenu.addItem(withTitle: "Show Current Item Location", action: #selector(showCurrentLocationAction(_:)), keyEquivalent: "l")
         fileMenu.addItem(NSMenuItem.separator())
         fileMenu.addItem(withTitle: "Close Window", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
 
@@ -138,6 +139,10 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func toggleFavoriteAction(_ sender: Any?) {
         windowController?.splitVC.toggleFavoriteOnSelectedItem()
+    }
+
+    @objc private func showCurrentLocationAction(_ sender: Any?) {
+        windowController?.splitVC.switchToCurrentItemLocationMode()
     }
 
     @objc private func showAllItemsAction(_ sender: Any?) {

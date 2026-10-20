@@ -12,7 +12,7 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
     private let lock = NSLock()
     private static let sidebarWidthKey = "FastViewSidebarWidth"
 
-    public private(set) var lastMeasuredSpeedMBs: Double = 25.0 // Initial speed baseline (25 MB/s)
+    public private(set) var lastMeasuredSpeedMBs: Double = 25.0
 
     public var showFavoritesOnly: Bool = false {
         didSet {
@@ -76,10 +76,26 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
     }
 
     private func reloadDirectoryContentsAsync(targetSelectedItemPath: String? = nil, isNavigatingUp: Bool = false) {
-        guard let navMgr = navigationManager else { return }
         cancelAllIOOperations()
 
         let startTime = CFAbsoluteTimeGetCurrent()
+
+        if showFavoritesOnly {
+            let favorites = SQLiteCache.shared.getAllFavorites()
+            sidebarVC.setItems(favorites, selectFirst: targetSelectedItemPath == nil)
+            statusBarView.updateDirectoryStats(imageCount: favorites.count, totalSizeBytes: 0, locationName: "Favorites")
+
+            if let targetPath = targetSelectedItemPath,
+               let idx = favorites.firstIndex(where: { $0.path == targetPath || $0.id == targetPath }) {
+                sidebarVC.selectRow(idx)
+            } else if targetSelectedItemPath == nil, let first = favorites.first {
+                displayItem(first)
+            }
+            return
+        }
+
+        guard let navMgr = navigationManager else { return }
+
         let path = navMgr.currentLocation.physicalPath
         FileLogger.shared.log("DIR_OPEN_START", path: path)
 
@@ -87,16 +103,7 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         workItem = DispatchWorkItem { [weak self] in
             guard let self = self, !workItem.isCancelled, let mgr = self.navigationManager else { return }
 
-            var items = mgr.contents()
-            if workItem.isCancelled { return }
-
-            if self.showFavoritesOnly {
-                items = items.filter { item in
-                    if item.type == .parentDirectory { return true }
-                    return SQLiteCache.shared.isFavorite(path: item.path)
-                }
-            }
-
+            let items = mgr.contents()
             if workItem.isCancelled { return }
 
             let elapsedTime = (CFAbsoluteTimeGetCurrent() - startTime) * 1000.0
@@ -130,9 +137,21 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         loadQueue.async(execute: workItem)
     }
 
+    public func switchToCurrentItemLocationMode() {
+        guard let item = sidebarVC.selectedItem else { return }
+        showFavoritesOnly = false
+
+        let targetPath = item.path
+        let locPath = item.archivePath ?? item.path
+        let loc = NavigationManager.locationForPath(locPath)
+        loadLocation(loc, targetSelectedItemPath: targetPath)
+    }
+
     public func displayItem(_ item: FileItem) {
         let parentName: String
-        if let nav = navigationManager {
+        if showFavoritesOnly {
+            parentName = "Favorites"
+        } else if let nav = navigationManager {
             parentName = (nav.currentLocation.physicalPath as NSString).lastPathComponent
         } else {
             parentName = ""
@@ -186,8 +205,6 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
 
         ThumbnailGenerator.shared.loadFullImage(for: item) { [weak self] image in
             guard let self = self else { return }
-
-            // Verify currently selected item matches to prevent race conditions
             guard self.sidebarVC.selectedItem?.id == item.id else { return }
 
             let duration = CFAbsoluteTimeGetCurrent() - readStartTime
@@ -212,7 +229,7 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
 
     public func toggleFavoriteOnSelectedItem() {
         if let item = sidebarVC.selectedItem {
-            _ = SQLiteCache.shared.toggleFavorite(path: item.path)
+            _ = SQLiteCache.shared.toggleFavorite(item: item)
             sidebarVC.reloadSelectedRow()
         }
     }
@@ -250,50 +267,67 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
 
     public func selectNextArchiveOrFolderFirstImage() {
         let items = sidebarVC.items
-        guard let selected = sidebarVC.selectedItem,
-              let currentIndex = items.firstIndex(of: selected) else { return }
+        guard let current = sidebarVC.selectedItem,
+              let currentIdx = items.firstIndex(where: { $0.id == current.id }) else { return }
 
-        let currentGroup = selected.entryParentDir
-
-        for i in (currentIndex + 1)..<items.count {
+        let currentGroup = current.entryParentDir ?? ""
+        for i in (currentIdx + 1)..<items.count {
             let item = items[i]
-            if item.isDirectory || item.type == .archiveZip || item.type == .archiveRar {
-                sidebarVC.selectRow(i)
-                return
-            } else if let group = item.entryParentDir, group != currentGroup {
+            let group = item.entryParentDir ?? ""
+            if group != currentGroup && (item.type == .image || item.isDirectory || item.type == .archiveZip || item.type == .archiveRar) {
                 sidebarVC.selectRow(i)
                 return
             }
         }
-
-        selectNextHierarchyItem()
     }
 
     public func selectPreviousArchiveOrFolderFirstImage() {
         let items = sidebarVC.items
-        guard let selected = sidebarVC.selectedItem,
-              let currentIndex = items.firstIndex(of: selected) else { return }
+        guard let current = sidebarVC.selectedItem,
+              let currentIdx = items.firstIndex(where: { $0.id == current.id }) else { return }
 
-        let currentGroup = selected.entryParentDir
+        let currentGroup = current.entryParentDir ?? ""
+        var prevGroup: String? = nil
 
-        for i in (0..<currentIndex).reversed() {
-            let item = items[i]
-            if item.isDirectory || item.type == .archiveZip || item.type == .archiveRar {
-                sidebarVC.selectRow(i)
-                return
-            } else if let group = item.entryParentDir, group != currentGroup {
-                var groupStartIdx = i
-                while groupStartIdx > 0 && items[groupStartIdx - 1].entryParentDir == group {
-                    groupStartIdx -= 1
-                }
-                sidebarVC.selectRow(groupStartIdx)
-                return
+        for i in stride(from: currentIdx - 1, through: 0, by: -1) {
+            let group = items[i].entryParentDir ?? ""
+            if group != currentGroup {
+                prevGroup = group
+                break
             }
         }
 
-        if !items.isEmpty {
-            let firstIdx = items[0].type == .parentDirectory && items.count > 1 ? 1 : 0
-            sidebarVC.selectRow(firstIdx)
+        if let prevGroup = prevGroup {
+            for i in 0..<currentIdx {
+                let item = items[i]
+                if (item.entryParentDir ?? "") == prevGroup && (item.type == .image || item.isDirectory || item.type == .archiveZip || item.type == .archiveRar) {
+                    sidebarVC.selectRow(i)
+                    return
+                }
+            }
+        }
+    }
+
+    public func selectPreviousHierarchyItem() {
+        guard let navMgr = navigationManager else { return }
+        cancelAllIOOperations()
+
+        let result = navMgr.navigateUp()
+        let parentLocation = navMgr.currentLocation
+        let parentMgr = NavigationManager(initialLocation: parentLocation)
+        let parentItems = parentMgr.contents()
+
+        if let exitedIdx = parentItems.firstIndex(where: { $0.path == result.exitedItemPath || $0.id == result.exitedItemPath }),
+           exitedIdx > 0 {
+            let prevSibling = parentItems[exitedIdx - 1]
+            if prevSibling.isDirectory || prevSibling.type == .archiveZip || prevSibling.type == .archiveRar {
+                _ = navMgr.navigateTo(prevSibling)
+                reloadDirectoryContentsAsync()
+            } else {
+                reloadDirectoryContentsAsync(targetSelectedItemPath: prevSibling.path)
+            }
+        } else {
+            reloadDirectoryContentsAsync(targetSelectedItemPath: result.exitedItemPath, isNavigatingUp: true)
         }
     }
 

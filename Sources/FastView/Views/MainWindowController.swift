@@ -66,10 +66,13 @@ public class MainWindowController: NSWindowController, NSWindowDelegate {
             case 124: // Right Arrow
                 self.splitVC.selectNextHierarchyItem()
                 return nil
+            case 123: // Left Arrow
+                self.splitVC.selectPreviousHierarchyItem()
+                return nil
             case 36: // Return / Enter
                 self.splitVC.activateSelectedItem()
                 return nil
-            case 123, 51: // Left Arrow or Backspace
+            case 53, 51: // Escape or Backspace
                 self.splitVC.navigateUp()
                 return nil
             default:
