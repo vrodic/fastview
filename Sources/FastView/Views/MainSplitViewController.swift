@@ -248,16 +248,21 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         guard let selected = sidebarVC.selectedItem,
               let currentIndex = items.firstIndex(of: selected) else { return }
 
-        // Find next archive or directory in the list
+        let currentGroup = selected.entryParentDir
+
+        // 1. First search for next item with a different entryParentDir or a folder/archive item
         for i in (currentIndex + 1)..<items.count {
             let item = items[i]
             if item.isDirectory || item.type == .archiveZip || item.type == .archiveRar {
                 sidebarVC.selectRow(i)
                 return
+            } else if let group = item.entryParentDir, group != currentGroup {
+                sidebarVC.selectRow(i)
+                return
             }
         }
 
-        // If in an archive or nested folder, jump to next sibling in parent directory
+        // 2. If no further group in current list, jump across parent hierarchy to next sibling
         selectNextHierarchyItem()
     }
 
@@ -266,16 +271,26 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         guard let selected = sidebarVC.selectedItem,
               let currentIndex = items.firstIndex(of: selected) else { return }
 
-        // Find previous archive or directory in the list
+        let currentGroup = selected.entryParentDir
+
+        // Search backward for start of current group, or start of previous group
         for i in (0..<currentIndex).reversed() {
             let item = items[i]
             if item.isDirectory || item.type == .archiveZip || item.type == .archiveRar {
                 sidebarVC.selectRow(i)
                 return
+            } else if let group = item.entryParentDir, group != currentGroup {
+                // Find first image of this previous group
+                var groupStartIdx = i
+                while groupStartIdx > 0 && items[groupStartIdx - 1].entryParentDir == group {
+                    groupStartIdx -= 1
+                }
+                sidebarVC.selectRow(groupStartIdx)
+                return
             }
         }
 
-        // If no previous folder in list, select first item
+        // If at top of current group, jump to start
         if !items.isEmpty {
             let firstIdx = items[0].type == .parentDirectory && items.count > 1 ? 1 : 0
             sidebarVC.selectRow(firstIdx)

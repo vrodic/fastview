@@ -19,8 +19,9 @@ public struct FileItem: Identifiable, Hashable {
     public let archivePath: String?
     public let isDirectory: Bool
     public let fileSize: UInt64
+    public let entryParentDir: String? // Parent relative folder path inside an archive
 
-    public init(id: String, name: String, path: String, type: FileType, archivePath: String? = nil, isDirectory: Bool = false, fileSize: UInt64 = 0) {
+    public init(id: String, name: String, path: String, type: FileType, archivePath: String? = nil, isDirectory: Bool = false, fileSize: UInt64 = 0, entryParentDir: String? = nil) {
         self.id = id
         self.name = name
         self.path = path
@@ -28,6 +29,7 @@ public struct FileItem: Identifiable, Hashable {
         self.archivePath = archivePath
         self.isDirectory = isDirectory
         self.fileSize = fileSize
+        self.entryParentDir = entryParentDir
     }
 
     public static func parentItem(for path: String) -> FileItem {
@@ -188,6 +190,7 @@ public class ArchiveReader {
             } else {
                 let ext = (itemName as NSString).pathExtension.lowercased()
                 if isImageExtension(ext) {
+                    let innerParent = (path as NSString).deletingLastPathComponent
                     items.append(FileItem(
                         id: path,
                         name: itemName,
@@ -195,7 +198,8 @@ public class ArchiveReader {
                         type: .image,
                         archivePath: archivePath,
                         isDirectory: false,
-                        fileSize: UInt64(entry.uncompressedSize)
+                        fileSize: UInt64(entry.uncompressedSize),
+                        entryParentDir: innerParent
                     ))
                 }
             }
@@ -239,6 +243,7 @@ public class ArchiveReader {
             let ext = (path as NSString).pathExtension.lowercased()
             if isImageExtension(ext) {
                 let name = (path as NSString).lastPathComponent
+                let innerParent = (path as NSString).deletingLastPathComponent
                 items.append(FileItem(
                     id: path,
                     name: name,
@@ -246,7 +251,8 @@ public class ArchiveReader {
                     type: .image,
                     archivePath: archivePath,
                     isDirectory: false,
-                    fileSize: UInt64(entry.uncompressedSize)
+                    fileSize: UInt64(entry.uncompressedSize),
+                    entryParentDir: innerParent
                 ))
             }
         }
@@ -318,6 +324,7 @@ public class ArchiveReader {
             } else {
                 let ext = (itemName as NSString).pathExtension.lowercased()
                 if isImageExtension(ext) {
+                    let innerParent = (path as NSString).deletingLastPathComponent
                     items.append(FileItem(
                         id: path,
                         name: itemName,
@@ -325,7 +332,8 @@ public class ArchiveReader {
                         type: .image,
                         archivePath: archivePath,
                         isDirectory: false,
-                        fileSize: entry.uncompressed_size
+                        fileSize: entry.uncompressed_size,
+                        entryParentDir: innerParent
                     ))
                 }
             }
@@ -378,6 +386,7 @@ public class ArchiveReader {
             let ext = (path as NSString).pathExtension.lowercased()
             if isImageExtension(ext) {
                 let name = (path as NSString).lastPathComponent
+                let innerParent = (path as NSString).deletingLastPathComponent
                 items.append(FileItem(
                     id: path,
                     name: name,
@@ -385,7 +394,8 @@ public class ArchiveReader {
                     type: .image,
                     archivePath: archivePath,
                     isDirectory: false,
-                    fileSize: entry.uncompressed_size
+                    fileSize: entry.uncompressed_size,
+                    entryParentDir: innerParent
                 ))
             }
         }
