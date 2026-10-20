@@ -45,7 +45,6 @@ public class NavigationManager {
                 archiveType: nil
             )
         } else {
-            // File: location is parent directory
             let parentDir = (path as NSString).deletingLastPathComponent
             return NavigationLocation(
                 physicalPath: parentDir,
@@ -78,27 +77,38 @@ public class NavigationManager {
                 results.append(contentsOf: items)
             }
         } else {
-            // Read disk directory
+            // Fast dirent directory scanning for network shares & large folders
             let fm = FileManager.default
-            guard let fileURLs = try? fm.contentsOfDirectory(
+            guard let enumerator = fm.enumerator(
                 at: URL(fileURLWithPath: currentLocation.physicalPath),
-                includingPropertiesForKeys: [.isDirectoryKey, .fileSizeKey],
-                options: [.skipsHiddenFiles]
+                includingPropertiesForKeys: nil,
+                options: [.skipsSubdirectoryDescendants, .skipsHiddenFiles]
             ) else {
                 DirectoryCache.shared.set(key: key, items: results)
                 return results
             }
 
             var dirItems: [FileItem] = []
-            for fileURL in fileURLs {
-                let type = ArchiveReader.fileType(for: fileURL)
-                if type == .unsupported { continue }
+            while let fileURL = enumerator.nextObject() as? URL {
+                let ext = fileURL.pathExtension.lowercased()
+                let isImg = ArchiveReader.isImageExtension(ext)
+                let isArc = ArchiveReader.isArchiveExtension(ext)
 
                 var isDir: ObjCBool = false
                 fm.fileExists(atPath: fileURL.path, isDirectory: &isDir)
 
-                let values = try? fileURL.resourceValues(forKeys: [.fileSizeKey])
-                let size = UInt64(values?.fileSize ?? 0)
+                let type: FileType
+                if isDir.boolValue {
+                    type = .directory
+                } else if ext == "zip" {
+                    type = .archiveZip
+                } else if ext == "rar" {
+                    type = .archiveRar
+                } else if isImg {
+                    type = .image
+                } else {
+                    continue
+                }
 
                 dirItems.append(FileItem(
                     id: fileURL.path,
@@ -107,7 +117,7 @@ public class NavigationManager {
                     type: type,
                     archivePath: nil,
                     isDirectory: isDir.boolValue,
-                    fileSize: size
+                    fileSize: 0
                 ))
             }
 
@@ -173,7 +183,6 @@ public class NavigationManager {
                 self.currentLocation = newLoc
                 return newLoc
             } else {
-                // Exit archive back to parent directory containing the archive
                 let parentDir = (currentLocation.physicalPath as NSString).deletingLastPathComponent
                 let newLoc = NavigationLocation(
                     physicalPath: parentDir,

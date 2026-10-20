@@ -28,7 +28,7 @@ public class MainWindowController: NSWindowController, NSWindowDelegate {
         window.title = "FastView"
         window.titlebarAppearsTransparent = true
         window.minSize = NSSize(width: 600, height: 400)
-        window.setFrame(contentRect, display: true)
+        window.setFrameAutosaveName("FastMainWindow")
 
         self.init(window: window)
         window.delegate = self
@@ -51,11 +51,9 @@ public class MainWindowController: NSWindowController, NSWindowDelegate {
             case 36: // Return / Enter
                 self.splitVC.activateSelectedItem()
                 return nil
-            case 51, 123: // Backspace or Left Arrow
-                if event.keyCode == 51 || event.modifierFlags.contains(.command) {
-                    self.splitVC.navigateUp()
-                    return nil
-                }
+            case 123, 51: // Left Arrow or Backspace
+                self.splitVC.navigateUp()
+                return nil
             default:
                 break
             }
