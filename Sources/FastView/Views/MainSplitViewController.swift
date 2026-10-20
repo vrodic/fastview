@@ -28,6 +28,7 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
 
     public var showFavoritesOnly: Bool = false {
         didSet {
+            UserDefaults.standard.set(showFavoritesOnly, forKey: "FastViewIsFavoritesMode")
             reloadDirectoryContentsAsync()
         }
     }
@@ -162,7 +163,10 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
     }
 
     public func switchToCurrentItemLocationMode() {
-        guard let item = sidebarVC.selectedItem else { return }
+        guard let item = sidebarVC.selectedItem else {
+            showFavoritesOnly = false
+            return
+        }
         showFavoritesOnly = false
 
         let targetPath = item.path

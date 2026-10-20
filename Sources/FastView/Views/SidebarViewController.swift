@@ -279,6 +279,7 @@ public class SidebarTableCellView: NSTableCellView {
 
         favoriteBadge.translatesAutoresizingMaskIntoConstraints = false
         favoriteBadge.wantsLayer = true
+        favoriteBadge.layer?.zPosition = 10
         favoriteBadge.image = NSImage(systemSymbolName: "star.fill", accessibilityDescription: "Favorite")
         favoriteBadge.contentTintColor = NSColor.systemYellow
         favoriteBadge.isHidden = true

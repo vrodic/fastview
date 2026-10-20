@@ -131,7 +131,10 @@ public class SQLiteCache {
                     let jsonString = String(cString: cString)
                     if let data = jsonString.data(using: .utf8),
                        let decoded = try? JSONDecoder().decode(CodableFileItem.self, from: data) {
-                        items.append(decoded.toFileItem())
+                        let fileItem = decoded.toFileItem()
+                        if fileItem.type == .image {
+                            items.append(fileItem)
+                        }
                     }
                 }
             }
