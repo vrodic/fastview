@@ -80,6 +80,21 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
         if prev < items.count { selectRow(prev) }
     }
 
+    public func reloadSelectedRow() {
+        let selectedRow = tableView.selectedRow
+        if selectedRow >= 0 {
+            tableView.reloadData(forRowIndexes: IndexSet(integer: selectedRow), columnIndexes: IndexSet(integer: 0))
+        }
+    }
+
+    public func updateThumbnailForSelectedItem(image: NSImage) {
+        let selectedRow = tableView.selectedRow
+        if selectedRow >= 0,
+           let cell = tableView.view(atColumn: 0, row: selectedRow, makeIfNecessary: false) as? SidebarTableCellView {
+            cell.setThumbnailLoaded(image)
+        }
+    }
+
     public func activateCurrentSelection() {
         let selectedRow = tableView.selectedRow
         guard selectedRow >= 0 && selectedRow < items.count else { return }
@@ -159,7 +174,7 @@ public class SidebarTableCellView: NSTableCellView {
 
     private func setupUI() {
         thumbnailImageView.translatesAutoresizingMaskIntoConstraints = false
-        thumbnailImageView.imageScaling = .scaleProportionallyUpOrDown
+        thumbnailImageView.imageScaling = .scaleAxesIndependently
         thumbnailImageView.wantsLayer = true
         thumbnailImageView.layer?.cornerRadius = 6
 
@@ -190,8 +205,8 @@ public class SidebarTableCellView: NSTableCellView {
 
             favoriteBadge.topAnchor.constraint(equalTo: topAnchor, constant: 6),
             favoriteBadge.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
-            favoriteBadge.widthAnchor.constraint(equalToConstant: 18),
-            favoriteBadge.heightAnchor.constraint(equalToConstant: 18)
+            favoriteBadge.widthAnchor.constraint(equalToConstant: 20),
+            favoriteBadge.heightAnchor.constraint(equalToConstant: 20)
         ])
     }
 
@@ -236,7 +251,7 @@ public class SidebarTableCellView: NSTableCellView {
         }
     }
 
-    private func setThumbnailLoaded(_ image: NSImage) {
+    public func setThumbnailLoaded(_ image: NSImage) {
         thumbnailImageView.image = image
         thumbnailImageView.isHidden = false
         nameLabel.isHidden = true

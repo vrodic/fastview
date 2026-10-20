@@ -156,12 +156,12 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
             self.mainImageView.setImage(image, keepZoom: true)
             self.statusBarView.updateImageInfo(item: item, image: image, currentIndex: currentIndex, totalImages: totalImages, parentName: parentName)
 
+            // Instantly update thumbnail in sidebar cell if available
             if let image = image {
                 let cacheKey = "thumb_\(item.id)_256.0x256.0"
-                if MemoryLRUCache.shared.object(forKey: cacheKey) == nil {
-                    let cost = Int(image.size.width * image.size.height * 4)
-                    MemoryLRUCache.shared.setObject(image, forKey: cacheKey, cost: cost)
-                }
+                let cost = Int(image.size.width * image.size.height * 4)
+                MemoryLRUCache.shared.setObject(image, forKey: cacheKey, cost: cost)
+                self.sidebarVC.updateThumbnailForSelectedItem(image: image)
             }
         }
     }
@@ -169,7 +169,7 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
     public func toggleFavoriteOnSelectedItem() {
         if let item = sidebarVC.selectedItem {
             _ = SQLiteCache.shared.toggleFavorite(path: item.path)
-            reloadDirectoryContentsAsync()
+            sidebarVC.reloadSelectedRow()
         }
     }
 
@@ -211,7 +211,6 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         if selectedRow >= 0 && selectedRow < currentItems.count - 1 {
             sidebarVC.selectNext()
         } else {
-            // Ascend parent and enter next sibling
             let result = navMgr.navigateUp()
             let parentLocation = navMgr.currentLocation
             let parentMgr = NavigationManager(initialLocation: parentLocation)
