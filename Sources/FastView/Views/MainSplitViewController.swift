@@ -121,7 +121,6 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
                     self.displayItem(firstItem)
                 }
 
-                // Immediately queue initial visible items' thumbnails on directory open
                 self.sidebarVC.loadVisibleThumbnailsIfIdle()
             }
         }
@@ -152,10 +151,6 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
     public func displayItem(_ item: FileItem) {
         mainImageView.showLoading()
 
-        let imageItems = sidebarVC.items.filter { $0.type == .image }
-        let currentIndex = imageItems.firstIndex(where: { $0.id == item.id }).map { $0 + 1 }
-        let totalImages = imageItems.count
-
         let parentName: String
         if let nav = navigationManager {
             parentName = (nav.currentLocation.physicalPath as NSString).lastPathComponent
@@ -172,10 +167,18 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
                     archiveItems = ArchiveReader.listAllRarImages(archivePath: item.path)
                 }
                 DispatchQueue.main.async {
-                    self?.statusBarView.updateDirectoryStats(imageCount: archiveItems.count, totalSizeBytes: item.fileSize, locationName: parentName)
+                    self?.statusBarView.updateSelectedItemStats(item: item, containedImagesCount: archiveItems.count, parentName: parentName)
                 }
             }
+        } else if item.isDirectory || item.type == .parentDirectory {
+            statusBarView.updateSelectedItemStats(item: item, containedImagesCount: nil, parentName: parentName)
+            mainImageView.setImage(nil, keepZoom: false)
+            return
         }
+
+        let imageItems = sidebarVC.items.filter { $0.type == .image }
+        let currentIndex = imageItems.firstIndex(where: { $0.id == item.id }).map { $0 + 1 }
+        let totalImages = imageItems.count
 
         ThumbnailGenerator.shared.loadFullImage(for: item) { [weak self] image in
             guard let self = self else { return }

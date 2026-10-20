@@ -18,6 +18,8 @@ public class MainImageView: NSView {
     private let imageView = NSImageView()
     private let scrollView = NSScrollView()
     private let loadingIndicator = NSProgressIndicator()
+    private let progressBar = NSProgressIndicator()
+    private let speedLabel = NSTextField(labelWithString: "")
 
     override public init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -50,11 +52,24 @@ public class MainImageView: NSView {
         loadingIndicator.controlSize = .large
         loadingIndicator.isHidden = true
 
+        progressBar.translatesAutoresizingMaskIntoConstraints = false
+        progressBar.style = .bar
+        progressBar.isIndeterminate = true
+        progressBar.isHidden = true
+
+        speedLabel.translatesAutoresizingMaskIntoConstraints = false
+        speedLabel.font = NSFont.systemFont(ofSize: 11, weight: .medium)
+        speedLabel.textColor = NSColor.lightGray
+        speedLabel.alignment = .center
+        speedLabel.isHidden = true
+
         let clipView = scrollView.contentView
         clipView.documentView = imageView
 
         addSubview(scrollView)
         addSubview(loadingIndicator)
+        addSubview(progressBar)
+        addSubview(speedLabel)
 
         NSLayoutConstraint.activate([
             scrollView.leadingAnchor.constraint(equalTo: leadingAnchor),
@@ -63,18 +78,41 @@ public class MainImageView: NSView {
             scrollView.bottomAnchor.constraint(equalTo: bottomAnchor),
 
             loadingIndicator.centerXAnchor.constraint(equalTo: centerXAnchor),
-            loadingIndicator.centerYAnchor.constraint(equalTo: centerYAnchor)
+            loadingIndicator.centerYAnchor.constraint(equalTo: centerYAnchor, constant: -20),
+
+            progressBar.centerXAnchor.constraint(equalTo: centerXAnchor),
+            progressBar.topAnchor.constraint(equalTo: loadingIndicator.bottomAnchor, constant: 12),
+            progressBar.widthAnchor.constraint(equalToConstant: 240),
+
+            speedLabel.centerXAnchor.constraint(equalTo: centerXAnchor),
+            speedLabel.topAnchor.constraint(equalTo: progressBar.bottomAnchor, constant: 6)
         ])
     }
 
-    public func showLoading() {
+    public func showLoading(transferSpeedMBs: Double? = nil) {
         loadingIndicator.isHidden = false
         loadingIndicator.startAnimation(nil)
+
+        progressBar.isHidden = false
+        progressBar.startAnimation(nil)
+
+        if let speed = transferSpeedMBs, speed > 0 {
+            speedLabel.stringValue = String(format: "Loading... %.1f MB/s", speed)
+            speedLabel.isHidden = false
+        } else {
+            speedLabel.stringValue = "Loading..."
+            speedLabel.isHidden = false
+        }
     }
 
     public func hideLoading() {
         loadingIndicator.stopAnimation(nil)
         loadingIndicator.isHidden = true
+
+        progressBar.stopAnimation(nil)
+        progressBar.isHidden = true
+
+        speedLabel.isHidden = true
     }
 
     public func setImage(_ image: NSImage?, keepZoom: Bool = true) {

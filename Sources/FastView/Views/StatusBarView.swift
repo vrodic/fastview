@@ -55,6 +55,34 @@ public class StatusBarView: NSView {
         }
     }
 
+    public func updateSelectedItemStats(item: FileItem, containedImagesCount: Int? = nil, parentName: String? = nil) {
+        if let parent = parentName, !parent.isEmpty {
+            leftLabel.stringValue = parent
+        }
+
+        var parts: [String] = [item.name]
+
+        if let count = containedImagesCount {
+            parts.append("\(count) images")
+        }
+
+        var sizeBytes = item.fileSize
+        if sizeBytes == 0 {
+            let path = item.archivePath ?? item.path
+            if let attrs = try? FileManager.default.attributesOfItem(atPath: path),
+               let size = attrs[.size] as? UInt64 {
+                sizeBytes = size
+            }
+        }
+
+        if sizeBytes > 0 {
+            let sizeStr = ByteCountFormatter.string(fromByteCount: Int64(sizeBytes), countStyle: .file)
+            parts.append(sizeStr)
+        }
+
+        rightLabel.stringValue = parts.joined(separator: "  |  ")
+    }
+
     public func updateImageInfo(item: FileItem, image: NSImage?, currentIndex: Int? = nil, totalImages: Int? = nil, parentName: String? = nil) {
         if let parent = parentName, !parent.isEmpty {
             leftLabel.stringValue = parent
