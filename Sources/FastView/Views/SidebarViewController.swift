@@ -29,7 +29,7 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
         scrollView.autoresizesSubviews = true
 
         tableView.headerView = nil
-        tableView.rowHeight = 160
+        tableView.rowHeight = 96
         tableView.selectionHighlightStyle = .regular
         tableView.dataSource = self
         tableView.delegate = self
@@ -50,18 +50,6 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
             scrollView.topAnchor.constraint(equalTo: view.topAnchor),
             scrollView.bottomAnchor.constraint(equalTo: view.bottomAnchor)
         ])
-    }
-
-    override public func viewDidLayout() {
-        super.viewDidLayout()
-        let width = view.bounds.width
-        if width > 0 {
-            let targetRowHeight = max(90, min(800, width * 0.8))
-            if abs(tableView.rowHeight - targetRowHeight) > 5 {
-                tableView.rowHeight = targetRowHeight
-                tableView.noteHeightOfRows(withIndexesChanged: IndexSet(integersIn: 0..<items.count))
-            }
-        }
     }
 
     public func setItems(_ items: [FileItem], selectFirst: Bool = true) {
@@ -156,6 +144,7 @@ class CustomTableView: NSTableView {
 public class SidebarTableCellView: NSTableCellView {
     private let thumbnailImageView = NSImageView()
     private let nameLabel = NSTextField(labelWithString: "")
+    private let favoriteBadge = NSImageView()
     private var currentItem: FileItem?
 
     override public init(frame frameRect: NSRect) {
@@ -180,8 +169,14 @@ public class SidebarTableCellView: NSTableCellView {
         nameLabel.textColor = NSColor.labelColor
         nameLabel.alignment = .center
 
+        favoriteBadge.translatesAutoresizingMaskIntoConstraints = false
+        favoriteBadge.image = NSImage(systemSymbolName: "star.fill", accessibilityDescription: "Favorite")
+        favoriteBadge.contentTintColor = NSColor.systemYellow
+        favoriteBadge.isHidden = true
+
         addSubview(thumbnailImageView)
         addSubview(nameLabel)
+        addSubview(favoriteBadge)
 
         NSLayoutConstraint.activate([
             thumbnailImageView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
@@ -191,7 +186,12 @@ public class SidebarTableCellView: NSTableCellView {
 
             nameLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
             nameLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
-            nameLabel.centerYAnchor.constraint(equalTo: centerYAnchor)
+            nameLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
+
+            favoriteBadge.topAnchor.constraint(equalTo: topAnchor, constant: 6),
+            favoriteBadge.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
+            favoriteBadge.widthAnchor.constraint(equalToConstant: 18),
+            favoriteBadge.heightAnchor.constraint(equalToConstant: 18)
         ])
     }
 
@@ -199,18 +199,23 @@ public class SidebarTableCellView: NSTableCellView {
         self.currentItem = item
         nameLabel.stringValue = item.name
 
-        // Check if thumbnail is already cached
+        let isFav = SQLiteCache.shared.isFavorite(path: item.path)
+        favoriteBadge.isHidden = !isFav
+
         let cacheKey = "thumb_\(item.id)_256.0x256.0"
         if let cached = MemoryLRUCache.shared.object(forKey: cacheKey) {
             setThumbnailLoaded(cached)
             return
         }
 
-        // Show filename text label without image placeholder
-        showFilenameTextOnly()
-
-        // Load regular image thumbnail immediately
-        if item.type == .image {
+        if item.type == .parentDirectory {
+            setFallbackIcon(NSImage(systemSymbolName: "arrow.uturn.backward", accessibilityDescription: "Parent"))
+        } else if item.type == .directory {
+            setFallbackIcon(NSImage(systemSymbolName: "folder", accessibilityDescription: "Folder"))
+        } else if item.type == .archiveZip || item.type == .archiveRar {
+            setFallbackIcon(NSImage(systemSymbolName: "doc.zipper", accessibilityDescription: "Archive"))
+        } else {
+            setFallbackIcon(nil)
             ThumbnailGenerator.shared.generateThumbnail(for: item) { [weak self] image in
                 guard let self = self, self.currentItem?.id == item.id else { return }
                 if let img = image {
@@ -237,9 +242,15 @@ public class SidebarTableCellView: NSTableCellView {
         nameLabel.isHidden = true
     }
 
-    private func showFilenameTextOnly() {
-        thumbnailImageView.image = nil
-        thumbnailImageView.isHidden = true
-        nameLabel.isHidden = false
+    private func setFallbackIcon(_ icon: NSImage?) {
+        if let icon = icon {
+            thumbnailImageView.image = icon
+            thumbnailImageView.isHidden = false
+            nameLabel.isHidden = false
+        } else {
+            thumbnailImageView.image = nil
+            thumbnailImageView.isHidden = true
+            nameLabel.isHidden = false
+        }
     }
 }

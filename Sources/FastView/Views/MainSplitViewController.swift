@@ -75,7 +75,14 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
 
             var items = mgr.contents()
             if self.showFavoritesOnly {
-                items = items.filter { $0.type == .parentDirectory || SQLiteCache.shared.isFavorite(path: $0.path) }
+                items = items.filter { item in
+                    if item.type == .parentDirectory { return true }
+                    if SQLiteCache.shared.isFavorite(path: item.path) { return true }
+                    if item.isDirectory || item.type == .archiveZip || item.type == .archiveRar {
+                        return self.containsFavoriteRecursive(item: item)
+                    }
+                    return false
+                }
             }
 
             let elapsedTime = (CFAbsoluteTimeGetCurrent() - startTime) * 1000.0
@@ -98,6 +105,22 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
                 }
             }
         }
+    }
+
+    private func containsFavoriteRecursive(item: FileItem) -> Bool {
+        if SQLiteCache.shared.isFavorite(path: item.path) { return true }
+        if item.type == .archiveZip {
+            let zipItems = ArchiveReader.listAllZipImages(archivePath: item.path)
+            return zipItems.contains { SQLiteCache.shared.isFavorite(path: $0.path) }
+        } else if item.type == .archiveRar {
+            let rarItems = ArchiveReader.listAllRarImages(archivePath: item.path)
+            return rarItems.contains { SQLiteCache.shared.isFavorite(path: $0.path) }
+        } else if item.isDirectory {
+            let mgr = NavigationManager(initialLocation: NavigationLocation(physicalPath: item.path))
+            let contents = mgr.contents()
+            return contents.contains { SQLiteCache.shared.isFavorite(path: $0.path) || ( $0.isDirectory && containsFavoriteRecursive(item: $0)) }
+        }
+        return false
     }
 
     public func displayItem(_ item: FileItem) {
@@ -178,6 +201,35 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
 
     public func selectPreviousImage() {
         sidebarVC.selectPrevious()
+    }
+
+    public func selectNextHierarchyItem() {
+        guard let navMgr = navigationManager else { return }
+        let currentItems = sidebarVC.items
+        let selectedRow = sidebarVC.selectedItem.flatMap { item in currentItems.firstIndex(of: item) } ?? -1
+
+        if selectedRow >= 0 && selectedRow < currentItems.count - 1 {
+            sidebarVC.selectNext()
+        } else {
+            // Ascend parent and enter next sibling
+            let result = navMgr.navigateUp()
+            let parentLocation = navMgr.currentLocation
+            let parentMgr = NavigationManager(initialLocation: parentLocation)
+            let parentItems = parentMgr.contents()
+
+            if let exitedIdx = parentItems.firstIndex(where: { $0.path == result.exitedItemPath || $0.id == result.exitedItemPath }),
+               exitedIdx < parentItems.count - 1 {
+                let nextSibling = parentItems[exitedIdx + 1]
+                if nextSibling.isDirectory || nextSibling.type == .archiveZip || nextSibling.type == .archiveRar {
+                    _ = navMgr.navigateTo(nextSibling)
+                    reloadDirectoryContentsAsync()
+                } else {
+                    reloadDirectoryContentsAsync(targetSelectedItemPath: nextSibling.path)
+                }
+            } else {
+                reloadDirectoryContentsAsync(targetSelectedItemPath: result.exitedItemPath)
+            }
+        }
     }
 
     public func activateSelectedItem() {

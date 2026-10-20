@@ -53,7 +53,10 @@ public class MainWindowController: NSWindowController, NSWindowDelegate {
             case 126: // Up arrow
                 self.splitVC.selectPreviousImage()
                 return nil
-            case 124, 36: // Right Arrow or Return / Enter
+            case 124: // Right Arrow
+                self.splitVC.selectNextHierarchyItem()
+                return nil
+            case 36: // Return / Enter
                 self.splitVC.activateSelectedItem()
                 return nil
             case 123, 51: // Left Arrow or Backspace

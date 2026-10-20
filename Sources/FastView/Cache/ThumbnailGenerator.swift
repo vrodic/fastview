@@ -8,6 +8,7 @@ public class ThumbnailGenerator {
 
     private var pendingWorkItems = [String: DispatchWorkItem]()
     private let lock = NSLock()
+    public private(set) var isLoadingMainImage: Bool = false
 
     public func cancelAllPendingTasks() {
         lock.lock()
@@ -18,7 +19,24 @@ public class ThumbnailGenerator {
         pendingWorkItems.removeAll()
     }
 
+    public func setMainImageLoading(_ loading: Bool) {
+        lock.lock()
+        self.isLoadingMainImage = loading
+        lock.unlock()
+        if loading {
+            cancelAllPendingTasks()
+        }
+    }
+
     public func generateThumbnail(for item: FileItem, targetSize: CGSize = CGSize(width: 256, height: 256), completion: @escaping (NSImage?) -> Void) {
+        lock.lock()
+        if isLoadingMainImage {
+            lock.unlock()
+            completion(nil)
+            return
+        }
+        lock.unlock()
+
         let cacheKey = "thumb_\(item.id)_\(targetSize.width)x\(targetSize.height)"
 
         if let cached = MemoryLRUCache.shared.object(forKey: cacheKey) {
@@ -143,13 +161,18 @@ public class ThumbnailGenerator {
             return
         }
 
+        setMainImageLoading(true)
+
         serialDiskQueue.async {
             var targetItem = item
             if item.type == .archiveZip || item.type == .archiveRar || item.isDirectory {
                 if let peeked = self.peekFirstImage(in: item) {
                     targetItem = peeked
                 } else {
-                    DispatchQueue.main.async { completion(nil) }
+                    DispatchQueue.main.async {
+                        self.setMainImageLoading(false)
+                        completion(nil)
+                    }
                     return
                 }
             }
@@ -167,11 +190,15 @@ public class ThumbnailGenerator {
             }
 
             guard let data = imageData else {
-                DispatchQueue.main.async { completion(nil) }
+                DispatchQueue.main.async {
+                    self.setMainImageLoading(false)
+                    completion(nil)
+                }
                 return
             }
 
             DispatchQueue.main.async {
+                self.setMainImageLoading(false)
                 guard let image = NSImage(data: data) else {
                     completion(nil)
                     return
