@@ -182,10 +182,10 @@ public class ArchiveReader {
         var seenFolders = Set<String>()
 
         for i in 0..<count {
-            let entry = rawEntries[i]
-            let path = withUnsafeBytes(of: entry.name) { ptr -> String in
-                guard let address = ptr.baseAddress?.assumingMemoryBound(to: CChar.self) else { return "" }
-                return String(cString: address)
+            var entry = rawEntries[i]
+            let path = withUnsafeBytes(of: &entry.name) { ptr -> String in
+                guard let base = ptr.baseAddress?.assumingMemoryBound(to: CChar.self) else { return "" }
+                return String(cString: base)
             }
             guard !path.isEmpty && path != cleanSubfolder && path != cleanSubfolder + "/" else { continue }
 

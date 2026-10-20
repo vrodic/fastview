@@ -15,21 +15,23 @@ public class ThumbnailGenerator {
         }
 
         queue.async {
-            guard let image = self.loadAndScaleImage(for: item, targetSize: targetSize) else {
+            guard let cgImage = self.loadAndScaleCGImage(for: item, targetSize: targetSize) else {
                 DispatchQueue.main.async { completion(nil) }
                 return
             }
 
-            let cost = Int(image.size.width * image.size.height * 4)
-            MemoryLRUCache.shared.setObject(image, forKey: cacheKey, cost: cost)
-
             DispatchQueue.main.async {
+                let image = NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
+                let cost = Int(cgImage.width * cgImage.height * 4)
+                MemoryLRUCache.shared.setObject(image, forKey: cacheKey, cost: cost)
                 completion(image)
             }
         }
     }
 
     public func peekFirstImage(in item: FileItem) -> FileItem? {
+        if item.type == .parentDirectory { return nil }
+
         if item.type == .archiveZip {
             let entries = ArchiveReader.listZipContents(archivePath: item.path)
             return findFirstImage(in: entries)
@@ -48,7 +50,7 @@ public class ThumbnailGenerator {
                 }
             } else {
                 let mgr = NavigationManager(initialLocation: NavigationLocation(physicalPath: item.path))
-                let entries = mgr.contents()
+                let entries = mgr.contents().filter { $0.type != .parentDirectory }
                 return findFirstImage(in: entries)
             }
         }
@@ -57,6 +59,7 @@ public class ThumbnailGenerator {
 
     private func findFirstImage(in items: [FileItem]) -> FileItem? {
         for item in items {
+            if item.type == .parentDirectory { continue }
             if item.type == .image { return item }
             if item.type == .archiveZip || item.type == .archiveRar || item.isDirectory {
                 if let nested = peekFirstImage(in: item) {
@@ -67,10 +70,10 @@ public class ThumbnailGenerator {
         return nil
     }
 
-    public func loadAndScaleImage(for item: FileItem, targetSize: CGSize) -> NSImage? {
+    public func loadAndScaleCGImage(for item: FileItem, targetSize: CGSize) -> CGImage? {
         if item.type == .archiveZip || item.type == .archiveRar || item.isDirectory {
             if let peeked = peekFirstImage(in: item) {
-                return loadAndScaleImage(for: peeked, targetSize: targetSize)
+                return loadAndScaleCGImage(for: peeked, targetSize: targetSize)
             }
             return nil
         }
@@ -88,9 +91,6 @@ public class ThumbnailGenerator {
         }
 
         guard let data = imageData else { return nil }
-        if let image = NSImage(data: data) {
-            return image
-        }
 
         guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
         let maxDimension = max(targetSize.width, targetSize.height)
@@ -100,11 +100,7 @@ public class ThumbnailGenerator {
             kCGImageSourceCreateThumbnailWithTransform: true
         ]
 
-        guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
-            return nil
-        }
-
-        return NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
+        return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
     }
 
     public func loadFullImage(for item: FileItem, completion: @escaping (NSImage?) -> Void) {
@@ -138,15 +134,18 @@ public class ThumbnailGenerator {
                 imageData = try? Data(contentsOf: URL(fileURLWithPath: targetItem.path))
             }
 
-            guard let data = imageData, let image = NSImage(data: data) else {
+            guard let data = imageData else {
                 DispatchQueue.main.async { completion(nil) }
                 return
             }
 
-            let cost = Int(image.size.width * image.size.height * 4)
-            MemoryLRUCache.shared.setObject(image, forKey: cacheKey, cost: cost)
-
             DispatchQueue.main.async {
+                guard let image = NSImage(data: data) else {
+                    completion(nil)
+                    return
+                }
+                let cost = Int(image.size.width * image.size.height * 4)
+                MemoryLRUCache.shared.setObject(image, forKey: cacheKey, cost: cost)
                 completion(image)
             }
         }
