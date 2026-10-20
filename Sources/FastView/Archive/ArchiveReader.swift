@@ -12,11 +12,11 @@ public enum FileType: Equatable {
 }
 
 public struct FileItem: Identifiable, Hashable {
-    public let id: String // Unique identifier (path or entry path inside archive)
+    public let id: String
     public let name: String
-    public let path: String // Full disk path or virtual archive path
+    public let path: String
     public let type: FileType
-    public let archivePath: String? // Physical disk path if inside an archive
+    public let archivePath: String?
     public let isDirectory: Bool
     public let fileSize: UInt64
 
@@ -75,8 +75,10 @@ public class ArchiveReader {
         return supportedArchiveExtensions.contains(ext.lowercased())
     }
 
-    // Load entry content completely in memory from ZIP archive
     public static func loadZipData(archivePath: String, entryPath: String) -> Data? {
+        let startTime = CFAbsoluteTimeGetCurrent()
+        FileLogger.shared.log("READ_ZIP_ENTRY_START", path: "\(archivePath) -> \(entryPath)")
+
         guard let archive = Archive(url: URL(fileURLWithPath: archivePath), accessMode: .read) else {
             return nil
         }
@@ -88,11 +90,16 @@ public class ArchiveReader {
         _ = try? archive.extract(entry, consumer: { chunk in
             data.append(chunk)
         })
+
+        let duration = (CFAbsoluteTimeGetCurrent() - startTime) * 1000.0
+        FileLogger.shared.log("READ_ZIP_ENTRY_END", path: "\(archivePath) -> \(entryPath)", durationMs: duration)
         return data
     }
 
-    // Load entry content completely in memory from RAR archive
     public static func loadRarData(archivePath: String, entryPath: String) -> Data? {
+        let startTime = CFAbsoluteTimeGetCurrent()
+        FileLogger.shared.log("READ_RAR_ENTRY_START", path: "\(archivePath) -> \(entryPath)")
+
         guard let archive = unrar_open(archivePath) else { return nil }
         defer { unrar_close(archive) }
 
@@ -102,11 +109,16 @@ public class ArchiveReader {
         }
         let data = Data(bytes: buffer, count: size)
         free(buffer)
+
+        let duration = (CFAbsoluteTimeGetCurrent() - startTime) * 1000.0
+        FileLogger.shared.log("READ_RAR_ENTRY_END", path: "\(archivePath) -> \(entryPath)", durationMs: duration)
         return data
     }
 
-    // List contents of ZIP archive at specific subfolder level (or all items if root)
     public static func listZipContents(archivePath: String, subfolder: String = "") -> [FileItem] {
+        let startTime = CFAbsoluteTimeGetCurrent()
+        FileLogger.shared.log("LIST_ZIP_START", path: archivePath)
+
         guard let archive = Archive(url: URL(fileURLWithPath: archivePath), accessMode: .read) else {
             return []
         }
@@ -162,15 +174,19 @@ public class ArchiveReader {
             }
         }
 
-        // If listing at root yielded only 1 item and it's a directory wrapper, flatten or include all images
         if items.count == 1 && items[0].isDirectory {
-            return listAllZipImages(archivePath: archivePath)
+            let all = listAllZipImages(archivePath: archivePath)
+            let duration = (CFAbsoluteTimeGetCurrent() - startTime) * 1000.0
+            FileLogger.shared.log("LIST_ZIP_END", path: archivePath, durationMs: duration)
+            return all
         }
 
-        return sortItems(items)
+        let sorted = sortItems(items)
+        let duration = (CFAbsoluteTimeGetCurrent() - startTime) * 1000.0
+        FileLogger.shared.log("LIST_ZIP_END", path: archivePath, durationMs: duration)
+        return sorted
     }
 
-    // List ALL image entries recursively in ZIP archive
     public static func listAllZipImages(archivePath: String) -> [FileItem] {
         guard let archive = Archive(url: URL(fileURLWithPath: archivePath), accessMode: .read) else {
             return []
@@ -197,8 +213,10 @@ public class ArchiveReader {
         return sortItems(items)
     }
 
-    // List contents of RAR archive at specific subfolder level
     public static func listRarContents(archivePath: String, subfolder: String = "") -> [FileItem] {
+        let startTime = CFAbsoluteTimeGetCurrent()
+        FileLogger.shared.log("LIST_RAR_START", path: archivePath)
+
         guard let archive = unrar_open(archivePath) else { return [] }
         defer { unrar_close(archive) }
 
@@ -262,13 +280,18 @@ public class ArchiveReader {
         }
 
         if items.count == 1 && items[0].isDirectory {
-            return listAllRarImages(archivePath: archivePath)
+            let all = listAllRarImages(archivePath: archivePath)
+            let duration = (CFAbsoluteTimeGetCurrent() - startTime) * 1000.0
+            FileLogger.shared.log("LIST_RAR_END", path: archivePath, durationMs: duration)
+            return all
         }
 
-        return sortItems(items)
+        let sorted = sortItems(items)
+        let duration = (CFAbsoluteTimeGetCurrent() - startTime) * 1000.0
+        FileLogger.shared.log("LIST_RAR_END", path: archivePath, durationMs: duration)
+        return sorted
     }
 
-    // List ALL image entries recursively in RAR archive
     public static func listAllRarImages(archivePath: String) -> [FileItem] {
         guard let archive = unrar_open(archivePath) else { return [] }
         defer { unrar_close(archive) }
@@ -304,7 +327,6 @@ public class ArchiveReader {
         return sortItems(items)
     }
 
-    // Fast natural sorting: Folders/Archives first, then alphanumeric images
     public static func sortItems(_ items: [FileItem]) -> [FileItem] {
         return items.sorted { a, b in
             let aIsFolder = a.isDirectory || a.type == .archiveZip || a.type == .archiveRar

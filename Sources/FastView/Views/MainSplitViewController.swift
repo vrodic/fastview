@@ -7,6 +7,7 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
     private let statusBarView = StatusBarView()
 
     private var navigationManager: NavigationManager?
+    private let loadQueue = DispatchQueue(label: "com.fastview.directoryload", qos: .userInitiated)
 
     override public func viewDidLoad() {
         super.viewDidLoad()
@@ -52,31 +53,28 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
 
         let startTime = CFAbsoluteTimeGetCurrent()
         let path = navMgr.currentLocation.physicalPath
-        print("[DirectoryOpen] Opening location: \(path)...")
+        FileLogger.shared.log("DIR_OPEN_START", path: path)
 
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+        loadQueue.async { [weak self] in
             guard let self = self, let mgr = self.navigationManager else { return }
 
-            mgr.contentsProgressive(chunkSize: 50) { [weak self] itemsChunk in
-                guard let self = self else { return }
+            let items = mgr.contents()
+            let elapsedTime = (CFAbsoluteTimeGetCurrent() - startTime) * 1000.0
+            FileLogger.shared.log("DIR_OPEN_END", path: path, durationMs: elapsedTime)
 
-                let elapsedTime = (CFAbsoluteTimeGetCurrent() - startTime) * 1000.0
-                print(String(format: "[DirectoryOpen] Progressive chunk loaded %d items from %@ in %.2f ms", itemsChunk.count, path, elapsedTime))
+            let imageItems = items.filter { $0.type == .image }
 
-                let imageItems = itemsChunk.filter { $0.type == .image }
+            DispatchQueue.main.async {
+                self.sidebarVC.setItems(items, selectFirst: targetSelectedItemPath == nil)
 
-                DispatchQueue.main.async {
-                    self.sidebarVC.setItems(itemsChunk, selectFirst: targetSelectedItemPath == nil)
+                self.statusBarView.updateDirectoryStats(imageCount: imageItems.count, totalSizeBytes: 0)
 
-                    self.statusBarView.updateDirectoryStats(imageCount: imageItems.count, totalSizeBytes: 0)
-
-                    if let targetPath = targetSelectedItemPath,
-                       let idx = itemsChunk.firstIndex(where: { $0.path == targetPath || $0.id == targetPath }) {
-                        self.sidebarVC.selectRow(idx)
-                    } else if targetSelectedItemPath == nil,
-                              let firstItem = itemsChunk.first(where: { $0.type == .image || $0.type == .archiveZip || $0.type == .archiveRar }) {
-                        self.displayItem(firstItem)
-                    }
+                if let targetPath = targetSelectedItemPath,
+                   let idx = items.firstIndex(where: { $0.path == targetPath || $0.id == targetPath }) {
+                    self.sidebarVC.selectRow(idx)
+                } else if targetSelectedItemPath == nil,
+                          let firstItem = items.first(where: { $0.type == .image || $0.type == .archiveZip || $0.type == .archiveRar }) {
+                    self.displayItem(firstItem)
                 }
             }
         }
@@ -84,13 +82,17 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
 
     public func displayItem(_ item: FileItem) {
         if item.type == .archiveZip || item.type == .archiveRar {
-            let archiveItems: [FileItem]
-            if item.type == .archiveZip {
-                archiveItems = ArchiveReader.listAllZipImages(archivePath: item.path)
-            } else {
-                archiveItems = ArchiveReader.listAllRarImages(archivePath: item.path)
+            loadQueue.async { [weak self] in
+                let archiveItems: [FileItem]
+                if item.type == .archiveZip {
+                    archiveItems = ArchiveReader.listAllZipImages(archivePath: item.path)
+                } else {
+                    archiveItems = ArchiveReader.listAllRarImages(archivePath: item.path)
+                }
+                DispatchQueue.main.async {
+                    self?.statusBarView.updateDirectoryStats(imageCount: archiveItems.count, totalSizeBytes: item.fileSize)
+                }
             }
-            statusBarView.updateDirectoryStats(imageCount: archiveItems.count, totalSizeBytes: item.fileSize)
         }
 
         ThumbnailGenerator.shared.loadFullImage(for: item) { [weak self] image in
