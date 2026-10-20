@@ -62,30 +62,24 @@ public class NavigationManager {
         }
 
         var results: [FileItem] = []
-
-        // First item is always parent navigation `(..)`
         let parentItem = FileItem.parentItem(for: currentLocation.physicalPath)
         results.append(parentItem)
 
         if currentLocation.isArchive {
             let subfolder = currentLocation.archiveSubfolder ?? ""
+            let archiveItems: [FileItem]
             if currentLocation.archiveType == .archiveZip {
-                let items = ArchiveReader.listZipContents(archivePath: currentLocation.physicalPath, subfolder: subfolder)
-                results.append(contentsOf: items)
-            } else if currentLocation.archiveType == .archiveRar {
-                let items = ArchiveReader.listRarContents(archivePath: currentLocation.physicalPath, subfolder: subfolder)
-                results.append(contentsOf: items)
+                archiveItems = ArchiveReader.listZipContents(archivePath: currentLocation.physicalPath, subfolder: subfolder)
+            } else {
+                archiveItems = ArchiveReader.listRarContents(archivePath: currentLocation.physicalPath, subfolder: subfolder)
             }
+            results.append(contentsOf: archiveItems)
         } else {
-            // Instant directory scanning using string array contentsOfDirectory(atPath:)
             let fm = FileManager.default
             guard let fileNames = try? fm.contentsOfDirectory(atPath: currentLocation.physicalPath) else {
                 DirectoryCache.shared.set(key: key, items: results)
                 return results
             }
-
-            var dirItems: [FileItem] = []
-            dirItems.reserveCapacity(fileNames.count)
 
             for fileName in fileNames {
                 if fileName.hasPrefix(".") { continue }
@@ -93,31 +87,33 @@ public class NavigationManager {
                 let ext = (fileName as NSString).pathExtension.lowercased()
                 let fullPath = (currentLocation.physicalPath as NSString).appendingPathComponent(fileName)
 
+                let item: FileItem
                 if ext == "zip" {
-                    dirItems.append(FileItem(id: fullPath, name: fileName, path: fullPath, type: .archiveZip, isDirectory: false))
+                    item = FileItem(id: fullPath, name: fileName, path: fullPath, type: .archiveZip, isDirectory: false)
                 } else if ext == "rar" {
-                    dirItems.append(FileItem(id: fullPath, name: fileName, path: fullPath, type: .archiveRar, isDirectory: false))
+                    item = FileItem(id: fullPath, name: fileName, path: fullPath, type: .archiveRar, isDirectory: false)
                 } else if ArchiveReader.isImageExtension(ext) {
-                    dirItems.append(FileItem(id: fullPath, name: fileName, path: fullPath, type: .image, isDirectory: false))
+                    item = FileItem(id: fullPath, name: fileName, path: fullPath, type: .image, isDirectory: false)
                 } else {
-                    // Check if directory without stat on files
-                    var isDir: ObjCBool = false
-                    if fm.fileExists(atPath: fullPath, isDirectory: &isDir) && isDir.boolValue {
-                        dirItems.append(FileItem(id: fullPath, name: fileName, path: fullPath, type: .directory, isDirectory: true))
-                    }
+                    item = FileItem(id: fullPath, name: fileName, path: fullPath, type: .directory, isDirectory: true)
                 }
-            }
 
-            results.append(contentsOf: ArchiveReader.sortItems(dirItems))
+                results.append(item)
+            }
         }
 
         DirectoryCache.shared.set(key: key, items: results)
         return results
     }
 
+    public func contentsProgressive(chunkSize: Int = 50, onChunk: @escaping ([FileItem]) -> Void) {
+        let items = contents()
+        onChunk(items)
+    }
+
     public func navigateTo(_ item: FileItem) -> NavigationLocation? {
         if item.type == .parentDirectory {
-            return navigateUp()
+            return navigateUp().location
         }
 
         if currentLocation.isArchive {
@@ -156,7 +152,9 @@ public class NavigationManager {
         return nil
     }
 
-    public func navigateUp() -> NavigationLocation {
+    public func navigateUp() -> (location: NavigationLocation, exitedItemPath: String) {
+        let exitedPath = currentLocation.isArchive ? (currentLocation.archiveSubfolder ?? currentLocation.physicalPath) : currentLocation.physicalPath
+
         if currentLocation.isArchive {
             if let subfolder = currentLocation.archiveSubfolder, !subfolder.isEmpty {
                 let parentSub = (subfolder as NSString).deletingLastPathComponent
@@ -168,7 +166,7 @@ public class NavigationManager {
                     archiveType: currentLocation.archiveType
                 )
                 self.currentLocation = newLoc
-                return newLoc
+                return (newLoc, exitedPath)
             } else {
                 let parentDir = (currentLocation.physicalPath as NSString).deletingLastPathComponent
                 let newLoc = NavigationLocation(
@@ -178,7 +176,7 @@ public class NavigationManager {
                     archiveType: nil
                 )
                 self.currentLocation = newLoc
-                return newLoc
+                return (newLoc, currentLocation.physicalPath)
             }
         } else {
             let parentDir = (currentLocation.physicalPath as NSString).deletingLastPathComponent
@@ -189,7 +187,7 @@ public class NavigationManager {
                 archiveType: nil
             )
             self.currentLocation = newLoc
-            return newLoc
+            return (newLoc, currentLocation.physicalPath)
         }
     }
 }

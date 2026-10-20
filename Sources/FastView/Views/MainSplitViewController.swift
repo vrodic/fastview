@@ -41,12 +41,12 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         addSplitViewItem(mainItem)
     }
 
-    public func loadLocation(_ location: NavigationLocation, targetSelectedItem: FileItem? = nil) {
+    public func loadLocation(_ location: NavigationLocation, targetSelectedItemPath: String? = nil) {
         navigationManager = NavigationManager(initialLocation: location)
-        reloadDirectoryContentsAsync(targetSelectedItem: targetSelectedItem)
+        reloadDirectoryContentsAsync(targetSelectedItemPath: targetSelectedItemPath)
     }
 
-    private func reloadDirectoryContentsAsync(targetSelectedItem: FileItem? = nil) {
+    private func reloadDirectoryContentsAsync(targetSelectedItemPath: String? = nil) {
         guard let navMgr = navigationManager else { return }
         ThumbnailGenerator.shared.cancelAllPendingTasks()
 
@@ -56,26 +56,27 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self, let mgr = self.navigationManager else { return }
-            let items = mgr.contents()
 
-            let elapsedTime = (CFAbsoluteTimeGetCurrent() - startTime) * 1000.0
-            print(String(format: "[DirectoryOpen] Completed loading %d items from %@ in %.2f ms", items.count, path, elapsedTime))
+            mgr.contentsProgressive(chunkSize: 50) { [weak self] itemsChunk in
+                guard let self = self else { return }
 
-            let imageItems = items.filter { $0.type == .image }
-            let totalBytes = items.reduce(0) { $0 + $1.fileSize }
+                let elapsedTime = (CFAbsoluteTimeGetCurrent() - startTime) * 1000.0
+                print(String(format: "[DirectoryOpen] Progressive chunk loaded %d items from %@ in %.2f ms", itemsChunk.count, path, elapsedTime))
 
-            DispatchQueue.main.async {
-                self.sidebarVC.setItems(items, selectFirst: targetSelectedItem == nil)
+                let imageItems = itemsChunk.filter { $0.type == .image }
 
-                self.statusBarView.updateDirectoryStats(imageCount: imageItems.count, totalSizeBytes: totalBytes)
+                DispatchQueue.main.async {
+                    self.sidebarVC.setItems(itemsChunk, selectFirst: targetSelectedItemPath == nil)
 
-                if let target = targetSelectedItem, let idx = items.firstIndex(where: { $0.id == target.id || $0.path == target.path }) {
-                    self.sidebarVC.selectRow(idx)
-                } else if let firstItem = items.first(where: { $0.type == .image || $0.type == .archiveZip || $0.type == .archiveRar }) {
-                    self.displayItem(firstItem)
-                } else {
-                    self.mainImageView.setImage(nil)
-                    self.statusBarView.clearImageInfo()
+                    self.statusBarView.updateDirectoryStats(imageCount: imageItems.count, totalSizeBytes: 0)
+
+                    if let targetPath = targetSelectedItemPath,
+                       let idx = itemsChunk.firstIndex(where: { $0.path == targetPath || $0.id == targetPath }) {
+                        self.sidebarVC.selectRow(idx)
+                    } else if targetSelectedItemPath == nil,
+                              let firstItem = itemsChunk.first(where: { $0.type == .image || $0.type == .archiveZip || $0.type == .archiveRar }) {
+                        self.displayItem(firstItem)
+                    }
                 }
             }
         }
@@ -110,8 +111,7 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
     public func handleActivation(of item: FileItem) {
         guard let navMgr = navigationManager else { return }
         if item.type == .parentDirectory {
-            _ = navMgr.navigateUp()
-            reloadDirectoryContentsAsync()
+            navigateUp()
         } else if item.isDirectory || item.type == .archiveZip || item.type == .archiveRar {
             if let _ = navMgr.navigateTo(item) {
                 reloadDirectoryContentsAsync()
@@ -135,8 +135,8 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
 
     public func navigateUp() {
         guard let navMgr = navigationManager else { return }
-        _ = navMgr.navigateUp()
-        reloadDirectoryContentsAsync()
+        let result = navMgr.navigateUp()
+        reloadDirectoryContentsAsync(targetSelectedItemPath: result.exitedItemPath)
     }
 
     public var imageView: MainImageView {

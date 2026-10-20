@@ -12,7 +12,7 @@ public class MainWindowController: NSWindowController, NSWindowDelegate {
         let originX = screenFrame.origin.x + floor((screenFrame.width - windowWidth) / 2)
         let originY = screenFrame.origin.y + floor((screenFrame.height - windowHeight) / 2)
 
-        let contentRect = NSRect(
+        let initialFrame = NSRect(
             x: originX,
             y: originY,
             width: windowWidth,
@@ -20,7 +20,7 @@ public class MainWindowController: NSWindowController, NSWindowDelegate {
         )
 
         let window = NSWindow(
-            contentRect: contentRect,
+            contentRect: initialFrame,
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
@@ -28,11 +28,17 @@ public class MainWindowController: NSWindowController, NSWindowDelegate {
         window.title = "FastView"
         window.titlebarAppearsTransparent = true
         window.minSize = NSSize(width: 600, height: 400)
-        window.setFrameAutosaveName("FastMainWindow")
+        window.isReleasedWhenClosed = false
 
         self.init(window: window)
         window.delegate = self
         window.contentViewController = splitVC
+
+        // Frame autosave setup
+        window.frameAutosaveName = NSWindow.FrameAutosaveName("FastMainWindow")
+        if !window.setFrameUsingName("FastMainWindow") {
+            window.setFrame(initialFrame, display: true)
+        }
 
         setupKeyboardMonitors()
     }
