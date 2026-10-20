@@ -75,7 +75,7 @@ public class ArchiveReader {
         return supportedArchiveExtensions.contains(ext.lowercased())
     }
 
-    public static func loadZipData(archivePath: String, entryPath: String) -> Data? {
+    public static func loadZipData(archivePath: String, entryPath: String, isCancelled: (() -> Bool)? = nil) -> Data? {
         let startTime = CFAbsoluteTimeGetCurrent()
         FileLogger.shared.log("READ_ZIP_ENTRY_START", path: "\(archivePath) -> \(entryPath)")
 
@@ -87,21 +87,36 @@ public class ArchiveReader {
         }
 
         var data = Data()
+        var aborted = false
+
         _ = try? archive.extract(entry, consumer: { chunk in
+            if isCancelled?() == true {
+                aborted = true
+                struct ZipCancelledError: Error {}
+                throw ZipCancelledError()
+            }
             data.append(chunk)
         })
+
+        if aborted {
+            FileLogger.shared.log("READ_ZIP_ENTRY_CANCELLED", path: "\(archivePath) -> \(entryPath)")
+            return nil
+        }
 
         let duration = (CFAbsoluteTimeGetCurrent() - startTime) * 1000.0
         FileLogger.shared.log("READ_ZIP_ENTRY_END", path: "\(archivePath) -> \(entryPath)", durationMs: duration)
         return data
     }
 
-    public static func loadRarData(archivePath: String, entryPath: String) -> Data? {
+    public static func loadRarData(archivePath: String, entryPath: String, isCancelled: (() -> Bool)? = nil) -> Data? {
+        if isCancelled?() == true { return nil }
         let startTime = CFAbsoluteTimeGetCurrent()
         FileLogger.shared.log("READ_RAR_ENTRY_START", path: "\(archivePath) -> \(entryPath)")
 
         guard let archive = unrar_open(archivePath) else { return nil }
         defer { unrar_close(archive) }
+
+        if isCancelled?() == true { return nil }
 
         var size: Int = 0
         guard let buffer = unrar_extract_file_to_memory(archive, entryPath, &size), size > 0 else {

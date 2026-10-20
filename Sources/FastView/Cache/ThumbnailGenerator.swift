@@ -52,7 +52,7 @@ public class ThumbnailGenerator {
         op.addExecutionBlock { [weak self, weak op] in
             guard let self = self, let currentOp = op, !currentOp.isCancelled else { return }
 
-            guard let cgImage = self.loadAndScaleCGImage(for: item, targetSize: targetSize) else {
+            guard let cgImage = self.loadAndScaleCGImage(for: item, targetSize: targetSize, isCancelled: { currentOp.isCancelled }) else {
                 DispatchQueue.main.async {
                     if !currentOp.isCancelled { completion(nil) }
                 }
@@ -122,10 +122,12 @@ public class ThumbnailGenerator {
         }
     }
 
-    public func loadAndScaleCGImage(for item: FileItem, targetSize: CGSize) -> CGImage? {
+    public func loadAndScaleCGImage(for item: FileItem, targetSize: CGSize, isCancelled: (() -> Bool)? = nil) -> CGImage? {
+        if isCancelled?() == true { return nil }
+
         if item.type == .archiveZip || item.type == .archiveRar || item.isDirectory {
             if let peeked = peekFirstImage(in: item) {
-                return loadAndScaleCGImage(for: peeked, targetSize: targetSize)
+                return loadAndScaleCGImage(for: peeked, targetSize: targetSize, isCancelled: isCancelled)
             }
             return nil
         }
@@ -134,15 +136,15 @@ public class ThumbnailGenerator {
         if let archivePath = item.archivePath {
             let ext = (archivePath as NSString).pathExtension.lowercased()
             if ext == "zip" {
-                imageData = ArchiveReader.loadZipData(archivePath: archivePath, entryPath: item.path)
+                imageData = ArchiveReader.loadZipData(archivePath: archivePath, entryPath: item.path, isCancelled: isCancelled)
             } else if ext == "rar" {
-                imageData = ArchiveReader.loadRarData(archivePath: archivePath, entryPath: item.path)
+                imageData = ArchiveReader.loadRarData(archivePath: archivePath, entryPath: item.path, isCancelled: isCancelled)
             }
         } else if item.type == .image {
             imageData = try? Data(contentsOf: URL(fileURLWithPath: item.path))
         }
 
-        guard let data = imageData else { return nil }
+        guard let data = imageData, isCancelled?() != true else { return nil }
 
         guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
         let maxDimension = max(targetSize.width, targetSize.height)
@@ -191,9 +193,9 @@ public class ThumbnailGenerator {
             if let archivePath = targetItem.archivePath {
                 let ext = (archivePath as NSString).pathExtension.lowercased()
                 if ext == "zip" {
-                    imageData = ArchiveReader.loadZipData(archivePath: archivePath, entryPath: targetItem.path)
+                    imageData = ArchiveReader.loadZipData(archivePath: archivePath, entryPath: targetItem.path, isCancelled: { currentOp.isCancelled })
                 } else if ext == "rar" {
-                    imageData = ArchiveReader.loadRarData(archivePath: archivePath, entryPath: targetItem.path)
+                    imageData = ArchiveReader.loadRarData(archivePath: archivePath, entryPath: targetItem.path, isCancelled: { currentOp.isCancelled })
                 }
             } else {
                 imageData = try? Data(contentsOf: URL(fileURLWithPath: targetItem.path))
