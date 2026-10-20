@@ -34,7 +34,8 @@ public class SQLiteCache {
 
         let res = sqlite3_open(dbPath, &db)
         if res != SQLITE_OK {
-            print("[SQLiteCache] Failed to open database at \(dbPath), code: \(res)")
+            let errmsg = sqlite3_errmsg(db).map { String(cString: $0) } ?? "unknown"
+            print("[SQLiteCache] Failed to open database at \(dbPath), code: \(res), msg: \(errmsg)")
             return
         }
 
@@ -56,6 +57,11 @@ public class SQLiteCache {
 
         sqlite3_exec(db, createDirectoryTable, nil, nil, nil)
         sqlite3_exec(db, createFavoritesTable, nil, nil, nil)
+
+        // Ensure missing columns exist in case of legacy schema
+        sqlite3_exec(db, "ALTER TABLE favorites ADD COLUMN item_json TEXT;", nil, nil, nil)
+        sqlite3_exec(db, "ALTER TABLE favorites ADD COLUMN timestamp REAL;", nil, nil, nil)
+
         print("[SQLiteCache] Database initialized at \(dbPath)")
     }
 
@@ -88,7 +94,8 @@ public class SQLiteCache {
                 let stepRes = sqlite3_step(statement)
                 print("[SQLiteCache] Removed favorite for \(item.name) (id: \(favKey), path: \(item.path)), step result: \(stepRes)")
             } else {
-                print("[SQLiteCache] Failed to prepare delete query, error code: \(prepRes)")
+                let errmsg = sqlite3_errmsg(db).map { String(cString: $0) } ?? "unknown"
+                print("[SQLiteCache] Failed to prepare delete query, error code: \(prepRes), msg: \(errmsg)")
             }
             sqlite3_finalize(statement)
             return false
@@ -102,7 +109,16 @@ public class SQLiteCache {
 
             let insertQuery = "INSERT OR REPLACE INTO favorites (path, item_json, timestamp) VALUES (?, ?, ?);"
             var statement: OpaquePointer?
-            let prepRes = sqlite3_prepare_v2(db, insertQuery, -1, &statement, nil)
+            var prepRes = sqlite3_prepare_v2(db, insertQuery, -1, &statement, nil)
+
+            if prepRes != SQLITE_OK {
+                let errmsg = sqlite3_errmsg(db).map { String(cString: $0) } ?? "unknown"
+                print("[SQLiteCache] Failed to prepare insert query, error code: \(prepRes), msg: \(errmsg). Attempting schema fix...")
+                sqlite3_exec(db, "DROP TABLE IF EXISTS favorites;", nil, nil, nil)
+                sqlite3_exec(db, "CREATE TABLE favorites (path TEXT PRIMARY KEY, item_json TEXT, timestamp REAL);", nil, nil, nil)
+                prepRes = sqlite3_prepare_v2(db, insertQuery, -1, &statement, nil)
+            }
+
             if prepRes == SQLITE_OK {
                 sqlite3_bind_text(statement, 1, favKey, -1, SQLITE_TRANSIENT)
                 sqlite3_bind_text(statement, 2, jsonString, -1, SQLITE_TRANSIENT)
@@ -110,7 +126,8 @@ public class SQLiteCache {
                 let stepRes = sqlite3_step(statement)
                 print("[SQLiteCache] Added favorite for \(item.name) (id: \(favKey), path: \(item.path)), step result: \(stepRes)")
             } else {
-                print("[SQLiteCache] Failed to prepare insert query, error code: \(prepRes)")
+                let errmsg = sqlite3_errmsg(db).map { String(cString: $0) } ?? "unknown"
+                print("[SQLiteCache] Still failed to prepare insert query after schema fix, error code: \(prepRes), msg: \(errmsg)")
             }
             sqlite3_finalize(statement)
             return true
