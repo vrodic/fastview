@@ -60,6 +60,7 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
     }
 
     public func loadLocation(_ location: NavigationLocation, targetSelectedItemPath: String? = nil) {
+        cancelAllIOOperations()
         navigationManager = NavigationManager(initialLocation: location)
         reloadDirectoryContentsAsync(targetSelectedItemPath: targetSelectedItemPath)
     }
@@ -120,10 +121,8 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
                     self.displayItem(firstItem)
                 }
 
-                // If idle, load thumbnails for visible rows only
-                if !isNavigatingUp {
-                    self.sidebarVC.loadVisibleThumbnailsIfIdle()
-                }
+                // Immediately queue initial visible items' thumbnails on directory open
+                self.sidebarVC.loadVisibleThumbnailsIfIdle()
             }
         }
 

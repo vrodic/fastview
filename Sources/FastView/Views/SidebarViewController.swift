@@ -11,6 +11,7 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
     public private(set) var items: [FileItem] = []
     private let scrollView = NSScrollView()
     private let tableView = CustomTableView()
+    private var scrollDebounceTimer: Timer?
 
     public var selectedItem: FileItem? {
         let selectedRow = tableView.selectedRow
@@ -61,7 +62,10 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
     }
 
     @objc private func scrollViewDidScroll(_ notification: Notification) {
-        loadVisibleThumbnailsIfIdle()
+        scrollDebounceTimer?.invalidate()
+        scrollDebounceTimer = Timer.scheduledTimer(withTimeInterval: 0.15, repeats: false) { [weak self] _ in
+            self?.loadVisibleThumbnailsIfIdle()
+        }
     }
 
     override public func viewDidLayout() {
