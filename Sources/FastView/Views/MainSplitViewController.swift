@@ -131,8 +131,6 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
     }
 
     public func displayItem(_ item: FileItem) {
-        cancelAllIOOperations()
-
         let parentName: String
         if let nav = navigationManager {
             parentName = (nav.currentLocation.physicalPath as NSString).lastPathComponent
@@ -146,7 +144,9 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
 
         if item.type == .image {
             statusBarView.updateImageInfo(item: item, image: nil, currentIndex: currentIndex, totalImages: totalImages, parentName: parentName)
-            mainImageView.setImage(nil, keepZoom: true)
+            if MemoryLRUCache.shared.object(forKey: "full_\(item.id)") == nil {
+                mainImageView.showLoading(fileSizeBytes: item.fileSize, pastSpeedMBs: lastMeasuredSpeedMBs)
+            }
         } else if item.type == .archiveZip || item.type == .archiveRar {
             statusBarView.updateSelectedItemStats(item: item, containedImagesCount: nil, parentName: parentName)
             mainImageView.showLoading(fileSizeBytes: item.fileSize, pastSpeedMBs: lastMeasuredSpeedMBs)
@@ -187,6 +187,9 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         ThumbnailGenerator.shared.loadFullImage(for: item) { [weak self] image in
             guard let self = self else { return }
 
+            // Verify currently selected item matches to prevent race conditions
+            guard self.sidebarVC.selectedItem?.id == item.id else { return }
+
             let duration = CFAbsoluteTimeGetCurrent() - readStartTime
             if duration > 0 && item.fileSize > 0 {
                 let speedMBs = (Double(item.fileSize) / (1024.0 * 1024.0)) / duration
@@ -203,7 +206,6 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
                 self.sidebarVC.updateThumbnailForSelectedItem(image: image)
             }
 
-            // After main image finishes loading, populate missing thumbnails for visible rows in current view
             self.sidebarVC.loadVisibleThumbnailsIfIdle()
         }
     }

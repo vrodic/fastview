@@ -28,10 +28,6 @@ public class ThumbnailGenerator {
     public func setMainImageLoading(_ loading: Bool) {
         lock.lock()
         self.isLoadingMainImage = loading
-        if loading {
-            ioQueue.cancelAllOperations()
-            activeOperations.removeAll()
-        }
         lock.unlock()
     }
 
@@ -43,8 +39,10 @@ public class ThumbnailGenerator {
             return
         }
 
+        let opKey = "thumb_\(item.id)"
+
         lock.lock()
-        if let existing = activeOperations[item.id] {
+        if let existing = activeOperations[opKey] {
             existing.cancel()
         }
 
@@ -71,7 +69,7 @@ public class ThumbnailGenerator {
             }
         }
 
-        activeOperations[item.id] = op
+        activeOperations[opKey] = op
         lock.unlock()
 
         ioQueue.addOperation(op)
@@ -171,6 +169,12 @@ public class ThumbnailGenerator {
         }
 
         setMainImageLoading(true)
+        let opKey = "full_\(item.id)"
+
+        lock.lock()
+        if let existing = activeOperations[opKey] {
+            existing.cancel()
+        }
 
         let op = BlockOperation()
         op.addExecutionBlock { [weak self, weak op] in
@@ -227,8 +231,7 @@ public class ThumbnailGenerator {
             }
         }
 
-        lock.lock()
-        activeOperations[item.id] = op
+        activeOperations[opKey] = op
         lock.unlock()
 
         ioQueue.addOperation(op)
