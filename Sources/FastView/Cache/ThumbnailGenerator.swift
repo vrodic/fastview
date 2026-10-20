@@ -6,6 +6,18 @@ public class ThumbnailGenerator {
     public static let shared = ThumbnailGenerator()
     private let queue = DispatchQueue(label: "com.fastview.thumbnailgenerator", qos: .userInitiated, attributes: .concurrent)
 
+    private var pendingWorkItems = [String: DispatchWorkItem]()
+    private let lock = NSLock()
+
+    public func cancelAllPendingTasks() {
+        lock.lock()
+        defer { lock.unlock() }
+        for item in pendingWorkItems.values {
+            item.cancel()
+        }
+        pendingWorkItems.removeAll()
+    }
+
     public func generateThumbnail(for item: FileItem, targetSize: CGSize = CGSize(width: 160, height: 160), completion: @escaping (NSImage?) -> Void) {
         let cacheKey = "thumb_\(item.id)_\(targetSize.width)x\(targetSize.height)"
 
@@ -14,19 +26,35 @@ public class ThumbnailGenerator {
             return
         }
 
-        queue.async {
+        var workItem: DispatchWorkItem!
+        workItem = DispatchWorkItem { [weak self] in
+            guard let self = self, !workItem.isCancelled else { return }
+
             guard let cgImage = self.loadAndScaleCGImage(for: item, targetSize: targetSize) else {
-                DispatchQueue.main.async { completion(nil) }
+                DispatchQueue.main.async {
+                    if !workItem.isCancelled { completion(nil) }
+                }
                 return
             }
 
+            if workItem.isCancelled { return }
+
             DispatchQueue.main.async {
-                let image = NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
-                let cost = Int(cgImage.width * cgImage.height * 4)
-                MemoryLRUCache.shared.setObject(image, forKey: cacheKey, cost: cost)
-                completion(image)
+                if !workItem.isCancelled {
+                    let image = NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
+                    let cost = Int(cgImage.width * cgImage.height * 4)
+                    MemoryLRUCache.shared.setObject(image, forKey: cacheKey, cost: cost)
+                    completion(image)
+                }
             }
         }
+
+        lock.lock()
+        pendingWorkItems[item.id]?.cancel()
+        pendingWorkItems[item.id] = workItem
+        lock.unlock()
+
+        queue.async(execute: workItem)
     }
 
     public func peekFirstImage(in item: FileItem) -> FileItem? {

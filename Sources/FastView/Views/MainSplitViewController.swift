@@ -2,8 +2,9 @@ import AppKit
 
 public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
     private let sidebarVC = SidebarViewController()
-    private let mainImageVC = NSViewController()
+    private let mainContentVC = NSViewController()
     private let mainImageView = MainImageView()
+    private let statusBarView = StatusBarView()
 
     private var navigationManager: NavigationManager!
 
@@ -15,14 +16,26 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
     private func setupUI() {
         sidebarVC.delegate = self
 
-        mainImageVC.view = mainImageView
+        // Container view for main image + bottom status bar
+        let mainStackView = NSStackView()
+        mainStackView.orientation = .vertical
+        mainStackView.spacing = 0
+        mainStackView.distribution = .fill
+
+        mainImageView.translatesAutoresizingMaskIntoConstraints = false
+        statusBarView.translatesAutoresizingMaskIntoConstraints = false
+
+        mainStackView.addArrangedSubview(mainImageView)
+        mainStackView.addArrangedSubview(statusBarView)
+
+        mainContentVC.view = mainStackView
 
         let sidebarItem = NSSplitViewItem(sidebarWithViewController: sidebarVC)
         sidebarItem.minimumThickness = 200
         sidebarItem.maximumThickness = 450
         sidebarItem.preferredThicknessFraction = 0.25
 
-        let mainItem = NSSplitViewItem(viewController: mainImageVC)
+        let mainItem = NSSplitViewItem(viewController: mainContentVC)
         mainItem.minimumThickness = 400
 
         addSplitViewItem(sidebarItem)
@@ -35,17 +48,27 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
     }
 
     private func reloadDirectoryContentsAsync(targetSelectedItem: FileItem? = nil) {
+        ThumbnailGenerator.shared.cancelAllPendingTasks()
+
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
             let items = self.navigationManager.contents()
 
+            let imageItems = items.filter { $0.type == .image }
+            let totalBytes = items.reduce(0) { $0 + $1.fileSize }
+
             DispatchQueue.main.async {
                 self.sidebarVC.setItems(items, selectFirst: targetSelectedItem == nil)
+
+                self.statusBarView.updateDirectoryStats(imageCount: imageItems.count, totalSizeBytes: totalBytes)
 
                 if let target = targetSelectedItem, let idx = items.firstIndex(where: { $0.id == target.id || $0.path == target.path }) {
                     self.sidebarVC.selectRow(idx)
                 } else if let firstItem = items.first(where: { $0.type == .image || $0.type == .archiveZip || $0.type == .archiveRar }) {
                     self.displayItem(firstItem)
+                } else {
+                    self.mainImageView.setImage(nil)
+                    self.statusBarView.clearImageInfo()
                 }
 
                 // Background thumbnail prefetching for the next 20 items
@@ -66,6 +89,7 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
     public func displayItem(_ item: FileItem) {
         ThumbnailGenerator.shared.loadFullImage(for: item) { [weak self] image in
             self?.mainImageView.setImage(image)
+            self?.statusBarView.updateImageInfo(item: item, image: image)
         }
     }
 
@@ -89,7 +113,6 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         }
     }
 
-    // Key event actions
     public func selectNextImage() {
         sidebarVC.selectNext()
     }

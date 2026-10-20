@@ -1,6 +1,6 @@
 import Foundation
 
-public struct NavigationLocation: Equatable {
+public struct NavigationLocation: Equatable, Hashable {
     public let physicalPath: String       // Disk path to directory or archive
     public let archiveSubfolder: String? // If inside archive, virtual subfolder path
     public let isArchive: Bool
@@ -11,6 +11,10 @@ public struct NavigationLocation: Equatable {
         self.archiveSubfolder = archiveSubfolder
         self.isArchive = isArchive
         self.archiveType = archiveType
+    }
+
+    public var cacheKey: String {
+        return "\(physicalPath)_\(archiveSubfolder ?? "")_\(isArchive)"
     }
 }
 
@@ -53,6 +57,11 @@ public class NavigationManager {
     }
 
     public func contents() -> [FileItem] {
+        let key = currentLocation.cacheKey
+        if let cached = DirectoryCache.shared.get(key: key) {
+            return cached
+        }
+
         var results: [FileItem] = []
 
         // First item is always parent navigation `(..)`
@@ -76,6 +85,7 @@ public class NavigationManager {
                 includingPropertiesForKeys: [.isDirectoryKey, .fileSizeKey],
                 options: [.skipsHiddenFiles]
             ) else {
+                DirectoryCache.shared.set(key: key, items: results)
                 return results
             }
 
@@ -104,6 +114,7 @@ public class NavigationManager {
             results.append(contentsOf: ArchiveReader.sortItems(dirItems))
         }
 
+        DirectoryCache.shared.set(key: key, items: results)
         return results
     }
 
