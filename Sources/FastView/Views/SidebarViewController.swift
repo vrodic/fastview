@@ -29,7 +29,7 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
         scrollView.autoresizesSubviews = true
 
         tableView.headerView = nil
-        tableView.rowHeight = 120
+        tableView.rowHeight = 80
         tableView.selectionHighlightStyle = .regular
         tableView.dataSource = self
         tableView.delegate = self
@@ -50,18 +50,6 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
             scrollView.topAnchor.constraint(equalTo: view.topAnchor),
             scrollView.bottomAnchor.constraint(equalTo: view.bottomAnchor)
         ])
-    }
-
-    override public func viewDidLayout() {
-        super.viewDidLayout()
-        let width = view.bounds.width
-        if width > 0 {
-            let targetRowHeight = max(80, min(300, width * 0.75))
-            if abs(tableView.rowHeight - targetRowHeight) > 5 {
-                tableView.rowHeight = targetRowHeight
-                tableView.noteHeightOfRows(withIndexesChanged: IndexSet(integersIn: 0..<items.count))
-            }
-        }
     }
 
     public func setItems(_ items: [FileItem], selectFirst: Bool = true) {
@@ -121,7 +109,13 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
     public func tableViewSelectionDidChange(_ notification: Notification) {
         let selectedRow = tableView.selectedRow
         guard selectedRow >= 0 && selectedRow < items.count else { return }
-        delegate?.sidebar(self, didSelectItem: items[selectedRow])
+        let selectedItem = items[selectedRow]
+
+        if let cell = tableView.view(atColumn: 0, row: selectedRow, makeIfNecessary: false) as? SidebarTableCellView {
+            cell.loadThumbnailOnSelection(for: selectedItem)
+        }
+
+        delegate?.sidebar(self, didSelectItem: selectedItem)
     }
 
     @objc public func tableRowDoubleClicked() {
@@ -149,7 +143,8 @@ class CustomTableView: NSTableView {
 
 public class SidebarTableCellView: NSTableCellView {
     private let thumbnailImageView = NSImageView()
-    private var currentItemId: String?
+    private let nameLabel = NSTextField(labelWithString: "")
+    private var currentItem: FileItem?
 
     override public init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -167,18 +162,29 @@ public class SidebarTableCellView: NSTableCellView {
         thumbnailImageView.wantsLayer = true
         thumbnailImageView.layer?.cornerRadius = 6
 
+        nameLabel.translatesAutoresizingMaskIntoConstraints = false
+        nameLabel.font = NSFont.systemFont(ofSize: 12)
+        nameLabel.lineBreakMode = .byTruncatingMiddle
+        nameLabel.textColor = NSColor.labelColor
+
         addSubview(thumbnailImageView)
+        addSubview(nameLabel)
 
         NSLayoutConstraint.activate([
             thumbnailImageView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
-            thumbnailImageView.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
-            thumbnailImageView.topAnchor.constraint(equalTo: topAnchor, constant: 8),
-            thumbnailImageView.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8)
+            thumbnailImageView.centerYAnchor.constraint(equalTo: centerYAnchor),
+            thumbnailImageView.widthAnchor.constraint(equalToConstant: 48),
+            thumbnailImageView.heightAnchor.constraint(equalToConstant: 48),
+
+            nameLabel.leadingAnchor.constraint(equalTo: thumbnailImageView.trailingAnchor, constant: 8),
+            nameLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+            nameLabel.centerYAnchor.constraint(equalTo: centerYAnchor)
         ])
     }
 
     public func configure(with item: FileItem) {
-        self.currentItemId = item.id
+        self.currentItem = item
+        nameLabel.stringValue = item.name
 
         if item.type == .parentDirectory {
             thumbnailImageView.image = NSImage(systemSymbolName: "arrow.uturn.backward", accessibilityDescription: "Parent")
@@ -190,8 +196,17 @@ public class SidebarTableCellView: NSTableCellView {
             thumbnailImageView.image = NSImage(systemSymbolName: "photo", accessibilityDescription: "Image")
         }
 
+        // Check if thumbnail is already cached
+        let cacheKey = "thumb_\(item.id)_256.0x256.0"
+        if let cached = MemoryLRUCache.shared.object(forKey: cacheKey) {
+            thumbnailImageView.image = cached
+        }
+    }
+
+    public func loadThumbnailOnSelection(for item: FileItem) {
+        guard currentItem?.id == item.id else { return }
         ThumbnailGenerator.shared.generateThumbnail(for: item) { [weak self] image in
-            guard let self = self, self.currentItemId == item.id else { return }
+            guard let self = self, self.currentItem?.id == item.id else { return }
             if let img = image {
                 self.thumbnailImageView.image = img
             }

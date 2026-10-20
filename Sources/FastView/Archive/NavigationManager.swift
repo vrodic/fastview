@@ -57,7 +57,7 @@ public class NavigationManager {
 
     public func contents() -> [FileItem] {
         let key = currentLocation.cacheKey
-        if let cached = DirectoryCache.shared.get(key: key) {
+        if let cached = SQLiteCache.shared.getDirectoryContents(key: key) {
             return cached
         }
 
@@ -75,7 +75,6 @@ public class NavigationManager {
             }
             results.append(contentsOf: archiveItems)
         } else {
-            // Ultra-fast network directory scan: batch resource keys without stat calls
             let fm = FileManager.default
             let dirURL = URL(fileURLWithPath: currentLocation.physicalPath)
 
@@ -84,7 +83,7 @@ public class NavigationManager {
                 includingPropertiesForKeys: [.isDirectoryKey],
                 options: [.skipsHiddenFiles]
             ) else {
-                DirectoryCache.shared.set(key: key, items: results)
+                SQLiteCache.shared.saveDirectoryContents(key: key, items: results)
                 return results
             }
 
@@ -114,13 +113,8 @@ public class NavigationManager {
             results.append(contentsOf: ArchiveReader.sortItems(dirItems))
         }
 
-        DirectoryCache.shared.set(key: key, items: results)
+        SQLiteCache.shared.saveDirectoryContents(key: key, items: results)
         return results
-    }
-
-    public func contentsProgressive(chunkSize: Int = 50, onChunk: @escaping ([FileItem]) -> Void) {
-        let items = contents()
-        onChunk(items)
     }
 
     public func navigateTo(_ item: FileItem) -> NavigationLocation? {
@@ -165,9 +159,9 @@ public class NavigationManager {
     }
 
     public func navigateUp() -> (location: NavigationLocation, exitedItemPath: String) {
-        let exitedPath = currentLocation.isArchive ? (currentLocation.archiveSubfolder ?? currentLocation.physicalPath) : currentLocation.physicalPath
-
+        let exitedPath: String
         if currentLocation.isArchive {
+            exitedPath = currentLocation.physicalPath
             if let subfolder = currentLocation.archiveSubfolder, !subfolder.isEmpty {
                 let parentSub = (subfolder as NSString).deletingLastPathComponent
                 let cleanSub = parentSub == "." ? "" : parentSub
@@ -178,7 +172,7 @@ public class NavigationManager {
                     archiveType: currentLocation.archiveType
                 )
                 self.currentLocation = newLoc
-                return (newLoc, exitedPath)
+                return (newLoc, subfolder)
             } else {
                 let parentDir = (currentLocation.physicalPath as NSString).deletingLastPathComponent
                 let newLoc = NavigationLocation(
@@ -188,9 +182,10 @@ public class NavigationManager {
                     archiveType: nil
                 )
                 self.currentLocation = newLoc
-                return (newLoc, currentLocation.physicalPath)
+                return (newLoc, exitedPath)
             }
         } else {
+            exitedPath = currentLocation.physicalPath
             let parentDir = (currentLocation.physicalPath as NSString).deletingLastPathComponent
             let newLoc = NavigationLocation(
                 physicalPath: parentDir,
@@ -199,7 +194,7 @@ public class NavigationManager {
                 archiveType: nil
             )
             self.currentLocation = newLoc
-            return (newLoc, currentLocation.physicalPath)
+            return (newLoc, exitedPath)
         }
     }
 }
