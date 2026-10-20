@@ -12,13 +12,15 @@ public class MainWindowController: NSWindowController, NSWindowDelegate {
         let originX = screenFrame.origin.x + floor((screenFrame.width - windowWidth) / 2)
         let originY = screenFrame.origin.y + floor((screenFrame.height - windowHeight) / 2)
 
+        let contentRect = NSRect(
+            x: originX,
+            y: originY,
+            width: windowWidth,
+            height: windowHeight
+        )
+
         let window = NSWindow(
-            contentRect: NSRect(
-                x: originX,
-                y: originY,
-                width: windowWidth,
-                height: windowHeight
-            ),
+            contentRect: contentRect,
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
@@ -26,6 +28,7 @@ public class MainWindowController: NSWindowController, NSWindowDelegate {
         window.title = "FastView"
         window.titlebarAppearsTransparent = true
         window.minSize = NSSize(width: 600, height: 400)
+        window.setFrame(contentRect, display: true)
 
         self.init(window: window)
         window.delegate = self

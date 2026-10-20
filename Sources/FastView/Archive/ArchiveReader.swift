@@ -165,6 +165,33 @@ public class ArchiveReader {
         return sortItems(items)
     }
 
+    // List ALL image entries recursively in ZIP archive
+    public static func listAllZipImages(archivePath: String) -> [FileItem] {
+        guard let archive = Archive(url: URL(fileURLWithPath: archivePath), accessMode: .read) else {
+            return []
+        }
+
+        var items: [FileItem] = []
+        for entry in archive {
+            guard entry.type == .file else { continue }
+            let path = entry.path
+            let ext = (path as NSString).pathExtension.lowercased()
+            if isImageExtension(ext) {
+                let name = (path as NSString).lastPathComponent
+                items.append(FileItem(
+                    id: path,
+                    name: name,
+                    path: path,
+                    type: .image,
+                    archivePath: archivePath,
+                    isDirectory: false,
+                    fileSize: UInt64(entry.uncompressedSize)
+                ))
+            }
+        }
+        return sortItems(items)
+    }
+
     // List contents of RAR archive (or subfolder within RAR archive)
     public static func listRarContents(archivePath: String, subfolder: String = "") -> [FileItem] {
         guard let archive = unrar_open(archivePath) else { return [] }
@@ -229,6 +256,42 @@ public class ArchiveReader {
             }
         }
 
+        return sortItems(items)
+    }
+
+    // List ALL image entries recursively in RAR archive
+    public static func listAllRarImages(archivePath: String) -> [FileItem] {
+        guard let archive = unrar_open(archivePath) else { return [] }
+        defer { unrar_close(archive) }
+
+        guard let listPtr = unrar_list_files(archive) else { return [] }
+        defer { unrar_free_entry_list(listPtr) }
+
+        var items: [FileItem] = []
+        let count = listPtr.pointee.count
+        guard count > 0, let rawEntries = listPtr.pointee.entries else { return [] }
+
+        for i in 0..<count {
+            var entry = rawEntries[i]
+            if entry.is_directory { continue }
+            let path = withUnsafeBytes(of: &entry.name) { ptr -> String in
+                guard let base = ptr.baseAddress?.assumingMemoryBound(to: CChar.self) else { return "" }
+                return String(cString: base)
+            }
+            let ext = (path as NSString).pathExtension.lowercased()
+            if isImageExtension(ext) {
+                let name = (path as NSString).lastPathComponent
+                items.append(FileItem(
+                    id: path,
+                    name: name,
+                    path: path,
+                    type: .image,
+                    archivePath: archivePath,
+                    isDirectory: false,
+                    fileSize: entry.uncompressed_size
+                ))
+            }
+        }
         return sortItems(items)
     }
 

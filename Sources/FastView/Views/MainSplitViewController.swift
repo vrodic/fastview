@@ -30,7 +30,7 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         mainContentVC.view = mainStackView
 
         let sidebarItem = NSSplitViewItem(sidebarWithViewController: sidebarVC)
-        sidebarItem.minimumThickness = 200
+        sidebarItem.minimumThickness = 220
         sidebarItem.maximumThickness = 450
         sidebarItem.preferredThicknessFraction = 0.25
 
@@ -69,17 +69,6 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
                     self.mainImageView.setImage(nil)
                     self.statusBarView.clearImageInfo()
                 }
-
-                self.prefetchNextThumbnails(items: items, count: 20)
-            }
-        }
-    }
-
-    private func prefetchNextThumbnails(items: [FileItem], count: Int) {
-        let itemsToPrefetch = Array(items.prefix(count))
-        DispatchQueue.global(qos: .utility).async {
-            for item in itemsToPrefetch {
-                ThumbnailGenerator.shared.generateThumbnail(for: item) { _ in }
             }
         }
     }
@@ -88,12 +77,11 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         if item.type == .archiveZip || item.type == .archiveRar {
             let archiveItems: [FileItem]
             if item.type == .archiveZip {
-                archiveItems = ArchiveReader.listZipContents(archivePath: item.path)
+                archiveItems = ArchiveReader.listAllZipImages(archivePath: item.path)
             } else {
-                archiveItems = ArchiveReader.listRarContents(archivePath: item.path)
+                archiveItems = ArchiveReader.listAllRarImages(archivePath: item.path)
             }
-            let archiveImageCount = archiveItems.filter { $0.type == .image }.count
-            statusBarView.updateDirectoryStats(imageCount: archiveImageCount, totalSizeBytes: item.fileSize)
+            statusBarView.updateDirectoryStats(imageCount: archiveItems.count, totalSizeBytes: item.fileSize)
         }
 
         ThumbnailGenerator.shared.loadFullImage(for: item) { [weak self] image in
