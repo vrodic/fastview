@@ -133,9 +133,18 @@ public class NavigationManager {
                 )
                 self.currentLocation = newLoc
                 return newLoc
+            } else if item.type == .archiveZip || item.type == .archiveRar {
+                let newLoc = NavigationLocation(
+                    physicalPath: item.path,
+                    archiveSubfolder: "",
+                    isArchive: true,
+                    archiveType: item.type
+                )
+                self.currentLocation = newLoc
+                return newLoc
             }
         } else {
-            if item.type == .directory {
+            if item.isDirectory {
                 let newLoc = NavigationLocation(
                     physicalPath: item.path,
                     archiveSubfolder: nil,
