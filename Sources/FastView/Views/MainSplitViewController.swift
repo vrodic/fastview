@@ -1,6 +1,6 @@
 import AppKit
 
-public class MainSplitViewController: NSSplitViewController, SidebarDelegate, NSSplitViewDelegate {
+public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
     private let sidebarVC = SidebarViewController()
     private let mainContentVC = NSViewController()
     private let mainImageView = MainImageView()
@@ -42,7 +42,7 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate, NS
         }
     }
 
-    public func splitViewDidResizeSubviews(_ notification: Notification) {
+    override public func splitViewDidResizeSubviews(_ notification: Notification) {
         if splitView.subviews.count > 0 {
             let currentWidth = splitView.subviews[0].frame.width
             if currentWidth > 120 {

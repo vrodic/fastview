@@ -305,7 +305,7 @@ public class SidebarTableCellView: NSTableCellView {
         self.currentItem = item
         nameLabel.stringValue = item.name
 
-        let isFav = SQLiteCache.shared.isFavorite(path: item.path)
+        let isFav = SQLiteCache.shared.isFavorite(path: item.id) || SQLiteCache.shared.isFavorite(path: item.path)
         favoriteBadge.isHidden = !isFav
 
         let cacheKey = "thumb_\(item.id)_256.0x256.0"

@@ -1,6 +1,8 @@
 import Foundation
 import SQLite3
 
+private let SQLITE_TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+
 public class SQLiteCache {
     public static let shared = SQLiteCache()
     private var db: OpaquePointer?
@@ -67,7 +69,7 @@ public class SQLiteCache {
 
         var result = false
         if sqlite3_prepare_v2(db, query, -1, &statement, nil) == SQLITE_OK {
-            sqlite3_bind_text(statement, 1, (path as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(statement, 1, path, -1, SQLITE_TRANSIENT)
             if sqlite3_step(statement) == SQLITE_ROW {
                 result = true
             }
@@ -82,12 +84,12 @@ public class SQLiteCache {
 
         guard db != nil else { return false }
 
-        let path = item.path
-        if isFavoriteUnlocked(path: path) {
+        let favKey = item.id
+        if isFavoriteUnlocked(path: favKey) {
             let deleteQuery = "DELETE FROM favorites WHERE path = ?;"
             var statement: OpaquePointer?
             if sqlite3_prepare_v2(db, deleteQuery, -1, &statement, nil) == SQLITE_OK {
-                sqlite3_bind_text(statement, 1, (path as NSString).utf8String, -1, nil)
+                sqlite3_bind_text(statement, 1, favKey, -1, SQLITE_TRANSIENT)
                 sqlite3_step(statement)
             }
             sqlite3_finalize(statement)
@@ -102,8 +104,8 @@ public class SQLiteCache {
             let insertQuery = "INSERT OR REPLACE INTO favorites (path, item_json, timestamp) VALUES (?, ?, ?);"
             var statement: OpaquePointer?
             if sqlite3_prepare_v2(db, insertQuery, -1, &statement, nil) == SQLITE_OK {
-                sqlite3_bind_text(statement, 1, (path as NSString).utf8String, -1, nil)
-                sqlite3_bind_text(statement, 2, (jsonString as NSString).utf8String, -1, nil)
+                sqlite3_bind_text(statement, 1, favKey, -1, SQLITE_TRANSIENT)
+                sqlite3_bind_text(statement, 2, jsonString, -1, SQLITE_TRANSIENT)
                 sqlite3_bind_double(statement, 3, Date().timeIntervalSince1970)
                 sqlite3_step(statement)
             }
@@ -142,7 +144,7 @@ public class SQLiteCache {
         var statement: OpaquePointer?
         var result = false
         if sqlite3_prepare_v2(db, query, -1, &statement, nil) == SQLITE_OK {
-            sqlite3_bind_text(statement, 1, (path as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(statement, 1, path, -1, SQLITE_TRANSIENT)
             if sqlite3_step(statement) == SQLITE_ROW {
                 result = true
             }
@@ -161,7 +163,7 @@ public class SQLiteCache {
         var statement: OpaquePointer?
 
         if sqlite3_prepare_v2(db, query, -1, &statement, nil) == SQLITE_OK {
-            sqlite3_bind_text(statement, 1, (key as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(statement, 1, key, -1, SQLITE_TRANSIENT)
 
             if sqlite3_step(statement) == SQLITE_ROW {
                 if let cString = sqlite3_column_text(statement, 0) {
@@ -195,8 +197,8 @@ public class SQLiteCache {
         var statement: OpaquePointer?
 
         if sqlite3_prepare_v2(db, query, -1, &statement, nil) == SQLITE_OK {
-            sqlite3_bind_text(statement, 1, (key as NSString).utf8String, -1, nil)
-            sqlite3_bind_text(statement, 2, (jsonString as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(statement, 1, key, -1, SQLITE_TRANSIENT)
+            sqlite3_bind_text(statement, 2, jsonString, -1, SQLITE_TRANSIENT)
             sqlite3_bind_double(statement, 3, Date().timeIntervalSince1970)
 
             if sqlite3_step(statement) != SQLITE_DONE {
@@ -223,6 +225,7 @@ private struct CodableFileItem: Codable {
     let archivePath: String?
     let isDirectory: Bool
     let fileSize: UInt64
+    let entryParentDir: String?
 
     init(from item: FileItem) {
         self.id = item.id
@@ -231,6 +234,7 @@ private struct CodableFileItem: Codable {
         self.archivePath = item.archivePath
         self.isDirectory = item.isDirectory
         self.fileSize = item.fileSize
+        self.entryParentDir = item.entryParentDir
 
         switch item.type {
         case .image: self.typeRaw = "image"
@@ -260,7 +264,8 @@ private struct CodableFileItem: Codable {
             type: type,
             archivePath: archivePath,
             isDirectory: isDirectory,
-            fileSize: fileSize
+            fileSize: fileSize,
+            entryParentDir: entryParentDir
         )
     }
 }
