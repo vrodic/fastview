@@ -32,8 +32,10 @@ public class SQLiteCache {
         let dbURL = cacheDir.appendingPathComponent("fastview_cache.sqlite")
         let dbPath = dbURL.path
 
-        if sqlite3_open(dbPath, &db) != SQLITE_OK {
-            print("[SQLiteCache] Failed to open database at \(dbPath)")
+        let res = sqlite3_open(dbPath, &db)
+        if res != SQLITE_OK {
+            let errmsg = sqlite3_errmsg(db).map { String(cString: $0) } ?? "unknown"
+            print("[SQLiteCache] Failed to open database at \(dbPath), code: \(res), msg: \(errmsg)")
             return
         }
 
@@ -55,6 +57,11 @@ public class SQLiteCache {
 
         sqlite3_exec(db, createDirectoryTable, nil, nil, nil)
         sqlite3_exec(db, createFavoritesTable, nil, nil, nil)
+
+        // Ensure missing columns exist in case of legacy schema
+        sqlite3_exec(db, "ALTER TABLE favorites ADD COLUMN item_json TEXT;", nil, nil, nil)
+        sqlite3_exec(db, "ALTER TABLE favorites ADD COLUMN timestamp REAL;", nil, nil, nil)
+
         print("[SQLiteCache] Database initialized at \(dbPath)")
     }
 
@@ -62,36 +69,33 @@ public class SQLiteCache {
         lock.lock()
         defer { lock.unlock() }
 
-        guard db != nil else { return false }
-
-        let query = "SELECT path FROM favorites WHERE path = ?;"
-        var statement: OpaquePointer?
-
-        var result = false
-        if sqlite3_prepare_v2(db, query, -1, &statement, nil) == SQLITE_OK {
-            sqlite3_bind_text(statement, 1, path, -1, SQLITE_TRANSIENT)
-            if sqlite3_step(statement) == SQLITE_ROW {
-                result = true
-            }
-        }
-        sqlite3_finalize(statement)
-        return result
+        return isFavoriteUnlocked(path: path)
     }
 
     public func toggleFavorite(item: FileItem) -> Bool {
         lock.lock()
         defer { lock.unlock() }
 
-        guard db != nil else { return false }
+        guard db != nil else {
+            print("[SQLiteCache] toggleFavorite failed: database handle is nil")
+            return false
+        }
 
         let favKey = item.id
-        if isFavoriteUnlocked(path: favKey) || isFavoriteUnlocked(path: item.path) {
+        let isFav = isFavoriteUnlocked(path: favKey) || isFavoriteUnlocked(path: item.path)
+
+        if isFav {
             let deleteQuery = "DELETE FROM favorites WHERE path = ? OR path = ?;"
             var statement: OpaquePointer?
-            if sqlite3_prepare_v2(db, deleteQuery, -1, &statement, nil) == SQLITE_OK {
+            let prepRes = sqlite3_prepare_v2(db, deleteQuery, -1, &statement, nil)
+            if prepRes == SQLITE_OK {
                 sqlite3_bind_text(statement, 1, favKey, -1, SQLITE_TRANSIENT)
                 sqlite3_bind_text(statement, 2, item.path, -1, SQLITE_TRANSIENT)
-                sqlite3_step(statement)
+                let stepRes = sqlite3_step(statement)
+                print("[SQLiteCache] Removed favorite for \(item.name) (id: \(favKey), path: \(item.path)), step result: \(stepRes)")
+            } else {
+                let errmsg = sqlite3_errmsg(db).map { String(cString: $0) } ?? "unknown"
+                print("[SQLiteCache] Failed to prepare delete query, error code: \(prepRes), msg: \(errmsg)")
             }
             sqlite3_finalize(statement)
             return false
@@ -99,16 +103,31 @@ public class SQLiteCache {
             let codable = CodableFileItem(from: item)
             guard let jsonData = try? JSONEncoder().encode(codable),
                   let jsonString = String(data: jsonData, encoding: .utf8) else {
+                print("[SQLiteCache] Failed to encode FileItem to JSON for favorite")
                 return false
             }
 
             let insertQuery = "INSERT OR REPLACE INTO favorites (path, item_json, timestamp) VALUES (?, ?, ?);"
             var statement: OpaquePointer?
-            if sqlite3_prepare_v2(db, insertQuery, -1, &statement, nil) == SQLITE_OK {
+            var prepRes = sqlite3_prepare_v2(db, insertQuery, -1, &statement, nil)
+
+            if prepRes != SQLITE_OK {
+                let errmsg = sqlite3_errmsg(db).map { String(cString: $0) } ?? "unknown"
+                print("[SQLiteCache] Failed to prepare insert query, error code: \(prepRes), msg: \(errmsg). Attempting schema fix...")
+                sqlite3_exec(db, "DROP TABLE IF EXISTS favorites;", nil, nil, nil)
+                sqlite3_exec(db, "CREATE TABLE favorites (path TEXT PRIMARY KEY, item_json TEXT, timestamp REAL);", nil, nil, nil)
+                prepRes = sqlite3_prepare_v2(db, insertQuery, -1, &statement, nil)
+            }
+
+            if prepRes == SQLITE_OK {
                 sqlite3_bind_text(statement, 1, favKey, -1, SQLITE_TRANSIENT)
                 sqlite3_bind_text(statement, 2, jsonString, -1, SQLITE_TRANSIENT)
                 sqlite3_bind_double(statement, 3, Date().timeIntervalSince1970)
-                sqlite3_step(statement)
+                let stepRes = sqlite3_step(statement)
+                print("[SQLiteCache] Added favorite for \(item.name) (id: \(favKey), path: \(item.path)), step result: \(stepRes)")
+            } else {
+                let errmsg = sqlite3_errmsg(db).map { String(cString: $0) } ?? "unknown"
+                print("[SQLiteCache] Still failed to prepare insert query after schema fix, error code: \(prepRes), msg: \(errmsg)")
             }
             sqlite3_finalize(statement)
             return true
@@ -131,7 +150,10 @@ public class SQLiteCache {
                     let jsonString = String(cString: cString)
                     if let data = jsonString.data(using: .utf8),
                        let decoded = try? JSONDecoder().decode(CodableFileItem.self, from: data) {
-                        items.append(decoded.toFileItem())
+                        let fileItem = decoded.toFileItem()
+                        if fileItem.type == .image {
+                            items.append(fileItem)
+                        }
                     }
                 }
             }

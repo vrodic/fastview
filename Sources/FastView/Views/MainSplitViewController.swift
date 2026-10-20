@@ -28,7 +28,10 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
 
     public var showFavoritesOnly: Bool = false {
         didSet {
-            reloadDirectoryContentsAsync()
+            UserDefaults.standard.set(showFavoritesOnly, forKey: "FastViewIsFavoritesMode")
+            if showFavoritesOnly != oldValue {
+                reloadDirectoryContentsAsync()
+            }
         }
     }
 
@@ -108,7 +111,14 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
             statusBarView.updateDirectoryStats(imageCount: favorites.count, totalSizeBytes: 0, locationName: "Favorites")
 
             if let targetPath = targetSelectedItemPath,
-               let idx = favorites.firstIndex(where: { $0.path == targetPath || $0.id == targetPath || $0.name == targetPath }) {
+               let idx = favorites.firstIndex(where: {
+                   $0.id == targetPath ||
+                   $0.path == targetPath ||
+                   $0.name == targetPath ||
+                   (targetPath as NSString).lastPathComponent == $0.name ||
+                   $0.path.hasSuffix(targetPath) ||
+                   targetPath.hasSuffix($0.path)
+               }) {
                 sidebarVC.selectRow(idx)
                 displayItem(favorites[idx])
             } else if targetSelectedItemPath == nil, let first = favorites.first {
@@ -142,7 +152,16 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
                 self.statusBarView.updateDirectoryStats(imageCount: imageItems.count, totalSizeBytes: 0, locationName: parentName)
 
                 if let targetPath = targetSelectedItemPath,
-                   let idx = items.firstIndex(where: { $0.path == targetPath || $0.id == targetPath || $0.name == targetPath }) {
+                   let idx = items.firstIndex(where: {
+                       $0.id == targetPath ||
+                       $0.path == targetPath ||
+                       $0.name == targetPath ||
+                       (targetPath as NSString).lastPathComponent == $0.name ||
+                       $0.path.hasSuffix(targetPath) ||
+                       targetPath.hasSuffix($0.path) ||
+                       (targetPath.contains("#") && targetPath.hasSuffix("#" + $0.id))
+                   }) {
+                    print("[MainSplitVC] Selected target item '\(items[idx].name)' at index \(idx)")
                     self.sidebarVC.selectRow(idx)
                     self.displayItem(items[idx])
                 } else if targetSelectedItemPath == nil,
@@ -162,12 +181,28 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
     }
 
     public func switchToCurrentItemLocationMode() {
-        guard let item = sidebarVC.selectedItem else { return }
+        guard let item = sidebarVC.selectedItem else {
+            showFavoritesOnly = false
+            return
+        }
         showFavoritesOnly = false
 
-        let targetPath = item.path
-        let locPath = item.archivePath ?? item.path
-        let loc = NavigationManager.locationForPath(locPath)
+        let targetPath = item.id.isEmpty ? item.path : item.id
+
+        let loc: NavigationLocation
+        if let archivePath = item.archivePath, !archivePath.isEmpty {
+            let archiveType = ArchiveReader.fileType(for: URL(fileURLWithPath: archivePath))
+            loc = NavigationLocation(
+                physicalPath: archivePath,
+                archiveSubfolder: item.entryParentDir ?? "",
+                isArchive: true,
+                archiveType: archiveType
+            )
+        } else {
+            loc = NavigationManager.locationForPath(item.path)
+        }
+
+        print("[MainSplitVC] switchToCurrentItemLocationMode for item '\(item.name)', targetPath: '\(targetPath)', locPath: '\(loc.physicalPath)' (archiveSubfolder: '\(loc.archiveSubfolder ?? "")')")
         loadLocation(loc, targetSelectedItemPath: targetPath)
     }
 
@@ -260,11 +295,14 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
 
     public func toggleFavoriteOnSelectedItem() {
         if let item = sidebarVC.selectedItem {
-            _ = SQLiteCache.shared.toggleFavorite(item: item)
+            let newState = SQLiteCache.shared.toggleFavorite(item: item)
+            print("[MainSplitVC] Toggled favorite for item: \(item.name) (id: \(item.id), path: \(item.path)), newState isFavorite: \(newState)")
             sidebarVC.reloadSelectedRow()
             if showFavoritesOnly {
                 reloadDirectoryContentsAsync()
             }
+        } else {
+            print("[MainSplitVC] toggleFavoriteOnSelectedItem called but no item selected in sidebar")
         }
     }
 

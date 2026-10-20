@@ -31,24 +31,41 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
             NSApp.activate(ignoringOtherApps: true)
         }
 
-        if let path = initialPath {
-            let lastSavedPath = UserDefaults.standard.string(forKey: AppDelegate.lastPathKey)
-            let lastSavedSelectedItem = UserDefaults.standard.string(forKey: AppDelegate.lastSelectedItemKey)
-            let lastSavedSelectedItemId = UserDefaults.standard.string(forKey: AppDelegate.lastSelectedItemIdKey)
+        let isFavoritesMode = UserDefaults.standard.bool(forKey: "FastViewIsFavoritesMode")
+        let lastSavedSelectedItem = UserDefaults.standard.string(forKey: AppDelegate.lastSelectedItemKey)
+        let lastSavedSelectedItemId = UserDefaults.standard.string(forKey: AppDelegate.lastSelectedItemIdKey)
+        let targetItem = lastSavedSelectedItemId ?? lastSavedSelectedItem
 
-            saveLastOpenedPath(path)
-            let loc = NavigationManager.locationForPath(path)
+        if CommandLine.arguments.count > 1, let suppliedPath = initialPath {
+            let loc = NavigationManager.locationForPath(suppliedPath)
+            saveLastOpenedPath(suppliedPath)
 
-            let type = ArchiveReader.fileType(for: URL(fileURLWithPath: path))
             var targetPath: String? = nil
-
+            let type = ArchiveReader.fileType(for: URL(fileURLWithPath: suppliedPath))
             if type == .image {
-                targetPath = path
-            } else if path == lastSavedPath || CommandLine.arguments.count > 1 {
-                targetPath = lastSavedSelectedItemId ?? lastSavedSelectedItem
+                targetPath = suppliedPath
+            } else if let savedItem = targetItem {
+                let normSupplied = URL(fileURLWithPath: suppliedPath).standardized.path
+                let normSaved = URL(fileURLWithPath: savedItem).standardized.path
+                if normSaved.hasPrefix(normSupplied) {
+                    targetPath = savedItem
+                }
             }
 
             windowController.splitVC.loadLocation(loc, targetSelectedItemPath: targetPath)
+            if isFavoritesMode {
+                windowController.splitVC.showFavoritesOnly = true
+            }
+        } else if isFavoritesMode {
+            if let path = initialPath {
+                let loc = NavigationManager.locationForPath(path)
+                windowController.splitVC.loadLocation(loc, targetSelectedItemPath: targetItem)
+            }
+            windowController.splitVC.showFavoritesOnly = true
+        } else if let path = initialPath {
+            saveLastOpenedPath(path)
+            let loc = NavigationManager.locationForPath(path)
+            windowController.splitVC.loadLocation(loc, targetSelectedItemPath: targetItem)
         }
     }
 
@@ -114,7 +131,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         fileMenuItem.submenu = fileMenu
         fileMenu.addItem(withTitle: "Open…", action: #selector(openDocument(_:)), keyEquivalent: "o")
         fileMenu.addItem(withTitle: "Toggle Favorite", action: #selector(toggleFavoriteAction(_:)), keyEquivalent: "f")
-        fileMenu.addItem(withTitle: "Show Current Item Location", action: #selector(showCurrentLocationAction(_:)), keyEquivalent: "l")
+        fileMenu.addItem(withTitle: "Switch to All Mode", action: #selector(switchToAllModeAction(_:)), keyEquivalent: "l")
         fileMenu.addItem(NSMenuItem.separator())
         fileMenu.addItem(withTitle: "Close Window", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
 
@@ -170,15 +187,22 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func toggleFavoriteAction(_ sender: Any?) {
+        print("[AppDelegate] toggleFavoriteAction menu item triggered")
         windowController?.splitVC.toggleFavoriteOnSelectedItem()
     }
 
-    @objc private func showCurrentLocationAction(_ sender: Any?) {
+    public func toggleFavoriteActionFromSidebar() {
+        print("[AppDelegate] toggleFavoriteActionFromSidebar triggered")
+        windowController?.splitVC.toggleFavoriteOnSelectedItem()
+    }
+
+    @objc private func switchToAllModeAction(_ sender: Any?) {
         windowController?.splitVC.switchToCurrentItemLocationMode()
     }
 
     @objc private func showAllItemsAction(_ sender: Any?) {
-        windowController?.splitVC.showFavoritesOnly = false
+        print("[AppDelegate] showAllItemsAction menu item triggered")
+        windowController?.splitVC.switchToCurrentItemLocationMode()
     }
 
     @objc private func showFavoritesOnlyAction(_ sender: Any?) {
