@@ -131,6 +131,9 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
     }
 
     public func displayItem(_ item: FileItem) {
+        // Instantly cancel all pending I/O tasks on item selection
+        cancelAllIOOperations()
+
         let parentName: String
         if let nav = navigationManager {
             parentName = (nav.currentLocation.physicalPath as NSString).lastPathComponent
@@ -142,7 +145,6 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         let currentIndex = imageItems.firstIndex(where: { $0.id == item.id }).map { $0 + 1 }
         let totalImages = imageItems.count
 
-        // Update status bar IMMEDIATELY for selected item
         if item.type == .image {
             statusBarView.updateImageInfo(item: item, image: nil, currentIndex: currentIndex, totalImages: totalImages, parentName: parentName)
             mainImageView.showLoading(fileSizeBytes: item.fileSize, pastSpeedMBs: lastMeasuredSpeedMBs)
