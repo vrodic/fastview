@@ -29,7 +29,7 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
         scrollView.autoresizesSubviews = true
 
         tableView.headerView = nil
-        tableView.rowHeight = 96
+        tableView.rowHeight = 160
         tableView.selectionHighlightStyle = .regular
         tableView.dataSource = self
         tableView.delegate = self
@@ -50,6 +50,18 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
             scrollView.topAnchor.constraint(equalTo: view.topAnchor),
             scrollView.bottomAnchor.constraint(equalTo: view.bottomAnchor)
         ])
+    }
+
+    override public func viewDidLayout() {
+        super.viewDidLayout()
+        let width = view.bounds.width
+        if width > 0 {
+            let targetRowHeight = max(90, min(800, width * 0.8))
+            if abs(tableView.rowHeight - targetRowHeight) > 5 {
+                tableView.rowHeight = targetRowHeight
+                tableView.noteHeightOfRows(withIndexesChanged: IndexSet(integersIn: 0..<items.count))
+            }
+        }
     }
 
     public func setItems(_ items: [FileItem], selectFirst: Bool = true) {
@@ -194,16 +206,11 @@ public class SidebarTableCellView: NSTableCellView {
             return
         }
 
-        // Parent item / non-thumbnail fallback state
-        if item.type == .parentDirectory {
-            setFallbackIcon(NSImage(systemSymbolName: "arrow.uturn.backward", accessibilityDescription: "Parent"))
-        } else if item.type == .directory {
-            setFallbackIcon(NSImage(systemSymbolName: "folder", accessibilityDescription: "Folder"))
-        } else if item.type == .archiveZip || item.type == .archiveRar {
-            setFallbackIcon(NSImage(systemSymbolName: "doc.zipper", accessibilityDescription: "Archive"))
-        } else {
-            setFallbackIcon(nil)
-            // Load regular image thumbnail immediately
+        // Show filename text label without image placeholder
+        showFilenameTextOnly()
+
+        // Load regular image thumbnail immediately
+        if item.type == .image {
             ThumbnailGenerator.shared.generateThumbnail(for: item) { [weak self] image in
                 guard let self = self, self.currentItem?.id == item.id else { return }
                 if let img = image {
@@ -230,15 +237,9 @@ public class SidebarTableCellView: NSTableCellView {
         nameLabel.isHidden = true
     }
 
-    private func setFallbackIcon(_ icon: NSImage?) {
-        if let icon = icon {
-            thumbnailImageView.image = icon
-            thumbnailImageView.isHidden = false
-            nameLabel.isHidden = false
-        } else {
-            thumbnailImageView.image = nil
-            thumbnailImageView.isHidden = true
-            nameLabel.isHidden = false
-        }
+    private func showFilenameTextOnly() {
+        thumbnailImageView.image = nil
+        thumbnailImageView.isHidden = true
+        nameLabel.isHidden = false
     }
 }

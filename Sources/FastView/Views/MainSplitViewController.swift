@@ -8,6 +8,7 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
 
     private var navigationManager: NavigationManager?
     private let loadQueue = DispatchQueue(label: "com.fastview.directoryload", qos: .userInitiated)
+    private static let sidebarWidthKey = "FastViewSidebarWidth"
 
     override public func viewDidLoad() {
         super.viewDidLoad()
@@ -32,14 +33,29 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
 
         let sidebarItem = NSSplitViewItem(sidebarWithViewController: sidebarVC)
         sidebarItem.minimumThickness = 120
-        sidebarItem.maximumThickness = 300
-        sidebarItem.preferredThicknessFraction = 0.18
+        sidebarItem.maximumThickness = 1200
+        sidebarItem.preferredThicknessFraction = 0.25
+
+        let savedWidth = UserDefaults.standard.double(forKey: MainSplitViewController.sidebarWidthKey)
+        if savedWidth > 120 {
+            sidebarItem.thickness = CGFloat(savedWidth)
+        }
 
         let mainItem = NSSplitViewItem(viewController: mainContentVC)
-        mainItem.minimumThickness = 400
+        mainItem.minimumThickness = 300
 
         addSplitViewItem(sidebarItem)
         addSplitViewItem(mainItem)
+    }
+
+    override public func splitViewDidResizeSubviews(_ notification: Notification) {
+        super.splitViewDidResizeSubviews(notification)
+        if splitViewItems.count > 0 {
+            let width = splitViewItems[0].viewController.view.bounds.width
+            if width > 120 {
+                UserDefaults.standard.set(Double(width), forKey: MainSplitViewController.sidebarWidthKey)
+            }
+        }
     }
 
     public func loadLocation(_ location: NavigationLocation, targetSelectedItemPath: String? = nil) {
