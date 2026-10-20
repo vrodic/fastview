@@ -1,6 +1,5 @@
 import Foundation
 import AppKit
-import ImageIO
 
 public class MemoryLRUCache {
     public static let shared = MemoryLRUCache()
@@ -8,7 +7,7 @@ public class MemoryLRUCache {
     private class CacheEntry {
         let key: String
         let image: NSImage
-        let cost: Int // Approximate byte size
+        let cost: Int // Byte size
         var lastAccessed: Date
 
         init(key: String, image: NSImage, cost: Int) {
@@ -35,6 +34,7 @@ public class MemoryLRUCache {
 
         guard let entry = cache[key] else { return nil }
         entry.lastAccessed = Date()
+        printCacheStats()
         return entry.image
     }
 
@@ -51,6 +51,7 @@ public class MemoryLRUCache {
         totalCost += cost
 
         evictIfNecessary()
+        printCacheStats()
     }
 
     private func evictIfNecessary() {
@@ -61,10 +62,18 @@ public class MemoryLRUCache {
         }
     }
 
+    private func printCacheStats() {
+        let usedMB = Double(totalCost) / (1024.0 * 1024.0)
+        let maxMB = Double(maxMemoryLimit) / (1024.0 * 1024.0)
+        print(String(format: "[CacheStats] Count: %d items | Memory: %.2f MB / %.2f MB (%.1f%%)",
+                     cache.count, usedMB, maxMB, (usedMB / maxMB) * 100.0))
+    }
+
     public func clear() {
         lock.lock()
         defer { lock.unlock() }
         cache.removeAll()
         totalCost = 0
+        print("[CacheStats] Memory cache cleared.")
     }
 }

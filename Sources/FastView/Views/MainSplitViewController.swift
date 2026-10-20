@@ -30,9 +30,9 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         mainContentVC.view = mainStackView
 
         let sidebarItem = NSSplitViewItem(sidebarWithViewController: sidebarVC)
-        sidebarItem.minimumThickness = 220
-        sidebarItem.maximumThickness = 450
-        sidebarItem.preferredThicknessFraction = 0.25
+        sidebarItem.minimumThickness = 120
+        sidebarItem.maximumThickness = 300
+        sidebarItem.preferredThicknessFraction = 0.18
 
         let mainItem = NSSplitViewItem(viewController: mainContentVC)
         mainItem.minimumThickness = 400
@@ -49,9 +49,16 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
     private func reloadDirectoryContentsAsync(targetSelectedItem: FileItem? = nil) {
         ThumbnailGenerator.shared.cancelAllPendingTasks()
 
+        let startTime = CFAbsoluteTimeGetCurrent()
+        let path = navigationManager.currentLocation.physicalPath
+        print("[DirectoryOpen] Opening location: \(path)...")
+
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
             let items = self.navigationManager.contents()
+
+            let elapsedTime = (CFAbsoluteTimeGetCurrent() - startTime) * 1000.0
+            print(String(format: "[DirectoryOpen] Completed loading %d items from %@ in %.2f ms", items.count, path, elapsedTime))
 
             let imageItems = items.filter { $0.type == .image }
             let totalBytes = items.reduce(0) { $0 + $1.fileSize }

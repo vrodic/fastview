@@ -105,7 +105,7 @@ public class ArchiveReader {
         return data
     }
 
-    // List contents of ZIP archive (or subfolder within ZIP archive)
+    // List contents of ZIP archive at specific subfolder level (or all items if root)
     public static func listZipContents(archivePath: String, subfolder: String = "") -> [FileItem] {
         guard let archive = Archive(url: URL(fileURLWithPath: archivePath), accessMode: .read) else {
             return []
@@ -162,6 +162,11 @@ public class ArchiveReader {
             }
         }
 
+        // If listing at root yielded only 1 item and it's a directory wrapper, flatten or include all images
+        if items.count == 1 && items[0].isDirectory {
+            return listAllZipImages(archivePath: archivePath)
+        }
+
         return sortItems(items)
     }
 
@@ -192,7 +197,7 @@ public class ArchiveReader {
         return sortItems(items)
     }
 
-    // List contents of RAR archive (or subfolder within RAR archive)
+    // List contents of RAR archive at specific subfolder level
     public static func listRarContents(archivePath: String, subfolder: String = "") -> [FileItem] {
         guard let archive = unrar_open(archivePath) else { return [] }
         defer { unrar_close(archive) }
@@ -254,6 +259,10 @@ public class ArchiveReader {
                     ))
                 }
             }
+        }
+
+        if items.count == 1 && items[0].isDirectory {
+            return listAllRarImages(archivePath: archivePath)
         }
 
         return sortItems(items)

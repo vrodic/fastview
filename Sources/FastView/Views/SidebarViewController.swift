@@ -29,7 +29,7 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
         scrollView.autoresizesSubviews = true
 
         tableView.headerView = nil
-        tableView.rowHeight = 64
+        tableView.rowHeight = 80
         tableView.selectionHighlightStyle = .regular
         tableView.dataSource = self
         tableView.delegate = self
@@ -137,7 +137,6 @@ class CustomTableView: NSTableView {
 
 public class SidebarTableCellView: NSTableCellView {
     private let thumbnailImageView = NSImageView()
-    private let titleLabel = NSTextField(labelWithString: "")
     private var currentItemId: String?
 
     override public init(frame frameRect: NSRect) {
@@ -154,30 +153,20 @@ public class SidebarTableCellView: NSTableCellView {
         thumbnailImageView.translatesAutoresizingMaskIntoConstraints = false
         thumbnailImageView.imageScaling = .scaleProportionallyUpOrDown
         thumbnailImageView.wantsLayer = true
-        thumbnailImageView.layer?.cornerRadius = 4
-
-        titleLabel.translatesAutoresizingMaskIntoConstraints = false
-        titleLabel.lineBreakMode = .byTruncatingTail
-        titleLabel.font = NSFont.systemFont(ofSize: 13)
+        thumbnailImageView.layer?.cornerRadius = 6
 
         addSubview(thumbnailImageView)
-        addSubview(titleLabel)
 
         NSLayoutConstraint.activate([
-            thumbnailImageView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
+            thumbnailImageView.centerXAnchor.constraint(equalTo: centerXAnchor),
             thumbnailImageView.centerYAnchor.constraint(equalTo: centerYAnchor),
-            thumbnailImageView.widthAnchor.constraint(equalToConstant: 48),
-            thumbnailImageView.heightAnchor.constraint(equalToConstant: 48),
-
-            titleLabel.leadingAnchor.constraint(equalTo: thumbnailImageView.trailingAnchor, constant: 8),
-            titleLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
-            titleLabel.centerYAnchor.constraint(equalTo: centerYAnchor)
+            thumbnailImageView.widthAnchor.constraint(equalToConstant: 72),
+            thumbnailImageView.heightAnchor.constraint(equalToConstant: 72)
         ])
     }
 
     public func configure(with item: FileItem) {
         self.currentItemId = item.id
-        titleLabel.stringValue = item.name
 
         if item.type == .parentDirectory {
             thumbnailImageView.image = NSImage(systemSymbolName: "arrow.uturn.backward", accessibilityDescription: "Parent")
