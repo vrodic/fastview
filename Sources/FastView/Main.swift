@@ -201,7 +201,8 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func showAllItemsAction(_ sender: Any?) {
-        windowController?.splitVC.showFavoritesOnly = false
+        print("[AppDelegate] showAllItemsAction menu item triggered")
+        windowController?.splitVC.switchToCurrentItemLocationMode()
     }
 
     @objc private func showFavoritesOnlyAction(_ sender: Any?) {

@@ -29,7 +29,9 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
     public var showFavoritesOnly: Bool = false {
         didSet {
             UserDefaults.standard.set(showFavoritesOnly, forKey: "FastViewIsFavoritesMode")
-            reloadDirectoryContentsAsync()
+            if showFavoritesOnly != oldValue {
+                reloadDirectoryContentsAsync()
+            }
         }
     }
 
@@ -150,7 +152,16 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
                 self.statusBarView.updateDirectoryStats(imageCount: imageItems.count, totalSizeBytes: 0, locationName: parentName)
 
                 if let targetPath = targetSelectedItemPath,
-                   let idx = items.firstIndex(where: { $0.path == targetPath || $0.id == targetPath || $0.name == targetPath }) {
+                   let idx = items.firstIndex(where: {
+                       $0.id == targetPath ||
+                       $0.path == targetPath ||
+                       $0.name == targetPath ||
+                       (targetPath as NSString).lastPathComponent == $0.name ||
+                       $0.path.hasSuffix(targetPath) ||
+                       targetPath.hasSuffix($0.path) ||
+                       (targetPath.contains("#") && targetPath.hasSuffix("#" + $0.id))
+                   }) {
+                    print("[MainSplitVC] Selected target item '\(items[idx].name)' at index \(idx)")
                     self.sidebarVC.selectRow(idx)
                     self.displayItem(items[idx])
                 } else if targetSelectedItemPath == nil,
