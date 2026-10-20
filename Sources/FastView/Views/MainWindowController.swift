@@ -4,8 +4,17 @@ public class MainWindowController: NSWindowController, NSWindowDelegate {
     public let splitVC = MainSplitViewController()
 
     public convenience init() {
+        let screenSize = NSScreen.main?.visibleFrame.size ?? NSSize(width: 1440, height: 900)
+        let windowWidth = screenSize.width * 0.75
+        let windowHeight = screenSize.height * 0.75
+
         let window = NSWindow(
-            contentRect: NSRect(x: 100, y: 100, width: 1100, height: 750),
+            contentRect: NSRect(
+                x: (screenSize.width - windowWidth) / 2,
+                y: (screenSize.height - windowHeight) / 2,
+                width: windowWidth,
+                height: windowHeight
+            ),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered,
             defer: false

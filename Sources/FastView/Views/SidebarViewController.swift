@@ -120,6 +120,7 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
 public class SidebarTableCellView: NSTableCellView {
     private let thumbnailImageView = NSImageView()
     private let titleLabel = NSTextField(labelWithString: "")
+    private var currentItemId: String?
 
     override public init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -157,6 +158,7 @@ public class SidebarTableCellView: NSTableCellView {
     }
 
     public func configure(with item: FileItem) {
+        self.currentItemId = item.id
         titleLabel.stringValue = item.name
 
         if item.type == .parentDirectory {
@@ -169,10 +171,10 @@ public class SidebarTableCellView: NSTableCellView {
             thumbnailImageView.image = NSImage(systemSymbolName: "photo", accessibilityDescription: "Image")
         }
 
-        // Asynchronously load thumbnail image
         ThumbnailGenerator.shared.generateThumbnail(for: item) { [weak self] image in
+            guard let self = self, self.currentItemId == item.id else { return }
             if let img = image {
-                self?.thumbnailImageView.image = img
+                self.thumbnailImageView.image = img
             }
         }
     }

@@ -17,7 +17,6 @@ public class MainImageView: NSView {
 
     private let imageView = NSImageView()
     private let scrollView = NSScrollView()
-    private var zoomScale: CGFloat = 1.0
 
     override public init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -43,7 +42,7 @@ public class MainImageView: NSView {
         scrollView.maxMagnification = 10.0
 
         imageView.imageScaling = .scaleProportionallyUpOrDown
-        imageView.autoresizingMask = [.width, .height]
+        imageView.translatesAutoresizingMaskIntoConstraints = false
 
         let clipView = scrollView.contentView
         clipView.documentView = imageView
@@ -61,23 +60,16 @@ public class MainImageView: NSView {
     public func setImage(_ image: NSImage?) {
         self.currentImage = image
         imageView.image = image
-        zoomScale = 1.0
         scrollView.magnification = 1.0
         updateImageFrame()
     }
 
-    public func setZoomScale(_ scale: CGFloat) {
-        zoomScale = max(0.1, min(scale, 10.0))
-        zoomMode = .custom(zoomScale)
-        scrollView.magnification = zoomScale
-    }
-
     public func zoomIn() {
-        setZoomScale(scrollView.magnification * 1.25)
+        scrollView.magnification *= 1.25
     }
 
     public func zoomOut() {
-        setZoomScale(scrollView.magnification / 1.25)
+        scrollView.magnification /= 1.25
     }
 
     public func resetZoomToFit() {
@@ -88,17 +80,12 @@ public class MainImageView: NSView {
 
     public func setActualSize() {
         zoomMode = .actualSize
-        if let img = currentImage {
-            let containerSize = scrollView.contentView.bounds.size
-            if containerSize.width > 0 && containerSize.height > 0 {
-                let scale = img.size.width / containerSize.width
-                setZoomScale(scale)
-            }
-        }
+        scrollView.magnification = 1.0
+        updateImageFrame()
     }
 
-    override public func resize(withOldSuperviewSize oldSize: NSSize) {
-        super.resize(withOldSuperviewSize: oldSize)
+    override public func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
         updateImageFrame()
     }
 
@@ -108,7 +95,7 @@ public class MainImageView: NSView {
             return
         }
 
-        let containerSize = scrollView.contentView.bounds.size
+        let containerSize = bounds.size
         guard containerSize.width > 0 && containerSize.height > 0 else { return }
 
         switch zoomMode {

@@ -6,7 +6,6 @@ public class ThumbnailGenerator {
     public static let shared = ThumbnailGenerator()
     private let queue = DispatchQueue(label: "com.fastview.thumbnailgenerator", qos: .userInitiated, attributes: .concurrent)
 
-    // Generates a thumbnail image asynchronously for a given FileItem
     public func generateThumbnail(for item: FileItem, targetSize: CGSize = CGSize(width: 160, height: 160), completion: @escaping (NSImage?) -> Void) {
         let cacheKey = "thumb_\(item.id)_\(targetSize.width)x\(targetSize.height)"
 
@@ -21,7 +20,6 @@ public class ThumbnailGenerator {
                 return
             }
 
-            // Estimate cost in bytes: width * height * 4
             let cost = Int(image.size.width * image.size.height * 4)
             MemoryLRUCache.shared.setObject(image, forKey: cacheKey, cost: cost)
 
@@ -31,7 +29,6 @@ public class ThumbnailGenerator {
         }
     }
 
-    // Peeks inside an archive (or folder) to find the first image for rendering preview/thumbnail
     public func peekFirstImage(in item: FileItem) -> FileItem? {
         if item.type == .archiveZip {
             let entries = ArchiveReader.listZipContents(archivePath: item.path)
@@ -39,10 +36,21 @@ public class ThumbnailGenerator {
         } else if item.type == .archiveRar {
             let entries = ArchiveReader.listRarContents(archivePath: item.path)
             return findFirstImage(in: entries)
-        } else if item.type == .directory {
-            let mgr = NavigationManager(initialLocation: NavigationLocation(physicalPath: item.path))
-            let entries = mgr.contents()
-            return findFirstImage(in: entries)
+        } else if item.isDirectory {
+            if let archivePath = item.archivePath {
+                let ext = (archivePath as NSString).pathExtension.lowercased()
+                if ext == "zip" {
+                    let entries = ArchiveReader.listZipContents(archivePath: archivePath, subfolder: item.path)
+                    return findFirstImage(in: entries)
+                } else if ext == "rar" {
+                    let entries = ArchiveReader.listRarContents(archivePath: archivePath, subfolder: item.path)
+                    return findFirstImage(in: entries)
+                }
+            } else {
+                let mgr = NavigationManager(initialLocation: NavigationLocation(physicalPath: item.path))
+                let entries = mgr.contents()
+                return findFirstImage(in: entries)
+            }
         }
         return nil
     }
@@ -59,9 +67,8 @@ public class ThumbnailGenerator {
         return nil
     }
 
-    // Helper: Loads image data and uses ImageIO fast thumbnailing
     public func loadAndScaleImage(for item: FileItem, targetSize: CGSize) -> NSImage? {
-        if item.type == .archiveZip || item.type == .archiveRar || item.type == .directory {
+        if item.type == .archiveZip || item.type == .archiveRar || item.isDirectory {
             if let peeked = peekFirstImage(in: item) {
                 return loadAndScaleImage(for: peeked, targetSize: targetSize)
             }
@@ -80,9 +87,12 @@ public class ThumbnailGenerator {
             imageData = try? Data(contentsOf: URL(fileURLWithPath: item.path))
         }
 
-        guard let data = imageData as CFData? else { return nil }
-        guard let source = CGImageSourceCreateWithData(data, nil) else { return nil }
+        guard let data = imageData else { return nil }
+        if let image = NSImage(data: data) {
+            return image
+        }
 
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
         let maxDimension = max(targetSize.width, targetSize.height)
         let options: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
@@ -97,7 +107,6 @@ public class ThumbnailGenerator {
         return NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
     }
 
-    // Fast loading of full resolution image
     public func loadFullImage(for item: FileItem, completion: @escaping (NSImage?) -> Void) {
         let cacheKey = "full_\(item.id)"
 
@@ -108,7 +117,7 @@ public class ThumbnailGenerator {
 
         queue.async {
             var targetItem = item
-            if item.type == .archiveZip || item.type == .archiveRar || item.type == .directory {
+            if item.type == .archiveZip || item.type == .archiveRar || item.isDirectory {
                 if let peeked = self.peekFirstImage(in: item) {
                     targetItem = peeked
                 } else {
