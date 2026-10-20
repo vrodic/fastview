@@ -46,12 +46,22 @@ public class MainWindowController: NSWindowController, NSWindowDelegate {
         NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event -> NSEvent? in
             guard let self = self else { return event }
 
+            let isCmdPressed = event.modifierFlags.contains(.command)
+
             switch event.keyCode {
             case 125: // Down arrow
-                self.splitVC.selectNextImage()
+                if isCmdPressed {
+                    self.splitVC.selectNextArchiveOrFolderFirstImage()
+                } else {
+                    self.splitVC.selectNextImage()
+                }
                 return nil
             case 126: // Up arrow
-                self.splitVC.selectPreviousImage()
+                if isCmdPressed {
+                    self.splitVC.selectPreviousArchiveOrFolderFirstImage()
+                } else {
+                    self.splitVC.selectPreviousImage()
+                }
                 return nil
             case 124: // Right Arrow
                 self.splitVC.selectNextHierarchyItem()
@@ -67,7 +77,7 @@ public class MainWindowController: NSWindowController, NSWindowDelegate {
             }
 
             // Command key shortcuts for Zooming
-            if event.modifierFlags.contains(.command) {
+            if isCmdPressed {
                 if event.characters == "+" || event.characters == "=" {
                     self.splitVC.imageView.zoomIn()
                     return nil

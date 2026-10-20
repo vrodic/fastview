@@ -243,6 +243,45 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         sidebarVC.selectPrevious()
     }
 
+    public func selectNextArchiveOrFolderFirstImage() {
+        let items = sidebarVC.items
+        guard let selected = sidebarVC.selectedItem,
+              let currentIndex = items.firstIndex(of: selected) else { return }
+
+        // Find next archive or directory in the list
+        for i in (currentIndex + 1)..<items.count {
+            let item = items[i]
+            if item.isDirectory || item.type == .archiveZip || item.type == .archiveRar {
+                sidebarVC.selectRow(i)
+                return
+            }
+        }
+
+        // If in an archive or nested folder, jump to next sibling in parent directory
+        selectNextHierarchyItem()
+    }
+
+    public func selectPreviousArchiveOrFolderFirstImage() {
+        let items = sidebarVC.items
+        guard let selected = sidebarVC.selectedItem,
+              let currentIndex = items.firstIndex(of: selected) else { return }
+
+        // Find previous archive or directory in the list
+        for i in (0..<currentIndex).reversed() {
+            let item = items[i]
+            if item.isDirectory || item.type == .archiveZip || item.type == .archiveRar {
+                sidebarVC.selectRow(i)
+                return
+            }
+        }
+
+        // If no previous folder in list, select first item
+        if !items.isEmpty {
+            let firstIdx = items[0].type == .parentDirectory && items.count > 1 ? 1 : 0
+            sidebarVC.selectRow(firstIdx)
+        }
+    }
+
     public func selectNextHierarchyItem() {
         guard let navMgr = navigationManager else { return }
         let currentItems = sidebarVC.items
