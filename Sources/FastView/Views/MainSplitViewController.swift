@@ -15,6 +15,14 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         setupUI()
     }
 
+    override public func viewDidAppear() {
+        super.viewDidAppear()
+        let savedWidth = UserDefaults.standard.double(forKey: MainSplitViewController.sidebarWidthKey)
+        if savedWidth > 120 && splitView.subviews.count > 0 {
+            splitView.setPosition(CGFloat(savedWidth), ofDividerAt: 0)
+        }
+    }
+
     private func setupUI() {
         sidebarVC.delegate = self
 
@@ -35,11 +43,6 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         sidebarItem.minimumThickness = 120
         sidebarItem.maximumThickness = 1200
         sidebarItem.preferredThicknessFraction = 0.25
-
-        let savedWidth = UserDefaults.standard.double(forKey: MainSplitViewController.sidebarWidthKey)
-        if savedWidth > 120 {
-            sidebarItem.thickness = CGFloat(savedWidth)
-        }
 
         let mainItem = NSSplitViewItem(viewController: mainContentVC)
         mainItem.minimumThickness = 300
