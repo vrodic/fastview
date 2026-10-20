@@ -1,5 +1,7 @@
 import AppKit
 
+var globalAppDelegate: AppDelegate?
+
 @main
 public class AppDelegate: NSObject, NSApplicationDelegate {
     private var windowController: MainWindowController?
@@ -7,7 +9,9 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
 
     public static func main() {
         let app = NSApplication.shared
+        app.setActivationPolicy(.regular)
         let delegate = AppDelegate()
+        globalAppDelegate = delegate
         app.delegate = delegate
         app.run()
     }
@@ -19,7 +23,11 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
 
         let windowController = MainWindowController()
         self.windowController = windowController
-        windowController.showWindow(nil)
+
+        if let window = windowController.window {
+            window.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+        }
 
         if let path = initialPath {
             saveLastOpenedPath(path)

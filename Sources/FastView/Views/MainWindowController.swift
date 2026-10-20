@@ -4,14 +4,18 @@ public class MainWindowController: NSWindowController, NSWindowDelegate {
     public let splitVC = MainSplitViewController()
 
     public convenience init() {
-        let screenSize = NSScreen.main?.visibleFrame.size ?? NSSize(width: 1440, height: 900)
-        let windowWidth = screenSize.width * 0.75
-        let windowHeight = screenSize.height * 0.75
+        let screen = NSScreen.main ?? NSScreen.screens.first
+        let screenFrame = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+
+        let windowWidth = floor(screenFrame.width * 0.75)
+        let windowHeight = floor(screenFrame.height * 0.75)
+        let originX = screenFrame.origin.x + floor((screenFrame.width - windowWidth) / 2)
+        let originY = screenFrame.origin.y + floor((screenFrame.height - windowHeight) / 2)
 
         let window = NSWindow(
             contentRect: NSRect(
-                x: (screenSize.width - windowWidth) / 2,
-                y: (screenSize.height - windowHeight) / 2,
+                x: originX,
+                y: originY,
                 width: windowWidth,
                 height: windowHeight
             ),
