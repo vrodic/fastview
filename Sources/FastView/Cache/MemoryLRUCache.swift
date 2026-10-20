@@ -6,14 +6,14 @@ public class MemoryLRUCache {
 
     private class CacheEntry {
         let key: String
-        let data: Data
-        let cost: Int // Byte size (defaults to data.count)
+        let image: NSImage
+        let cost: Int // Byte size
         var lastAccessed: Date
 
-        init(key: String, data: Data, cost: Int? = nil) {
+        init(key: String, image: NSImage, cost: Int) {
             self.key = key
-            self.data = data
-            self.cost = cost ?? data.count
+            self.image = image
+            self.cost = cost
             self.lastAccessed = Date()
         }
     }
@@ -28,17 +28,17 @@ public class MemoryLRUCache {
         self.maxMemoryLimit = Int(Double(sysMemory) * memoryFraction)
     }
 
-    public func object(forKey key: String) -> Data? {
+    public func object(forKey key: String) -> NSImage? {
         lock.lock()
         defer { lock.unlock() }
 
         guard let entry = cache[key] else { return nil }
         entry.lastAccessed = Date()
         printCacheStats()
-        return entry.data
+        return entry.image
     }
 
-    public func setObject(_ data: Data, forKey key: String, cost: Int? = nil) {
+    public func setObject(_ image: NSImage, forKey key: String, cost: Int) {
         lock.lock()
         defer { lock.unlock() }
 
@@ -46,9 +46,9 @@ public class MemoryLRUCache {
             totalCost -= existing.cost
         }
 
-        let entry = CacheEntry(key: key, data: data, cost: cost)
+        let entry = CacheEntry(key: key, image: image, cost: cost)
         cache[key] = entry
-        totalCost += entry.cost
+        totalCost += cost
 
         evictIfNecessary()
         printCacheStats()

@@ -229,7 +229,7 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
 
         if item.type == .image {
             statusBarView.updateImageInfo(item: item, image: nil, currentIndex: currentIndex, totalImages: totalImages, parentName: parentName)
-            if MemoryLRUCache.shared.object(forKey: item.id) == nil {
+            if MemoryLRUCache.shared.object(forKey: "full_\(item.id)") == nil {
                 mainImageView.showLoading(fileSizeBytes: item.fileSize, pastSpeedMBs: lastMeasuredSpeedMBs)
             }
         } else if item.type == .archiveZip || item.type == .archiveRar {
@@ -291,6 +291,9 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
             self.statusBarView.updateImageInfo(item: item, image: image, currentIndex: currentIndex, totalImages: totalImages, parentName: parentName)
 
             if let image = image {
+                let cacheKey = "thumb_\(item.id)_256.0x256.0"
+                let cost = Int(image.size.width * image.size.height * 4)
+                MemoryLRUCache.shared.setObject(image, forKey: cacheKey, cost: cost)
                 self.sidebarVC.updateThumbnailForSelectedItem(image: image)
             }
 

@@ -339,9 +339,9 @@ public class SidebarTableCellView: NSTableCellView {
         favoriteBadge.isHidden = !isFav
         print("[SidebarCell] configure item '\(item.name)' (id: \(item.id)), isFav: \(isFav)")
 
-        if let cachedData = MemoryLRUCache.shared.object(forKey: item.id),
-           let cachedImage = NSImage(data: cachedData) {
-            setThumbnailLoaded(cachedImage)
+        let cacheKey = "thumb_\(item.id)_256.0x256.0"
+        if let cached = MemoryLRUCache.shared.object(forKey: cacheKey) {
+            setThumbnailLoaded(cached)
             return
         }
 
