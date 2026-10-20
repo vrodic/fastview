@@ -72,7 +72,7 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         ThumbnailGenerator.shared.cancelAllPendingTasks()
     }
 
-    private func reloadDirectoryContentsAsync(targetSelectedItemPath: String? = nil) {
+    private func reloadDirectoryContentsAsync(targetSelectedItemPath: String? = nil, isNavigatingUp: Bool = false) {
         guard let navMgr = navigationManager else { return }
         cancelAllIOOperations()
 
@@ -118,6 +118,11 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
                 } else if targetSelectedItemPath == nil,
                           let firstItem = items.first(where: { $0.type == .image || $0.type == .archiveZip || $0.type == .archiveRar }) {
                     self.displayItem(firstItem)
+                }
+
+                // If idle, load thumbnails for visible rows only
+                if !isNavigatingUp {
+                    self.sidebarVC.loadVisibleThumbnailsIfIdle()
                 }
             }
         }
@@ -249,7 +254,7 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
                     reloadDirectoryContentsAsync(targetSelectedItemPath: nextSibling.path)
                 }
             } else {
-                reloadDirectoryContentsAsync(targetSelectedItemPath: result.exitedItemPath)
+                reloadDirectoryContentsAsync(targetSelectedItemPath: result.exitedItemPath, isNavigatingUp: true)
             }
         }
     }
@@ -264,7 +269,7 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         guard let navMgr = navigationManager else { return }
         cancelAllIOOperations()
         let result = navMgr.navigateUp()
-        reloadDirectoryContentsAsync(targetSelectedItemPath: result.exitedItemPath)
+        reloadDirectoryContentsAsync(targetSelectedItemPath: result.exitedItemPath, isNavigatingUp: true)
     }
 
     public var imageView: MainImageView {

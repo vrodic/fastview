@@ -74,6 +74,20 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
         }
     }
 
+    public func loadVisibleThumbnailsIfIdle() {
+        guard !ThumbnailGenerator.shared.isLoadingMainImage else { return }
+        let visibleRows = tableView.rows(in: scrollView.contentView.bounds)
+        guard visibleRows.length > 0 else { return }
+
+        for row in visibleRows.location..<NSMaxRange(visibleRows) {
+            guard row >= 0 && row < items.count else { continue }
+            let item = items[row]
+            if let cell = tableView.view(atColumn: 0, row: row, makeIfNecessary: false) as? SidebarTableCellView {
+                cell.loadThumbnailIfIdle(for: item)
+            }
+        }
+    }
+
     public func selectRow(_ index: Int) {
         guard index >= 0 && index < items.count else { return }
         tableView.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
@@ -230,23 +244,30 @@ public class SidebarTableCellView: NSTableCellView {
         let isFav = SQLiteCache.shared.isFavorite(path: item.path)
         favoriteBadge.isHidden = !isFav
 
-        // Check if thumbnail is already in memory cache
         let cacheKey = "thumb_\(item.id)_256.0x256.0"
         if let cached = MemoryLRUCache.shared.object(forKey: cacheKey) {
             setThumbnailLoaded(cached)
             return
         }
 
-        // Hide thumbnail image view and show clean filename text without placeholder image
         showFilenameTextOnly()
 
-        // Load regular image thumbnail immediately
         if item.type == .image {
             ThumbnailGenerator.shared.generateThumbnail(for: item) { [weak self] image in
                 guard let self = self, self.currentItem?.id == item.id else { return }
                 if let img = image {
                     self.setThumbnailLoaded(img)
                 }
+            }
+        }
+    }
+
+    public func loadThumbnailIfIdle(for item: FileItem) {
+        guard currentItem?.id == item.id else { return }
+        ThumbnailGenerator.shared.generateThumbnail(for: item) { [weak self] image in
+            guard let self = self, self.currentItem?.id == item.id else { return }
+            if let img = image {
+                self.setThumbnailLoaded(img)
             }
         }
     }
