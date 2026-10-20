@@ -29,7 +29,7 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
         scrollView.autoresizesSubviews = true
 
         tableView.headerView = nil
-        tableView.rowHeight = 80
+        tableView.rowHeight = 96
         tableView.selectionHighlightStyle = .regular
         tableView.dataSource = self
         tableView.delegate = self
@@ -163,20 +163,21 @@ public class SidebarTableCellView: NSTableCellView {
         thumbnailImageView.layer?.cornerRadius = 6
 
         nameLabel.translatesAutoresizingMaskIntoConstraints = false
-        nameLabel.font = NSFont.systemFont(ofSize: 12)
+        nameLabel.font = NSFont.systemFont(ofSize: 12, weight: .medium)
         nameLabel.lineBreakMode = .byTruncatingMiddle
         nameLabel.textColor = NSColor.labelColor
+        nameLabel.alignment = .center
 
         addSubview(thumbnailImageView)
         addSubview(nameLabel)
 
         NSLayoutConstraint.activate([
-            thumbnailImageView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
-            thumbnailImageView.centerYAnchor.constraint(equalTo: centerYAnchor),
-            thumbnailImageView.widthAnchor.constraint(equalToConstant: 48),
-            thumbnailImageView.heightAnchor.constraint(equalToConstant: 48),
+            thumbnailImageView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
+            thumbnailImageView.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
+            thumbnailImageView.topAnchor.constraint(equalTo: topAnchor, constant: 4),
+            thumbnailImageView.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -4),
 
-            nameLabel.leadingAnchor.constraint(equalTo: thumbnailImageView.trailingAnchor, constant: 8),
+            nameLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
             nameLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
             nameLabel.centerYAnchor.constraint(equalTo: centerYAnchor)
         ])
@@ -186,28 +187,28 @@ public class SidebarTableCellView: NSTableCellView {
         self.currentItem = item
         nameLabel.stringValue = item.name
 
-        if item.type == .parentDirectory {
-            thumbnailImageView.image = NSImage(systemSymbolName: "arrow.uturn.backward", accessibilityDescription: "Parent")
-        } else if item.type == .directory {
-            thumbnailImageView.image = NSImage(systemSymbolName: "folder", accessibilityDescription: "Folder")
-        } else if item.type == .archiveZip || item.type == .archiveRar {
-            thumbnailImageView.image = NSImage(systemSymbolName: "doc.zipper", accessibilityDescription: "Archive")
-        } else {
-            thumbnailImageView.image = NSImage(systemSymbolName: "photo", accessibilityDescription: "Image")
+        // Check if thumbnail is already cached
+        let cacheKey = "thumb_\(item.id)_256.0x256.0"
+        if let cached = MemoryLRUCache.shared.object(forKey: cacheKey) {
+            setThumbnailLoaded(cached)
+            return
         }
 
-        // Generate thumbnail immediately on cell render for regular images and entries inside archives
-        if item.type == .image {
+        // Parent item / non-thumbnail fallback state
+        if item.type == .parentDirectory {
+            setFallbackIcon(NSImage(systemSymbolName: "arrow.uturn.backward", accessibilityDescription: "Parent"))
+        } else if item.type == .directory {
+            setFallbackIcon(NSImage(systemSymbolName: "folder", accessibilityDescription: "Folder"))
+        } else if item.type == .archiveZip || item.type == .archiveRar {
+            setFallbackIcon(NSImage(systemSymbolName: "doc.zipper", accessibilityDescription: "Archive"))
+        } else {
+            setFallbackIcon(nil)
+            // Load regular image thumbnail immediately
             ThumbnailGenerator.shared.generateThumbnail(for: item) { [weak self] image in
                 guard let self = self, self.currentItem?.id == item.id else { return }
                 if let img = image {
-                    self.thumbnailImageView.image = img
+                    self.setThumbnailLoaded(img)
                 }
-            }
-        } else {
-            let cacheKey = "thumb_\(item.id)_256.0x256.0"
-            if let cached = MemoryLRUCache.shared.object(forKey: cacheKey) {
-                thumbnailImageView.image = cached
             }
         }
     }
@@ -215,14 +216,29 @@ public class SidebarTableCellView: NSTableCellView {
     public func loadThumbnailOnSelection(for item: FileItem) {
         guard currentItem?.id == item.id else { return }
 
-        // Only generate archive file peek thumbnails lazily when selected
-        if item.type == .archiveZip || item.type == .archiveRar || item.type == .directory {
-            ThumbnailGenerator.shared.generateThumbnail(for: item) { [weak self] image in
-                guard let self = self, self.currentItem?.id == item.id else { return }
-                if let img = image {
-                    self.thumbnailImageView.image = img
-                }
+        ThumbnailGenerator.shared.generateThumbnail(for: item) { [weak self] image in
+            guard let self = self, self.currentItem?.id == item.id else { return }
+            if let img = image {
+                self.setThumbnailLoaded(img)
             }
+        }
+    }
+
+    private func setThumbnailLoaded(_ image: NSImage) {
+        thumbnailImageView.image = image
+        thumbnailImageView.isHidden = false
+        nameLabel.isHidden = true
+    }
+
+    private func setFallbackIcon(_ icon: NSImage?) {
+        if let icon = icon {
+            thumbnailImageView.image = icon
+            thumbnailImageView.isHidden = false
+            nameLabel.isHidden = false
+        } else {
+            thumbnailImageView.image = nil
+            thumbnailImageView.isHidden = true
+            nameLabel.isHidden = false
         }
     }
 }
