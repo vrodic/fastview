@@ -4,39 +4,38 @@ import ImageIO
 
 public class ThumbnailGenerator {
     public static let shared = ThumbnailGenerator()
-    private let serialDiskQueue = DispatchQueue(label: "com.fastview.serialdiskqueue", qos: .userInitiated)
 
-    private var pendingWorkItems = [String: DispatchWorkItem]()
+    private let ioQueue: OperationQueue = {
+        let q = OperationQueue()
+        q.name = "com.fastview.ioqueue"
+        q.maxConcurrentOperationCount = 1
+        q.qualityOfService = .userInitiated
+        return q
+    }()
+
+    private var activeOperations = [String: Operation]()
     private let lock = NSLock()
     public private(set) var isLoadingMainImage: Bool = false
 
     public func cancelAllPendingTasks() {
         lock.lock()
-        defer { lock.unlock() }
-        for item in pendingWorkItems.values {
-            item.cancel()
-        }
-        pendingWorkItems.removeAll()
+        ioQueue.cancelAllOperations()
+        activeOperations.removeAll()
+        isLoadingMainImage = false
+        lock.unlock()
     }
 
     public func setMainImageLoading(_ loading: Bool) {
         lock.lock()
         self.isLoadingMainImage = loading
-        lock.unlock()
         if loading {
-            cancelAllPendingTasks()
+            ioQueue.cancelAllOperations()
+            activeOperations.removeAll()
         }
+        lock.unlock()
     }
 
     public func generateThumbnail(for item: FileItem, targetSize: CGSize = CGSize(width: 256, height: 256), completion: @escaping (NSImage?) -> Void) {
-        lock.lock()
-        if isLoadingMainImage {
-            lock.unlock()
-            completion(nil)
-            return
-        }
-        lock.unlock()
-
         let cacheKey = "thumb_\(item.id)_\(targetSize.width)x\(targetSize.height)"
 
         if let cached = MemoryLRUCache.shared.object(forKey: cacheKey) {
@@ -44,21 +43,26 @@ public class ThumbnailGenerator {
             return
         }
 
-        var workItem: DispatchWorkItem!
-        workItem = DispatchWorkItem { [weak self] in
-            guard let self = self, !workItem.isCancelled else { return }
+        lock.lock()
+        if let existing = activeOperations[item.id] {
+            existing.cancel()
+        }
+
+        let op = BlockOperation()
+        op.addExecutionBlock { [weak self, weak op] in
+            guard let self = self, let currentOp = op, !currentOp.isCancelled else { return }
 
             guard let cgImage = self.loadAndScaleCGImage(for: item, targetSize: targetSize) else {
                 DispatchQueue.main.async {
-                    if !workItem.isCancelled { completion(nil) }
+                    if !currentOp.isCancelled { completion(nil) }
                 }
                 return
             }
 
-            if workItem.isCancelled { return }
+            if currentOp.isCancelled { return }
 
             DispatchQueue.main.async {
-                if !workItem.isCancelled {
+                if !currentOp.isCancelled {
                     let image = NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
                     let cost = Int(cgImage.width * cgImage.height * 4)
                     MemoryLRUCache.shared.setObject(image, forKey: cacheKey, cost: cost)
@@ -67,12 +71,10 @@ public class ThumbnailGenerator {
             }
         }
 
-        lock.lock()
-        pendingWorkItems[item.id]?.cancel()
-        pendingWorkItems[item.id] = workItem
+        activeOperations[item.id] = op
         lock.unlock()
 
-        serialDiskQueue.async(execute: workItem)
+        ioQueue.addOperation(op)
     }
 
     public func peekFirstImage(in item: FileItem) -> FileItem? {
@@ -163,7 +165,10 @@ public class ThumbnailGenerator {
 
         setMainImageLoading(true)
 
-        serialDiskQueue.async {
+        let op = BlockOperation()
+        op.addExecutionBlock { [weak self, weak op] in
+            guard let self = self, let currentOp = op, !currentOp.isCancelled else { return }
+
             var targetItem = item
             if item.type == .archiveZip || item.type == .archiveRar || item.isDirectory {
                 if let peeked = self.peekFirstImage(in: item) {
@@ -175,6 +180,11 @@ public class ThumbnailGenerator {
                     }
                     return
                 }
+            }
+
+            if currentOp.isCancelled {
+                self.setMainImageLoading(false)
+                return
             }
 
             var imageData: Data?
@@ -189,7 +199,7 @@ public class ThumbnailGenerator {
                 imageData = try? Data(contentsOf: URL(fileURLWithPath: targetItem.path))
             }
 
-            guard let data = imageData else {
+            guard let data = imageData, !currentOp.isCancelled else {
                 DispatchQueue.main.async {
                     self.setMainImageLoading(false)
                     completion(nil)
@@ -199,6 +209,7 @@ public class ThumbnailGenerator {
 
             DispatchQueue.main.async {
                 self.setMainImageLoading(false)
+                if currentOp.isCancelled { return }
                 guard let image = NSImage(data: data) else {
                     completion(nil)
                     return
@@ -208,5 +219,11 @@ public class ThumbnailGenerator {
                 completion(image)
             }
         }
+
+        lock.lock()
+        activeOperations[item.id] = op
+        lock.unlock()
+
+        ioQueue.addOperation(op)
     }
 }

@@ -44,12 +44,24 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
         scrollView.documentView = tableView
         view.addSubview(scrollView)
 
+        scrollView.contentView.postsBoundsChangedNotifications = true
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(scrollViewDidScroll(_:)),
+            name: NSView.boundsDidChangeNotification,
+            object: scrollView.contentView
+        )
+
         NSLayoutConstraint.activate([
             scrollView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             scrollView.topAnchor.constraint(equalTo: view.topAnchor),
             scrollView.bottomAnchor.constraint(equalTo: view.bottomAnchor)
         ])
+    }
+
+    @objc private func scrollViewDidScroll(_ notification: Notification) {
+        loadVisibleThumbnailsIfIdle()
     }
 
     override public func viewDidLayout() {
@@ -251,15 +263,6 @@ public class SidebarTableCellView: NSTableCellView {
         }
 
         showFilenameTextOnly()
-
-        if item.type == .image {
-            ThumbnailGenerator.shared.generateThumbnail(for: item) { [weak self] image in
-                guard let self = self, self.currentItem?.id == item.id else { return }
-                if let img = image {
-                    self.setThumbnailLoaded(img)
-                }
-            }
-        }
     }
 
     public func loadThumbnailIfIdle(for item: FileItem) {
