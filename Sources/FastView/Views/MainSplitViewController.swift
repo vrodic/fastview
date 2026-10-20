@@ -6,7 +6,7 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
     private let mainImageView = MainImageView()
     private let statusBarView = StatusBarView()
 
-    private var navigationManager: NavigationManager!
+    private var navigationManager: NavigationManager?
 
     override public func viewDidLoad() {
         super.viewDidLoad()
@@ -47,15 +47,16 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
     }
 
     private func reloadDirectoryContentsAsync(targetSelectedItem: FileItem? = nil) {
+        guard let navMgr = navigationManager else { return }
         ThumbnailGenerator.shared.cancelAllPendingTasks()
 
         let startTime = CFAbsoluteTimeGetCurrent()
-        let path = navigationManager.currentLocation.physicalPath
+        let path = navMgr.currentLocation.physicalPath
         print("[DirectoryOpen] Opening location: \(path)...")
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            guard let self = self else { return }
-            let items = self.navigationManager.contents()
+            guard let self = self, let mgr = self.navigationManager else { return }
+            let items = mgr.contents()
 
             let elapsedTime = (CFAbsoluteTimeGetCurrent() - startTime) * 1000.0
             print(String(format: "[DirectoryOpen] Completed loading %d items from %@ in %.2f ms", items.count, path, elapsedTime))
@@ -107,11 +108,12 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
     }
 
     public func handleActivation(of item: FileItem) {
+        guard let navMgr = navigationManager else { return }
         if item.type == .parentDirectory {
-            _ = navigationManager.navigateUp()
+            _ = navMgr.navigateUp()
             reloadDirectoryContentsAsync()
         } else if item.isDirectory || item.type == .archiveZip || item.type == .archiveRar {
-            if let _ = navigationManager.navigateTo(item) {
+            if let _ = navMgr.navigateTo(item) {
                 reloadDirectoryContentsAsync()
             }
         }
@@ -132,7 +134,8 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
     }
 
     public func navigateUp() {
-        _ = navigationManager.navigateUp()
+        guard let navMgr = navigationManager else { return }
+        _ = navMgr.navigateUp()
         reloadDirectoryContentsAsync()
     }
 

@@ -29,7 +29,7 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
         scrollView.autoresizesSubviews = true
 
         tableView.headerView = nil
-        tableView.rowHeight = 80
+        tableView.rowHeight = 120
         tableView.selectionHighlightStyle = .regular
         tableView.dataSource = self
         tableView.delegate = self
@@ -50,6 +50,18 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
             scrollView.topAnchor.constraint(equalTo: view.topAnchor),
             scrollView.bottomAnchor.constraint(equalTo: view.bottomAnchor)
         ])
+    }
+
+    override public func viewDidLayout() {
+        super.viewDidLayout()
+        let width = view.bounds.width
+        if width > 0 {
+            let targetRowHeight = max(80, min(300, width * 0.75))
+            if abs(tableView.rowHeight - targetRowHeight) > 5 {
+                tableView.rowHeight = targetRowHeight
+                tableView.noteHeightOfRows(withIndexesChanged: IndexSet(integersIn: 0..<items.count))
+            }
+        }
     }
 
     public func setItems(_ items: [FileItem], selectFirst: Bool = true) {
@@ -158,10 +170,10 @@ public class SidebarTableCellView: NSTableCellView {
         addSubview(thumbnailImageView)
 
         NSLayoutConstraint.activate([
-            thumbnailImageView.centerXAnchor.constraint(equalTo: centerXAnchor),
-            thumbnailImageView.centerYAnchor.constraint(equalTo: centerYAnchor),
-            thumbnailImageView.widthAnchor.constraint(equalToConstant: 72),
-            thumbnailImageView.heightAnchor.constraint(equalToConstant: 72)
+            thumbnailImageView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
+            thumbnailImageView.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+            thumbnailImageView.topAnchor.constraint(equalTo: topAnchor, constant: 8),
+            thumbnailImageView.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8)
         ])
     }
 

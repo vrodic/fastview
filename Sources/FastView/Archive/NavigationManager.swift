@@ -77,48 +77,35 @@ public class NavigationManager {
                 results.append(contentsOf: items)
             }
         } else {
-            // Fast dirent directory scanning for network shares & large folders
+            // Instant directory scanning using string array contentsOfDirectory(atPath:)
             let fm = FileManager.default
-            guard let enumerator = fm.enumerator(
-                at: URL(fileURLWithPath: currentLocation.physicalPath),
-                includingPropertiesForKeys: nil,
-                options: [.skipsSubdirectoryDescendants, .skipsHiddenFiles]
-            ) else {
+            guard let fileNames = try? fm.contentsOfDirectory(atPath: currentLocation.physicalPath) else {
                 DirectoryCache.shared.set(key: key, items: results)
                 return results
             }
 
             var dirItems: [FileItem] = []
-            while let fileURL = enumerator.nextObject() as? URL {
-                let ext = fileURL.pathExtension.lowercased()
-                let isImg = ArchiveReader.isImageExtension(ext)
-                let isArc = ArchiveReader.isArchiveExtension(ext)
+            dirItems.reserveCapacity(fileNames.count)
 
-                var isDir: ObjCBool = false
-                fm.fileExists(atPath: fileURL.path, isDirectory: &isDir)
+            for fileName in fileNames {
+                if fileName.hasPrefix(".") { continue }
 
-                let type: FileType
-                if isDir.boolValue {
-                    type = .directory
-                } else if ext == "zip" {
-                    type = .archiveZip
+                let ext = (fileName as NSString).pathExtension.lowercased()
+                let fullPath = (currentLocation.physicalPath as NSString).appendingPathComponent(fileName)
+
+                if ext == "zip" {
+                    dirItems.append(FileItem(id: fullPath, name: fileName, path: fullPath, type: .archiveZip, isDirectory: false))
                 } else if ext == "rar" {
-                    type = .archiveRar
-                } else if isImg {
-                    type = .image
+                    dirItems.append(FileItem(id: fullPath, name: fileName, path: fullPath, type: .archiveRar, isDirectory: false))
+                } else if ArchiveReader.isImageExtension(ext) {
+                    dirItems.append(FileItem(id: fullPath, name: fileName, path: fullPath, type: .image, isDirectory: false))
                 } else {
-                    continue
+                    // Check if directory without stat on files
+                    var isDir: ObjCBool = false
+                    if fm.fileExists(atPath: fullPath, isDirectory: &isDir) && isDir.boolValue {
+                        dirItems.append(FileItem(id: fullPath, name: fileName, path: fullPath, type: .directory, isDirectory: true))
+                    }
                 }
-
-                dirItems.append(FileItem(
-                    id: fileURL.path,
-                    name: fileURL.lastPathComponent,
-                    path: fileURL.path,
-                    type: type,
-                    archivePath: nil,
-                    isDirectory: isDir.boolValue,
-                    fileSize: 0
-                ))
             }
 
             results.append(contentsOf: ArchiveReader.sortItems(dirItems))

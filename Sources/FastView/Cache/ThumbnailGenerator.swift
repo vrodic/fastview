@@ -4,7 +4,7 @@ import ImageIO
 
 public class ThumbnailGenerator {
     public static let shared = ThumbnailGenerator()
-    private let queue = DispatchQueue(label: "com.fastview.thumbnailgenerator", qos: .userInitiated, attributes: .concurrent)
+    private let serialDiskQueue = DispatchQueue(label: "com.fastview.serialdiskqueue", qos: .userInitiated)
 
     private var pendingWorkItems = [String: DispatchWorkItem]()
     private let lock = NSLock()
@@ -18,7 +18,7 @@ public class ThumbnailGenerator {
         pendingWorkItems.removeAll()
     }
 
-    public func generateThumbnail(for item: FileItem, targetSize: CGSize = CGSize(width: 160, height: 160), completion: @escaping (NSImage?) -> Void) {
+    public func generateThumbnail(for item: FileItem, targetSize: CGSize = CGSize(width: 256, height: 256), completion: @escaping (NSImage?) -> Void) {
         let cacheKey = "thumb_\(item.id)_\(targetSize.width)x\(targetSize.height)"
 
         if let cached = MemoryLRUCache.shared.object(forKey: cacheKey) {
@@ -54,10 +54,9 @@ public class ThumbnailGenerator {
         pendingWorkItems[item.id] = workItem
         lock.unlock()
 
-        queue.async(execute: workItem)
+        serialDiskQueue.async(execute: workItem)
     }
 
-    // Peeks inside an archive (or folder) to find the second image (or first if only one exists)
     public func peekFirstImage(in item: FileItem) -> FileItem? {
         if item.type == .parentDirectory { return nil }
 
@@ -144,7 +143,7 @@ public class ThumbnailGenerator {
             return
         }
 
-        queue.async {
+        serialDiskQueue.async {
             var targetItem = item
             if item.type == .archiveZip || item.type == .archiveRar || item.isDirectory {
                 if let peeked = self.peekFirstImage(in: item) {
