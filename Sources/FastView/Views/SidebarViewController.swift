@@ -30,7 +30,7 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
         scrollView.autoresizesSubviews = true
 
         tableView.headerView = nil
-        tableView.rowHeight = 96
+        tableView.rowHeight = 120
         tableView.selectionHighlightStyle = .regular
         tableView.dataSource = self
         tableView.delegate = self
@@ -68,6 +68,18 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
         scrollDebounceTimer?.invalidate()
         scrollDebounceTimer = Timer.scheduledTimer(withTimeInterval: 0.15, repeats: false) { [weak self] _ in
             self?.loadVisibleThumbnailsIfIdle()
+        }
+    }
+
+    override public func viewDidLayout() {
+        super.viewDidLayout()
+        let width = view.bounds.width
+        if width > 0 {
+            let targetRowHeight = max(80, min(800, width * 0.75))
+            if abs(tableView.rowHeight - targetRowHeight) > 5 {
+                tableView.rowHeight = targetRowHeight
+                tableView.noteHeightOfRows(withIndexesChanged: IndexSet(integersIn: 0..<items.count))
+            }
         }
     }
 

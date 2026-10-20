@@ -111,9 +111,8 @@ public class ThumbnailGenerator {
             }
         }
 
-        // Filter out filenames ending with "_CS" before extension
         let nonCSImages = imageItems.filter { item in
-            let stem = (item.name as NSString).deletingPathExtension
+            let stem = (item.name as NSString).pathExtension == "" ? item.name : (item.name as NSString).deletingPathExtension
             return !stem.lowercased().hasSuffix("_cs")
         }
 

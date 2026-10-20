@@ -131,6 +131,8 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
     }
 
     public func displayItem(_ item: FileItem) {
+        cancelAllIOOperations()
+
         let parentName: String
         if let nav = navigationManager {
             parentName = (nav.currentLocation.physicalPath as NSString).lastPathComponent
@@ -144,10 +146,10 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
 
         if item.type == .image {
             statusBarView.updateImageInfo(item: item, image: nil, currentIndex: currentIndex, totalImages: totalImages, parentName: parentName)
-            mainImageView.setImage(nil, keepZoom: true) // No progress bar when loading images inside archive/directory
+            mainImageView.setImage(nil, keepZoom: true)
         } else if item.type == .archiveZip || item.type == .archiveRar {
             statusBarView.updateSelectedItemStats(item: item, containedImagesCount: nil, parentName: parentName)
-            mainImageView.showLoading(fileSizeBytes: item.fileSize, pastSpeedMBs: lastMeasuredSpeedMBs) // Progress bar for archive file peeking
+            mainImageView.showLoading(fileSizeBytes: item.fileSize, pastSpeedMBs: lastMeasuredSpeedMBs)
 
             var workItem: DispatchWorkItem!
             workItem = DispatchWorkItem { [weak self] in
@@ -200,6 +202,9 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
                 MemoryLRUCache.shared.setObject(image, forKey: cacheKey, cost: cost)
                 self.sidebarVC.updateThumbnailForSelectedItem(image: image)
             }
+
+            // After main image finishes loading, populate missing thumbnails for visible rows in current view
+            self.sidebarVC.loadVisibleThumbnailsIfIdle()
         }
     }
 
