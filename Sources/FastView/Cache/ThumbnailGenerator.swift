@@ -43,6 +43,16 @@ public class ThumbnailGenerator {
         lock.unlock()
     }
 
+    // Cancel only in-flight / queued full-image (priority) operations, leaving
+    // background thumbnail work untouched.
+    public func cancelAllPriorityTasks() {
+        lock.lock()
+        priorityQueue.cancelAllOperations()
+        activeOperations = activeOperations.filter { $0.key.hasPrefix("thumb_") }
+        isLoadingMainImage = false
+        lock.unlock()
+    }
+
     // Cancel only background thumbnail operations, leaving any in-flight
     // priority (full-image / archive-open) work untouched.
     public func cancelAllThumbnailTasks() {
@@ -207,6 +217,12 @@ public class ThumbnailGenerator {
             return
         }
 
+        // Cancel any stale full-image op that may still be running or queued
+        // for a previously selected item.  Without this, the old op would sit
+        // ahead of the new one in the serial priority queue even though the
+        // selection has already changed.
+        cancelAllPriorityTasks()
+
         // Cancel all queued background thumbnail work so the priority queue
         // can service this request without waiting for a backlog of thumbnails.
         cancelAllThumbnailTasks()
@@ -215,9 +231,8 @@ public class ThumbnailGenerator {
         let opKey = "full_\(item.id)"
 
         lock.lock()
-        if let existing = activeOperations[opKey] {
-            existing.cancel()
-        }
+        // (opKey collision guard kept for safety, though cancelAllPriorityTasks
+        // above already cleared every prior full_ entry.)
 
         let op = BlockOperation()
         op.addExecutionBlock { [weak self, weak op] in

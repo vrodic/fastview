@@ -2,6 +2,76 @@ import Foundation
 import ZIPFoundation
 import UnrarC
 
+// MARK: - ZipArchiveCache
+
+/// Keeps a small pool of open ZIPFoundation Archive handles so that the
+/// central directory (located at the end of every ZIP file) is read from
+/// disk only once per archive, regardless of how many individual entries are
+/// subsequently extracted.
+///
+/// On a remote/network-backed disk each Archive init costs at least two
+/// round-trips (backward seek to EOCD + forward seek + read of the central
+/// directory).  Caching the handle reduces all thumbnail and full-image reads
+/// for the same archive to a single seek + decompress per entry.
+///
+/// Thread-safety: all mutations are protected by `lock`.  ZIPFoundation's
+/// Archive itself is not thread-safe, so callers must use `withArchive` which
+/// serialises access through the same lock.
+private final class ZipArchiveCache {
+    static let shared = ZipArchiveCache()
+
+    private struct CacheEntry {
+        let archive: Archive
+        var lastUsed: Date
+    }
+
+    private var cache: [String: CacheEntry] = [:]
+    private let lock = NSLock()
+    // Evict least-recently-used handle once we hold more than this many open.
+    private let maxOpenArchives = 4
+
+    /// Executes `block` with a cached (or freshly opened) Archive for
+    /// `archivePath`.  Returns `nil` if the archive cannot be opened.
+    func withArchive<T>(at archivePath: String, block: (Archive) -> T?) -> T? {
+        lock.lock()
+        defer { lock.unlock() }
+
+        if cache[archivePath] != nil {
+            cache[archivePath]!.lastUsed = Date()
+        } else {
+            guard let archive = Archive(url: URL(fileURLWithPath: archivePath), accessMode: .read) else {
+                return nil
+            }
+            evictIfNeeded()
+            cache[archivePath] = CacheEntry(archive: archive, lastUsed: Date())
+        }
+
+        return block(cache[archivePath]!.archive)
+    }
+
+    /// Removes the cached handle for `archivePath`, forcing the next call to
+    /// re-open the file.  Call this if the underlying file may have changed.
+    func invalidate(archivePath: String) {
+        lock.lock()
+        cache.removeValue(forKey: archivePath)
+        lock.unlock()
+    }
+
+    func invalidateAll() {
+        lock.lock()
+        cache.removeAll()
+        lock.unlock()
+    }
+
+    private func evictIfNeeded() {
+        // lock is already held by the caller
+        while cache.count >= maxOpenArchives {
+            guard let lruKey = cache.min(by: { $0.value.lastUsed < $1.value.lastUsed })?.key else { break }
+            cache.removeValue(forKey: lruKey)
+        }
+    }
+}
+
 public enum FileType: Equatable {
     case image
     case archiveZip
@@ -81,30 +151,29 @@ public class ArchiveReader {
         let startTime = CFAbsoluteTimeGetCurrent()
         FileLogger.shared.log("READ_ZIP_ENTRY_START", path: "\(archivePath) -> \(entryPath)")
 
-        guard let archive = Archive(url: URL(fileURLWithPath: archivePath), accessMode: .read) else {
-            return nil
-        }
-        guard let entry = archive[entryPath] else {
-            return nil
-        }
+        let result = ZipArchiveCache.shared.withArchive(at: archivePath) { archive -> Data? in
+            guard let entry = archive[entryPath] else { return nil }
 
-        var data = Data()
-        var aborted = false
+            var data = Data()
+            var aborted = false
 
-        _ = try? archive.extract(entry, consumer: { chunk in
-            if isCancelled?() == true {
-                aborted = true
-                struct ZipCancelledError: Error {}
-                throw ZipCancelledError()
+            _ = try? archive.extract(entry, consumer: { chunk in
+                if isCancelled?() == true {
+                    aborted = true
+                    struct ZipCancelledError: Error {}
+                    throw ZipCancelledError()
+                }
+                data.append(chunk)
+            })
+
+            if aborted {
+                FileLogger.shared.log("READ_ZIP_ENTRY_CANCELLED", path: "\(archivePath) -> \(entryPath)")
+                return nil
             }
-            data.append(chunk)
-        })
-
-        if aborted {
-            FileLogger.shared.log("READ_ZIP_ENTRY_CANCELLED", path: "\(archivePath) -> \(entryPath)")
-            return nil
+            return data
         }
 
+        guard let data = result else { return nil }
         let duration = (CFAbsoluteTimeGetCurrent() - startTime) * 1000.0
         FileLogger.shared.log("READ_ZIP_ENTRY_END", path: "\(archivePath) -> \(entryPath)", durationMs: duration)
         return data
@@ -143,67 +212,69 @@ public class ArchiveReader {
         let startTime = CFAbsoluteTimeGetCurrent()
         FileLogger.shared.log("LIST_ZIP_START", path: archivePath)
 
-        guard let archive = Archive(url: URL(fileURLWithPath: archivePath), accessMode: .read) else {
-            return []
-        }
-
-        var items: [FileItem] = []
         let cleanSubfolder = subfolder.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         let prefix = cleanSubfolder.isEmpty ? "" : cleanSubfolder + "/"
 
-        var seenFolders = Set<String>()
+        var items: [FileItem] = []
 
-        for entry in archive {
-            if isCancelled?() == true {
-                FileLogger.shared.log("LIST_ZIP_CANCELLED", path: archivePath)
-                return []
-            }
+        let ok = ZipArchiveCache.shared.withArchive(at: archivePath) { archive -> Bool in
+            var seenFolders = Set<String>()
 
-            let path = entry.path
-            guard path != cleanSubfolder && path != cleanSubfolder + "/" else { continue }
-
-            if !prefix.isEmpty && !path.hasPrefix(prefix) {
-                continue
-            }
-
-            let relativePath = prefix.isEmpty ? path : String(path.dropFirst(prefix.count))
-            let components = relativePath.split(separator: "/", omittingEmptySubsequences: true)
-
-            guard let firstComponent = components.first else { continue }
-
-            let itemName = String(firstComponent)
-            let isSubDir = components.count > 1 || entry.type == .directory
-
-            if isSubDir {
-                if !seenFolders.contains(itemName) {
-                    seenFolders.insert(itemName)
-                    let fullVirtualPath = prefix + itemName
-                    items.append(FileItem(
-                        id: fullVirtualPath,
-                        name: itemName,
-                        path: fullVirtualPath,
-                        type: .directory,
-                        archivePath: archivePath,
-                        isDirectory: true
-                    ))
+            for entry in archive {
+                if isCancelled?() == true {
+                    FileLogger.shared.log("LIST_ZIP_CANCELLED", path: archivePath)
+                    return false
                 }
-            } else {
-                let ext = (itemName as NSString).pathExtension.lowercased()
-                if isImageExtension(ext) {
-                    let innerParent = (path as NSString).deletingLastPathComponent
-                    items.append(FileItem(
-                        id: path,
-                        name: itemName,
-                        path: path,
-                        type: .image,
-                        archivePath: archivePath,
-                        isDirectory: false,
-                        fileSize: UInt64(entry.uncompressedSize),
-                        entryParentDir: innerParent
-                    ))
+
+                let path = entry.path
+                guard path != cleanSubfolder && path != cleanSubfolder + "/" else { continue }
+
+                if !prefix.isEmpty && !path.hasPrefix(prefix) {
+                    continue
+                }
+
+                let relativePath = prefix.isEmpty ? path : String(path.dropFirst(prefix.count))
+                let components = relativePath.split(separator: "/", omittingEmptySubsequences: true)
+
+                guard let firstComponent = components.first else { continue }
+
+                let itemName = String(firstComponent)
+                let isSubDir = components.count > 1 || entry.type == .directory
+
+                if isSubDir {
+                    if !seenFolders.contains(itemName) {
+                        seenFolders.insert(itemName)
+                        let fullVirtualPath = prefix + itemName
+                        items.append(FileItem(
+                            id: fullVirtualPath,
+                            name: itemName,
+                            path: fullVirtualPath,
+                            type: .directory,
+                            archivePath: archivePath,
+                            isDirectory: true
+                        ))
+                    }
+                } else {
+                    let ext = (itemName as NSString).pathExtension.lowercased()
+                    if isImageExtension(ext) {
+                        let innerParent = (path as NSString).deletingLastPathComponent
+                        items.append(FileItem(
+                            id: path,
+                            name: itemName,
+                            path: path,
+                            type: .image,
+                            archivePath: archivePath,
+                            isDirectory: false,
+                            fileSize: UInt64(entry.uncompressedSize),
+                            entryParentDir: innerParent
+                        ))
+                    }
                 }
             }
-        }
+            return true
+        } ?? false
+
+        if !ok { return [] }
 
         if items.count == 1 && items[0].isDirectory {
             let all = listAllZipImages(archivePath: archivePath, isCancelled: isCancelled)
@@ -231,31 +302,34 @@ public class ArchiveReader {
 
         if isCancelled?() == true { return [] }
 
-        guard let archive = Archive(url: URL(fileURLWithPath: archivePath), accessMode: .read) else {
-            return []
-        }
-
         var items: [FileItem] = []
-        for entry in archive {
-            if isCancelled?() == true { return [] }
-            guard entry.type == .file else { continue }
-            let path = entry.path
-            let ext = (path as NSString).pathExtension.lowercased()
-            if isImageExtension(ext) {
-                let name = (path as NSString).lastPathComponent
-                let innerParent = (path as NSString).deletingLastPathComponent
-                items.append(FileItem(
-                    id: path,
-                    name: name,
-                    path: path,
-                    type: .image,
-                    archivePath: archivePath,
-                    isDirectory: false,
-                    fileSize: UInt64(entry.uncompressedSize),
-                    entryParentDir: innerParent
-                ))
+
+        let ok = ZipArchiveCache.shared.withArchive(at: archivePath) { archive -> Bool in
+            for entry in archive {
+                if isCancelled?() == true { return false }
+                guard entry.type == .file else { continue }
+                let path = entry.path
+                let ext = (path as NSString).pathExtension.lowercased()
+                if isImageExtension(ext) {
+                    let name = (path as NSString).lastPathComponent
+                    let innerParent = (path as NSString).deletingLastPathComponent
+                    items.append(FileItem(
+                        id: path,
+                        name: name,
+                        path: path,
+                        type: .image,
+                        archivePath: archivePath,
+                        isDirectory: false,
+                        fileSize: UInt64(entry.uncompressedSize),
+                        entryParentDir: innerParent
+                    ))
+                }
             }
-        }
+            return true
+        } ?? false
+
+        if !ok { return [] }
+
         let sorted = sortItems(items)
         if isCancelled?() != true {
             DirectoryCache.shared.set(key: cacheKey, items: sorted)
