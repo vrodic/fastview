@@ -17,9 +17,18 @@ public class SQLiteCache {
     }
 
     private func setupDatabase() {
-        let execPath = CommandLine.arguments[0]
-        let execDir = (execPath as NSString).deletingLastPathComponent
-        let dbPath = (execDir as NSString).appendingPathComponent("fastview_cache.sqlite")
+        let fm = FileManager.default
+        let cacheDir: URL
+        if let userCache = fm.urls(for: .cachesDirectory, in: .userDomainMask).first {
+            cacheDir = userCache.appendingPathComponent("FastView", isDirectory: true)
+        } else {
+            let execDir = URL(fileURLWithPath: CommandLine.arguments[0]).deletingLastPathComponent()
+            cacheDir = execDir
+        }
+
+        try? fm.createDirectory(at: cacheDir, withIntermediateDirectories: true)
+        let dbURL = cacheDir.appendingPathComponent("fastview_cache.sqlite")
+        let dbPath = dbURL.path
 
         if sqlite3_open(dbPath, &db) != SQLITE_OK {
             print("[SQLiteCache] Failed to open database at \(dbPath)")
@@ -43,6 +52,7 @@ public class SQLiteCache {
 
         sqlite3_exec(db, createDirectoryTable, nil, nil, nil)
         sqlite3_exec(db, createFavoritesTable, nil, nil, nil)
+        print("[SQLiteCache] Database initialized at \(dbPath)")
     }
 
     public func isFavorite(path: String) -> Bool {
