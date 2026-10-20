@@ -17,6 +17,7 @@ public class MainImageView: NSView {
 
     private let imageView = NSImageView()
     private let scrollView = NSScrollView()
+    private let loadingIndicator = NSProgressIndicator()
 
     override public init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -44,23 +45,48 @@ public class MainImageView: NSView {
         imageView.imageScaling = .scaleProportionallyUpOrDown
         imageView.imageAlignment = .alignCenter
 
+        loadingIndicator.translatesAutoresizingMaskIntoConstraints = false
+        loadingIndicator.style = .spinning
+        loadingIndicator.controlSize = .large
+        loadingIndicator.isHidden = true
+
         let clipView = scrollView.contentView
         clipView.documentView = imageView
 
         addSubview(scrollView)
+        addSubview(loadingIndicator)
 
         NSLayoutConstraint.activate([
             scrollView.leadingAnchor.constraint(equalTo: leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: trailingAnchor),
             scrollView.topAnchor.constraint(equalTo: topAnchor),
-            scrollView.bottomAnchor.constraint(equalTo: bottomAnchor)
+            scrollView.bottomAnchor.constraint(equalTo: bottomAnchor),
+
+            loadingIndicator.centerXAnchor.constraint(equalTo: centerXAnchor),
+            loadingIndicator.centerYAnchor.constraint(equalTo: centerYAnchor)
         ])
     }
 
-    public func setImage(_ image: NSImage?) {
+    public func showLoading() {
+        loadingIndicator.isHidden = false
+        loadingIndicator.startAnimation(nil)
+    }
+
+    public func hideLoading() {
+        loadingIndicator.stopAnimation(nil)
+        loadingIndicator.isHidden = true
+    }
+
+    public func setImage(_ image: NSImage?, keepZoom: Bool = true) {
+        hideLoading()
         self.currentImage = image
         imageView.image = image
-        scrollView.magnification = 1.0
+
+        if !keepZoom {
+            scrollView.magnification = 1.0
+            zoomMode = .fitToScreen
+        }
+
         updateLayout()
     }
 

@@ -53,8 +53,12 @@ public class StatusBarView: NSView {
         }
     }
 
-    public func updateImageInfo(item: FileItem, image: NSImage?) {
+    public func updateImageInfo(item: FileItem, image: NSImage?, currentIndex: Int? = nil, totalImages: Int? = nil) {
         var infoParts: [String] = []
+
+        if let index = currentIndex, let total = totalImages, total > 0 {
+            infoParts.append("\(index) / \(total)")
+        }
 
         infoParts.append(item.name)
 

@@ -51,16 +51,6 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         addSplitViewItem(mainItem)
     }
 
-    override public func splitViewDidResizeSubviews(_ notification: Notification) {
-        super.splitViewDidResizeSubviews(notification)
-        if splitViewItems.count > 0 {
-            let width = splitViewItems[0].viewController.view.bounds.width
-            if width > 120 {
-                UserDefaults.standard.set(Double(width), forKey: MainSplitViewController.sidebarWidthKey)
-            }
-        }
-    }
-
     public func loadLocation(_ location: NavigationLocation, targetSelectedItemPath: String? = nil) {
         navigationManager = NavigationManager(initialLocation: location)
         reloadDirectoryContentsAsync(targetSelectedItemPath: targetSelectedItemPath)
@@ -100,6 +90,12 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
     }
 
     public func displayItem(_ item: FileItem) {
+        mainImageView.showLoading()
+
+        let imageItems = sidebarVC.items.filter { $0.type == .image }
+        let currentIndex = imageItems.firstIndex(where: { $0.id == item.id }).map { $0 + 1 }
+        let totalImages = imageItems.count
+
         if item.type == .archiveZip || item.type == .archiveRar {
             loadQueue.async { [weak self] in
                 let archiveItems: [FileItem]
@@ -115,8 +111,18 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         }
 
         ThumbnailGenerator.shared.loadFullImage(for: item) { [weak self] image in
-            self?.mainImageView.setImage(image)
-            self?.statusBarView.updateImageInfo(item: item, image: image)
+            guard let self = self else { return }
+            self.mainImageView.setImage(image, keepZoom: true)
+            self.statusBarView.updateImageInfo(item: item, image: image, currentIndex: currentIndex, totalImages: totalImages)
+
+            // Ensure sidebar cell thumbnail updates if missing
+            if let image = image {
+                let cacheKey = "thumb_\(item.id)_256.0x256.0"
+                if MemoryLRUCache.shared.object(forKey: cacheKey) == nil {
+                    let cost = Int(image.size.width * image.size.height * 4)
+                    MemoryLRUCache.shared.setObject(image, forKey: cacheKey, cost: cost)
+                }
+            }
         }
     }
 
@@ -131,7 +137,10 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
 
     public func handleActivation(of item: FileItem) {
         guard let navMgr = navigationManager else { return }
-        if item.type == .parentDirectory {
+        if item.type == .image {
+            // Pressing Enter on an image advances to the next item
+            selectNextImage()
+        } else if item.type == .parentDirectory {
             navigateUp()
         } else if item.isDirectory || item.type == .archiveZip || item.type == .archiveRar {
             if let _ = navMgr.navigateTo(item) {
