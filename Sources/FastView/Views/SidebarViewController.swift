@@ -196,19 +196,32 @@ public class SidebarTableCellView: NSTableCellView {
             thumbnailImageView.image = NSImage(systemSymbolName: "photo", accessibilityDescription: "Image")
         }
 
-        // Check if thumbnail is already cached
-        let cacheKey = "thumb_\(item.id)_256.0x256.0"
-        if let cached = MemoryLRUCache.shared.object(forKey: cacheKey) {
-            thumbnailImageView.image = cached
+        // Generate thumbnail immediately on cell render for regular images and entries inside archives
+        if item.type == .image {
+            ThumbnailGenerator.shared.generateThumbnail(for: item) { [weak self] image in
+                guard let self = self, self.currentItem?.id == item.id else { return }
+                if let img = image {
+                    self.thumbnailImageView.image = img
+                }
+            }
+        } else {
+            let cacheKey = "thumb_\(item.id)_256.0x256.0"
+            if let cached = MemoryLRUCache.shared.object(forKey: cacheKey) {
+                thumbnailImageView.image = cached
+            }
         }
     }
 
     public func loadThumbnailOnSelection(for item: FileItem) {
         guard currentItem?.id == item.id else { return }
-        ThumbnailGenerator.shared.generateThumbnail(for: item) { [weak self] image in
-            guard let self = self, self.currentItem?.id == item.id else { return }
-            if let img = image {
-                self.thumbnailImageView.image = img
+
+        // Only generate archive file peek thumbnails lazily when selected
+        if item.type == .archiveZip || item.type == .archiveRar || item.type == .directory {
+            ThumbnailGenerator.shared.generateThumbnail(for: item) { [weak self] image in
+                guard let self = self, self.currentItem?.id == item.id else { return }
+                if let img = image {
+                    self.thumbnailImageView.image = img
+                }
             }
         }
     }
