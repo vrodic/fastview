@@ -131,7 +131,6 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
     }
 
     public func displayItem(_ item: FileItem) {
-        // Instantly cancel all pending I/O tasks on item selection
         cancelAllIOOperations()
 
         let parentName: String
@@ -152,17 +151,31 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
             statusBarView.updateSelectedItemStats(item: item, containedImagesCount: nil, parentName: parentName)
             mainImageView.showLoading(fileSizeBytes: item.fileSize, pastSpeedMBs: lastMeasuredSpeedMBs)
 
-            loadQueue.async { [weak self] in
+            var workItem: DispatchWorkItem!
+            workItem = DispatchWorkItem { [weak self] in
+                guard let self = self, !workItem.isCancelled else { return }
+
                 let archiveItems: [FileItem]
                 if item.type == .archiveZip {
-                    archiveItems = ArchiveReader.listAllZipImages(archivePath: item.path)
+                    archiveItems = ArchiveReader.listAllZipImages(archivePath: item.path, isCancelled: { workItem.isCancelled })
                 } else {
-                    archiveItems = ArchiveReader.listAllRarImages(archivePath: item.path)
+                    archiveItems = ArchiveReader.listAllRarImages(archivePath: item.path, isCancelled: { workItem.isCancelled })
                 }
+
+                if workItem.isCancelled { return }
+
                 DispatchQueue.main.async {
-                    self?.statusBarView.updateSelectedItemStats(item: item, containedImagesCount: archiveItems.count, parentName: parentName)
+                    if !workItem.isCancelled {
+                        self.statusBarView.updateSelectedItemStats(item: item, containedImagesCount: archiveItems.count, parentName: parentName)
+                    }
                 }
             }
+
+            lock.lock()
+            currentDirectoryLoadItem = workItem
+            lock.unlock()
+
+            loadQueue.async(execute: workItem)
         } else if item.isDirectory || item.type == .parentDirectory {
             statusBarView.updateSelectedItemStats(item: item, containedImagesCount: nil, parentName: parentName)
             mainImageView.setImage(nil, keepZoom: false)

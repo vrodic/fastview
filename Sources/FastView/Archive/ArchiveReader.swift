@@ -130,11 +130,13 @@ public class ArchiveReader {
         return data
     }
 
-    public static func listZipContents(archivePath: String, subfolder: String = "") -> [FileItem] {
+    public static func listZipContents(archivePath: String, subfolder: String = "", isCancelled: (() -> Bool)? = nil) -> [FileItem] {
         let cacheKey = "zip_\(archivePath)_\(subfolder)"
         if let cached = DirectoryCache.shared.get(key: cacheKey) {
             return cached
         }
+
+        if isCancelled?() == true { return [] }
 
         let startTime = CFAbsoluteTimeGetCurrent()
         FileLogger.shared.log("LIST_ZIP_START", path: archivePath)
@@ -150,6 +152,11 @@ public class ArchiveReader {
         var seenFolders = Set<String>()
 
         for entry in archive {
+            if isCancelled?() == true {
+                FileLogger.shared.log("LIST_ZIP_CANCELLED", path: archivePath)
+                return []
+            }
+
             let path = entry.path
             guard path != cleanSubfolder && path != cleanSubfolder + "/" else { continue }
 
@@ -195,7 +202,8 @@ public class ArchiveReader {
         }
 
         if items.count == 1 && items[0].isDirectory {
-            let all = listAllZipImages(archivePath: archivePath)
+            let all = listAllZipImages(archivePath: archivePath, isCancelled: isCancelled)
+            if isCancelled?() == true { return [] }
             DirectoryCache.shared.set(key: cacheKey, items: all)
             let duration = (CFAbsoluteTimeGetCurrent() - startTime) * 1000.0
             FileLogger.shared.log("LIST_ZIP_END", path: archivePath, durationMs: duration)
@@ -203,17 +211,21 @@ public class ArchiveReader {
         }
 
         let sorted = sortItems(items)
-        DirectoryCache.shared.set(key: cacheKey, items: sorted)
+        if isCancelled?() != true {
+            DirectoryCache.shared.set(key: cacheKey, items: sorted)
+        }
         let duration = (CFAbsoluteTimeGetCurrent() - startTime) * 1000.0
         FileLogger.shared.log("LIST_ZIP_END", path: archivePath, durationMs: duration)
         return sorted
     }
 
-    public static func listAllZipImages(archivePath: String) -> [FileItem] {
+    public static func listAllZipImages(archivePath: String, isCancelled: (() -> Bool)? = nil) -> [FileItem] {
         let cacheKey = "zip_all_\(archivePath)"
         if let cached = DirectoryCache.shared.get(key: cacheKey) {
             return cached
         }
+
+        if isCancelled?() == true { return [] }
 
         guard let archive = Archive(url: URL(fileURLWithPath: archivePath), accessMode: .read) else {
             return []
@@ -221,6 +233,7 @@ public class ArchiveReader {
 
         var items: [FileItem] = []
         for entry in archive {
+            if isCancelled?() == true { return [] }
             guard entry.type == .file else { continue }
             let path = entry.path
             let ext = (path as NSString).pathExtension.lowercased()
@@ -238,15 +251,19 @@ public class ArchiveReader {
             }
         }
         let sorted = sortItems(items)
-        DirectoryCache.shared.set(key: cacheKey, items: sorted)
+        if isCancelled?() != true {
+            DirectoryCache.shared.set(key: cacheKey, items: sorted)
+        }
         return sorted
     }
 
-    public static func listRarContents(archivePath: String, subfolder: String = "") -> [FileItem] {
+    public static func listRarContents(archivePath: String, subfolder: String = "", isCancelled: (() -> Bool)? = nil) -> [FileItem] {
         let cacheKey = "rar_\(archivePath)_\(subfolder)"
         if let cached = DirectoryCache.shared.get(key: cacheKey) {
             return cached
         }
+
+        if isCancelled?() == true { return [] }
 
         let startTime = CFAbsoluteTimeGetCurrent()
         FileLogger.shared.log("LIST_RAR_START", path: archivePath)
@@ -266,6 +283,7 @@ public class ArchiveReader {
         var seenFolders = Set<String>()
 
         for i in 0..<count {
+            if isCancelled?() == true { return [] }
             var entry = rawEntries[i]
             let path = withUnsafeBytes(of: &entry.name) { ptr -> String in
                 guard let base = ptr.baseAddress?.assumingMemoryBound(to: CChar.self) else { return "" }
@@ -314,7 +332,8 @@ public class ArchiveReader {
         }
 
         if items.count == 1 && items[0].isDirectory {
-            let all = listAllRarImages(archivePath: archivePath)
+            let all = listAllRarImages(archivePath: archivePath, isCancelled: isCancelled)
+            if isCancelled?() == true { return [] }
             DirectoryCache.shared.set(key: cacheKey, items: all)
             let duration = (CFAbsoluteTimeGetCurrent() - startTime) * 1000.0
             FileLogger.shared.log("LIST_RAR_END", path: archivePath, durationMs: duration)
@@ -322,17 +341,21 @@ public class ArchiveReader {
         }
 
         let sorted = sortItems(items)
-        DirectoryCache.shared.set(key: cacheKey, items: sorted)
+        if isCancelled?() != true {
+            DirectoryCache.shared.set(key: cacheKey, items: sorted)
+        }
         let duration = (CFAbsoluteTimeGetCurrent() - startTime) * 1000.0
         FileLogger.shared.log("LIST_RAR_END", path: archivePath, durationMs: duration)
         return sorted
     }
 
-    public static func listAllRarImages(archivePath: String) -> [FileItem] {
+    public static func listAllRarImages(archivePath: String, isCancelled: (() -> Bool)? = nil) -> [FileItem] {
         let cacheKey = "rar_all_\(archivePath)"
         if let cached = DirectoryCache.shared.get(key: cacheKey) {
             return cached
         }
+
+        if isCancelled?() == true { return [] }
 
         guard let archive = unrar_open(archivePath) else { return [] }
         defer { unrar_close(archive) }
@@ -345,6 +368,7 @@ public class ArchiveReader {
         guard count > 0, let rawEntries = listPtr.pointee.entries else { return [] }
 
         for i in 0..<count {
+            if isCancelled?() == true { return [] }
             var entry = rawEntries[i]
             if entry.is_directory { continue }
             let path = withUnsafeBytes(of: &entry.name) { ptr -> String in
@@ -366,7 +390,9 @@ public class ArchiveReader {
             }
         }
         let sorted = sortItems(items)
-        DirectoryCache.shared.set(key: cacheKey, items: sorted)
+        if isCancelled?() != true {
+            DirectoryCache.shared.set(key: cacheKey, items: sorted)
+        }
         return sorted
     }
 
