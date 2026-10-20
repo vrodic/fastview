@@ -1,6 +1,6 @@
 import AppKit
 
-public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
+public class MainSplitViewController: NSSplitViewController, SidebarDelegate, NSSplitViewDelegate {
     private let sidebarVC = SidebarViewController()
     private let mainContentVC = NSViewController()
     private let mainImageView = MainImageView()
@@ -13,6 +13,14 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
     private static let sidebarWidthKey = "FastViewSidebarWidth"
 
     public private(set) var lastMeasuredSpeedMBs: Double = 25.0
+
+    public var currentLocationPath: String? {
+        return navigationManager?.currentLocation.physicalPath
+    }
+
+    public var selectedItemPath: String? {
+        return sidebarVC.selectedItem?.path
+    }
 
     public var showFavoritesOnly: Bool = false {
         didSet {
@@ -27,9 +35,19 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
 
     override public func viewDidAppear() {
         super.viewDidAppear()
+        splitView.delegate = self
         let savedWidth = UserDefaults.standard.double(forKey: MainSplitViewController.sidebarWidthKey)
         if savedWidth > 120 && splitView.subviews.count > 0 {
             splitView.setPosition(CGFloat(savedWidth), ofDividerAt: 0)
+        }
+    }
+
+    public func splitViewDidResizeSubviews(_ notification: Notification) {
+        if splitView.subviews.count > 0 {
+            let currentWidth = splitView.subviews[0].frame.width
+            if currentWidth > 120 {
+                UserDefaults.standard.set(currentWidth, forKey: MainSplitViewController.sidebarWidthKey)
+            }
         }
     }
 
@@ -119,7 +137,7 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
                 self.statusBarView.updateDirectoryStats(imageCount: imageItems.count, totalSizeBytes: 0, locationName: parentName)
 
                 if let targetPath = targetSelectedItemPath,
-                   let idx = items.firstIndex(where: { $0.path == targetPath || $0.id == targetPath }) {
+                   let idx = items.firstIndex(where: { $0.path == targetPath || $0.id == targetPath || $0.name == targetPath }) {
                     self.sidebarVC.selectRow(idx)
                 } else if targetSelectedItemPath == nil,
                           let firstItem = items.first(where: { $0.type == .image || $0.type == .archiveZip || $0.type == .archiveRar }) {

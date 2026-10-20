@@ -33,6 +33,9 @@ let package = Package(
             path: "Sources/FastView",
             swiftSettings: [
                 .unsafeFlags(["-parse-as-library"])
+            ],
+            linkerSettings: [
+                .linkedLibrary("sqlite3")
             ]
         )
     ]

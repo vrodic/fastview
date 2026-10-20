@@ -6,6 +6,7 @@ var globalAppDelegate: AppDelegate?
 public class AppDelegate: NSObject, NSApplicationDelegate {
     private var windowController: MainWindowController?
     private static let lastPathKey = "FastViewLastOpenedPath"
+    private static let lastSelectedItemKey = "FastViewLastSelectedItemPath"
 
     public static func main() {
         let app = NSApplication.shared
@@ -30,13 +31,38 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         if let path = initialPath {
+            let lastSavedPath = UserDefaults.standard.string(forKey: AppDelegate.lastPathKey)
+            let lastSavedSelectedItem = UserDefaults.standard.string(forKey: AppDelegate.lastSelectedItemKey)
+
             saveLastOpenedPath(path)
             let loc = NavigationManager.locationForPath(path)
 
             let type = ArchiveReader.fileType(for: URL(fileURLWithPath: path))
-            let targetPath = (type == .image) ? path : nil
+            var targetPath: String? = nil
+
+            if type == .image {
+                targetPath = path
+            } else if path == lastSavedPath {
+                // If launching/opening the exact same folder or archive as previously saved, restore the last selected item
+                targetPath = lastSavedSelectedItem
+            }
 
             windowController.splitVC.loadLocation(loc, targetSelectedItemPath: targetPath)
+        }
+    }
+
+    public func applicationWillTerminate(_ notification: Notification) {
+        saveCurrentSelectionState()
+    }
+
+    private func saveCurrentSelectionState() {
+        if let splitVC = windowController?.splitVC {
+            if let locPath = splitVC.currentLocationPath {
+                UserDefaults.standard.set(locPath, forKey: AppDelegate.lastPathKey)
+            }
+            if let selectedPath = splitVC.selectedItemPath {
+                UserDefaults.standard.set(selectedPath, forKey: AppDelegate.lastSelectedItemKey)
+            }
         }
     }
 
@@ -132,7 +158,8 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
                 let path = url.path
                 self?.saveLastOpenedPath(path)
                 let loc = NavigationManager.locationForPath(path)
-                self?.windowController?.splitVC.loadLocation(loc)
+                let lastSavedSelectedItem = UserDefaults.standard.string(forKey: AppDelegate.lastSelectedItemKey)
+                self?.windowController?.splitVC.loadLocation(loc, targetSelectedItemPath: lastSavedSelectedItem)
             }
         }
     }
