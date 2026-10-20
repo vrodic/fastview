@@ -177,9 +177,21 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         showFavoritesOnly = false
 
         let targetPath = item.id.isEmpty ? item.path : item.id
-        let locPath = item.archivePath ?? item.path
-        let loc = NavigationManager.locationForPath(locPath)
-        print("[MainSplitVC] switchToCurrentItemLocationMode for item '\(item.name)', targetPath: '\(targetPath)', locPath: '\(locPath)'")
+
+        let loc: NavigationLocation
+        if let archivePath = item.archivePath, !archivePath.isEmpty {
+            let archiveType = ArchiveReader.fileType(for: URL(fileURLWithPath: archivePath))
+            loc = NavigationLocation(
+                physicalPath: archivePath,
+                archiveSubfolder: item.entryParentDir ?? "",
+                isArchive: true,
+                archiveType: archiveType
+            )
+        } else {
+            loc = NavigationManager.locationForPath(item.path)
+        }
+
+        print("[MainSplitVC] switchToCurrentItemLocationMode for item '\(item.name)', targetPath: '\(targetPath)', locPath: '\(loc.physicalPath)' (archiveSubfolder: '\(loc.archiveSubfolder ?? "")')")
         loadLocation(loc, targetSelectedItemPath: targetPath)
     }
 
