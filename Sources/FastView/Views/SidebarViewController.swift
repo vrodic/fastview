@@ -206,8 +206,9 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
         guard selectedRow >= 0 && selectedRow < items.count else { return }
         let selectedItem = items[selectedRow]
 
-        // Kill background thumbnail work so that the priority queue (full-image
-        // and archive-open IO) is not starved by a backlog of thumbnails.
+        // Cancel priority tasks (e.g. full-image / archive-open IO) and background thumbnail
+        // work so that old operations are cancelled immediately when selection changes.
+        ThumbnailGenerator.shared.cancelAllPriorityTasks()
         ThumbnailGenerator.shared.cancelAllThumbnailTasks()
 
         if let cell = tableView.view(atColumn: 0, row: selectedRow, makeIfNecessary: false) as? SidebarTableCellView {
