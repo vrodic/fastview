@@ -116,6 +116,11 @@ public class ArchiveReader {
     }
 
     public static func listZipContents(archivePath: String, subfolder: String = "") -> [FileItem] {
+        let cacheKey = "zip_\(archivePath)_\(subfolder)"
+        if let cached = DirectoryCache.shared.get(key: cacheKey) {
+            return cached
+        }
+
         let startTime = CFAbsoluteTimeGetCurrent()
         FileLogger.shared.log("LIST_ZIP_START", path: archivePath)
 
@@ -176,18 +181,25 @@ public class ArchiveReader {
 
         if items.count == 1 && items[0].isDirectory {
             let all = listAllZipImages(archivePath: archivePath)
+            DirectoryCache.shared.set(key: cacheKey, items: all)
             let duration = (CFAbsoluteTimeGetCurrent() - startTime) * 1000.0
             FileLogger.shared.log("LIST_ZIP_END", path: archivePath, durationMs: duration)
             return all
         }
 
         let sorted = sortItems(items)
+        DirectoryCache.shared.set(key: cacheKey, items: sorted)
         let duration = (CFAbsoluteTimeGetCurrent() - startTime) * 1000.0
         FileLogger.shared.log("LIST_ZIP_END", path: archivePath, durationMs: duration)
         return sorted
     }
 
     public static func listAllZipImages(archivePath: String) -> [FileItem] {
+        let cacheKey = "zip_all_\(archivePath)"
+        if let cached = DirectoryCache.shared.get(key: cacheKey) {
+            return cached
+        }
+
         guard let archive = Archive(url: URL(fileURLWithPath: archivePath), accessMode: .read) else {
             return []
         }
@@ -210,10 +222,17 @@ public class ArchiveReader {
                 ))
             }
         }
-        return sortItems(items)
+        let sorted = sortItems(items)
+        DirectoryCache.shared.set(key: cacheKey, items: sorted)
+        return sorted
     }
 
     public static func listRarContents(archivePath: String, subfolder: String = "") -> [FileItem] {
+        let cacheKey = "rar_\(archivePath)_\(subfolder)"
+        if let cached = DirectoryCache.shared.get(key: cacheKey) {
+            return cached
+        }
+
         let startTime = CFAbsoluteTimeGetCurrent()
         FileLogger.shared.log("LIST_RAR_START", path: archivePath)
 
@@ -281,18 +300,25 @@ public class ArchiveReader {
 
         if items.count == 1 && items[0].isDirectory {
             let all = listAllRarImages(archivePath: archivePath)
+            DirectoryCache.shared.set(key: cacheKey, items: all)
             let duration = (CFAbsoluteTimeGetCurrent() - startTime) * 1000.0
             FileLogger.shared.log("LIST_RAR_END", path: archivePath, durationMs: duration)
             return all
         }
 
         let sorted = sortItems(items)
+        DirectoryCache.shared.set(key: cacheKey, items: sorted)
         let duration = (CFAbsoluteTimeGetCurrent() - startTime) * 1000.0
         FileLogger.shared.log("LIST_RAR_END", path: archivePath, durationMs: duration)
         return sorted
     }
 
     public static func listAllRarImages(archivePath: String) -> [FileItem] {
+        let cacheKey = "rar_all_\(archivePath)"
+        if let cached = DirectoryCache.shared.get(key: cacheKey) {
+            return cached
+        }
+
         guard let archive = unrar_open(archivePath) else { return [] }
         defer { unrar_close(archive) }
 
@@ -324,7 +350,9 @@ public class ArchiveReader {
                 ))
             }
         }
-        return sortItems(items)
+        let sorted = sortItems(items)
+        DirectoryCache.shared.set(key: cacheKey, items: sorted)
+        return sorted
     }
 
     public static func sortItems(_ items: [FileItem]) -> [FileItem] {

@@ -65,15 +65,15 @@ public class MainImageView: NSView {
     }
 
     public func zoomIn() {
-        zoomMode = .custom(scrollView.magnification * 1.25)
-        scrollView.magnification *= 1.25
-        updateLayout()
+        let newMag = min(scrollView.maxMagnification, scrollView.magnification * 1.25)
+        scrollView.magnification = newMag
+        zoomMode = .custom(newMag)
     }
 
     public func zoomOut() {
-        zoomMode = .custom(scrollView.magnification / 1.25)
-        scrollView.magnification /= 1.25
-        updateLayout()
+        let newMag = max(scrollView.minMagnification, scrollView.magnification / 1.25)
+        scrollView.magnification = newMag
+        zoomMode = .custom(newMag)
     }
 
     public func resetZoomToFit() {
@@ -111,12 +111,8 @@ public class MainImageView: NSView {
             let width = max(containerSize.width, img.size.width)
             let height = max(containerSize.height, img.size.height)
             imageView.frame = NSRect(x: originX, y: originY, width: width, height: height)
-        case .custom(let scale):
-            let scaledWidth = img.size.width * scale
-            let scaledHeight = img.size.height * scale
-            let width = max(containerSize.width, scaledWidth)
-            let height = max(containerSize.height, scaledHeight)
-            imageView.frame = NSRect(x: 0, y: 0, width: width, height: height)
+        case .custom:
+            imageView.frame = NSRect(origin: .zero, size: containerSize)
         }
     }
 }

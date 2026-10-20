@@ -75,31 +75,43 @@ public class NavigationManager {
             }
             results.append(contentsOf: archiveItems)
         } else {
+            // Ultra-fast network directory scan: batch resource keys without stat calls
             let fm = FileManager.default
-            guard let fileNames = try? fm.contentsOfDirectory(atPath: currentLocation.physicalPath) else {
+            let dirURL = URL(fileURLWithPath: currentLocation.physicalPath)
+
+            guard let fileURLs = try? fm.contentsOfDirectory(
+                at: dirURL,
+                includingPropertiesForKeys: [.isDirectoryKey],
+                options: [.skipsHiddenFiles]
+            ) else {
                 DirectoryCache.shared.set(key: key, items: results)
                 return results
             }
 
-            for fileName in fileNames {
-                if fileName.hasPrefix(".") { continue }
+            var dirItems: [FileItem] = []
+            dirItems.reserveCapacity(fileURLs.count)
 
-                let ext = (fileName as NSString).pathExtension.lowercased()
-                let fullPath = (currentLocation.physicalPath as NSString).appendingPathComponent(fileName)
+            for fileURL in fileURLs {
+                let ext = fileURL.pathExtension.lowercased()
+                let fullPath = fileURL.path
+                let fileName = fileURL.lastPathComponent
 
-                let item: FileItem
                 if ext == "zip" {
-                    item = FileItem(id: fullPath, name: fileName, path: fullPath, type: .archiveZip, isDirectory: false)
+                    dirItems.append(FileItem(id: fullPath, name: fileName, path: fullPath, type: .archiveZip, isDirectory: false))
                 } else if ext == "rar" {
-                    item = FileItem(id: fullPath, name: fileName, path: fullPath, type: .archiveRar, isDirectory: false)
+                    dirItems.append(FileItem(id: fullPath, name: fileName, path: fullPath, type: .archiveRar, isDirectory: false))
                 } else if ArchiveReader.isImageExtension(ext) {
-                    item = FileItem(id: fullPath, name: fileName, path: fullPath, type: .image, isDirectory: false)
+                    dirItems.append(FileItem(id: fullPath, name: fileName, path: fullPath, type: .image, isDirectory: false))
                 } else {
-                    item = FileItem(id: fullPath, name: fileName, path: fullPath, type: .directory, isDirectory: true)
+                    let values = try? fileURL.resourceValues(forKeys: [.isDirectoryKey])
+                    let isDir = values?.isDirectory ?? false
+                    if isDir {
+                        dirItems.append(FileItem(id: fullPath, name: fileName, path: fullPath, type: .directory, isDirectory: true))
+                    }
                 }
-
-                results.append(item)
             }
+
+            results.append(contentsOf: ArchiveReader.sortItems(dirItems))
         }
 
         DirectoryCache.shared.set(key: key, items: results)
