@@ -10,7 +10,7 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
 
     public private(set) var items: [FileItem] = []
     private let scrollView = NSScrollView()
-    private let tableView = NSTableView()
+    private let tableView = CustomTableView()
 
     public var selectedItem: FileItem? {
         let selectedRow = tableView.selectedRow
@@ -33,6 +33,9 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
         tableView.selectionHighlightStyle = .regular
         tableView.dataSource = self
         tableView.delegate = self
+        tableView.onEnterPressed = { [weak self] in
+            self?.activateCurrentSelection()
+        }
 
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("MainColumn"))
         column.resizingMask = .autoresizingMask
@@ -54,7 +57,6 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
         tableView.reloadData()
 
         if selectFirst && !items.isEmpty {
-            // If the first item is `(..)`, select second if present, or first
             let defaultIndex = items.count > 1 && items[0].type == .parentDirectory ? 1 : 0
             selectRow(defaultIndex)
         }
@@ -76,6 +78,12 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
         let current = tableView.selectedRow
         let prev = max(0, current - 1)
         if prev < items.count { selectRow(prev) }
+    }
+
+    public func activateCurrentSelection() {
+        let selectedRow = tableView.selectedRow
+        guard selectedRow >= 0 && selectedRow < items.count else { return }
+        delegate?.sidebar(self, didActivateItem: items[selectedRow])
     }
 
     // NSTableViewDataSource
@@ -105,15 +113,25 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
     }
 
     @objc public func tableRowDoubleClicked() {
-        let selectedRow = tableView.clickedRow
-        guard selectedRow >= 0 && selectedRow < items.count else { return }
-        delegate?.sidebar(self, didActivateItem: items[selectedRow])
+        activateCurrentSelection()
     }
 
     override public func viewDidLoad() {
         super.viewDidLoad()
         tableView.doubleAction = #selector(tableRowDoubleClicked)
         tableView.target = self
+    }
+}
+
+class CustomTableView: NSTableView {
+    var onEnterPressed: (() -> Void)?
+
+    override func keyDown(with event: NSEvent) {
+        if event.keyCode == 36 { // Return / Enter
+            onEnterPressed?()
+            return
+        }
+        super.keyDown(with: event)
     }
 }
 

@@ -57,45 +57,50 @@ public class ThumbnailGenerator {
         queue.async(execute: workItem)
     }
 
+    // Peeks inside an archive (or folder) to find the second image (or first if only one exists)
     public func peekFirstImage(in item: FileItem) -> FileItem? {
         if item.type == .parentDirectory { return nil }
 
+        var entries: [FileItem] = []
         if item.type == .archiveZip {
-            let entries = ArchiveReader.listZipContents(archivePath: item.path)
-            return findFirstImage(in: entries)
+            entries = ArchiveReader.listZipContents(archivePath: item.path)
         } else if item.type == .archiveRar {
-            let entries = ArchiveReader.listRarContents(archivePath: item.path)
-            return findFirstImage(in: entries)
+            entries = ArchiveReader.listRarContents(archivePath: item.path)
         } else if item.isDirectory {
             if let archivePath = item.archivePath {
                 let ext = (archivePath as NSString).pathExtension.lowercased()
                 if ext == "zip" {
-                    let entries = ArchiveReader.listZipContents(archivePath: archivePath, subfolder: item.path)
-                    return findFirstImage(in: entries)
+                    entries = ArchiveReader.listZipContents(archivePath: archivePath, subfolder: item.path)
                 } else if ext == "rar" {
-                    let entries = ArchiveReader.listRarContents(archivePath: archivePath, subfolder: item.path)
-                    return findFirstImage(in: entries)
+                    entries = ArchiveReader.listRarContents(archivePath: archivePath, subfolder: item.path)
                 }
             } else {
                 let mgr = NavigationManager(initialLocation: NavigationLocation(physicalPath: item.path))
-                let entries = mgr.contents().filter { $0.type != .parentDirectory }
-                return findFirstImage(in: entries)
+                entries = mgr.contents().filter { $0.type != .parentDirectory }
             }
         }
-        return nil
+
+        return findSecondImage(in: entries)
     }
 
-    private func findFirstImage(in items: [FileItem]) -> FileItem? {
+    private func findSecondImage(in items: [FileItem]) -> FileItem? {
+        var imageItems: [FileItem] = []
         for item in items {
             if item.type == .parentDirectory { continue }
-            if item.type == .image { return item }
-            if item.type == .archiveZip || item.type == .archiveRar || item.isDirectory {
+            if item.type == .image {
+                imageItems.append(item)
+            } else if item.type == .archiveZip || item.type == .archiveRar || item.isDirectory {
                 if let nested = peekFirstImage(in: item) {
-                    return nested
+                    imageItems.append(nested)
                 }
             }
         }
-        return nil
+
+        if imageItems.count >= 2 {
+            return imageItems[1]
+        } else {
+            return imageItems.first
+        }
     }
 
     public func loadAndScaleCGImage(for item: FileItem, targetSize: CGSize) -> CGImage? {

@@ -16,7 +16,6 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
     private func setupUI() {
         sidebarVC.delegate = self
 
-        // Container view for main image + bottom status bar
         let mainStackView = NSStackView()
         mainStackView.orientation = .vertical
         mainStackView.spacing = 0
@@ -71,7 +70,6 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
                     self.statusBarView.clearImageInfo()
                 }
 
-                // Background thumbnail prefetching for the next 20 items
                 self.prefetchNextThumbnails(items: items, count: 20)
             }
         }
@@ -87,6 +85,17 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
     }
 
     public func displayItem(_ item: FileItem) {
+        if item.type == .archiveZip || item.type == .archiveRar {
+            let archiveItems: [FileItem]
+            if item.type == .archiveZip {
+                archiveItems = ArchiveReader.listZipContents(archivePath: item.path)
+            } else {
+                archiveItems = ArchiveReader.listRarContents(archivePath: item.path)
+            }
+            let archiveImageCount = archiveItems.filter { $0.type == .image }.count
+            statusBarView.updateDirectoryStats(imageCount: archiveImageCount, totalSizeBytes: item.fileSize)
+        }
+
         ThumbnailGenerator.shared.loadFullImage(for: item) { [weak self] image in
             self?.mainImageView.setImage(image)
             self?.statusBarView.updateImageInfo(item: item, image: image)
