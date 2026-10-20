@@ -108,10 +108,6 @@ public class ThumbnailGenerator {
             if item.type == .parentDirectory { continue }
             if item.type == .image {
                 imageItems.append(item)
-            } else if item.type == .archiveZip || item.type == .archiveRar || item.isDirectory {
-                if let nested = peekFirstImage(in: item) {
-                    imageItems.append(nested)
-                }
             }
         }
 

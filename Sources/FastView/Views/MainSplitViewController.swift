@@ -93,11 +93,7 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
             if self.showFavoritesOnly {
                 items = items.filter { item in
                     if item.type == .parentDirectory { return true }
-                    if SQLiteCache.shared.isFavorite(path: item.path) { return true }
-                    if item.isDirectory || item.type == .archiveZip || item.type == .archiveRar {
-                        return self.containsFavoriteRecursive(item: item)
-                    }
-                    return false
+                    return SQLiteCache.shared.isFavorite(path: item.path)
                 }
             }
 
@@ -132,22 +128,6 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         lock.unlock()
 
         loadQueue.async(execute: workItem)
-    }
-
-    private func containsFavoriteRecursive(item: FileItem) -> Bool {
-        if SQLiteCache.shared.isFavorite(path: item.path) { return true }
-        if item.type == .archiveZip {
-            let zipItems = ArchiveReader.listAllZipImages(archivePath: item.path)
-            return zipItems.contains { SQLiteCache.shared.isFavorite(path: $0.path) }
-        } else if item.type == .archiveRar {
-            let rarItems = ArchiveReader.listAllRarImages(archivePath: item.path)
-            return rarItems.contains { SQLiteCache.shared.isFavorite(path: $0.path) }
-        } else if item.isDirectory {
-            let mgr = NavigationManager(initialLocation: NavigationLocation(physicalPath: item.path))
-            let contents = mgr.contents()
-            return contents.contains { SQLiteCache.shared.isFavorite(path: $0.path) || ( $0.isDirectory && containsFavoriteRecursive(item: $0)) }
-        }
-        return false
     }
 
     public func displayItem(_ item: FileItem) {
