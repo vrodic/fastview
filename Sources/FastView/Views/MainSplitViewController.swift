@@ -131,8 +131,6 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
     }
 
     public func displayItem(_ item: FileItem) {
-        cancelAllIOOperations()
-
         let parentName: String
         if let nav = navigationManager {
             parentName = (nav.currentLocation.physicalPath as NSString).lastPathComponent
@@ -146,10 +144,10 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
 
         if item.type == .image {
             statusBarView.updateImageInfo(item: item, image: nil, currentIndex: currentIndex, totalImages: totalImages, parentName: parentName)
-            mainImageView.showLoading(fileSizeBytes: item.fileSize, pastSpeedMBs: lastMeasuredSpeedMBs)
+            mainImageView.setImage(nil, keepZoom: true) // No progress bar when loading images inside archive/directory
         } else if item.type == .archiveZip || item.type == .archiveRar {
             statusBarView.updateSelectedItemStats(item: item, containedImagesCount: nil, parentName: parentName)
-            mainImageView.showLoading(fileSizeBytes: item.fileSize, pastSpeedMBs: lastMeasuredSpeedMBs)
+            mainImageView.showLoading(fileSizeBytes: item.fileSize, pastSpeedMBs: lastMeasuredSpeedMBs) // Progress bar for archive file peeking
 
             var workItem: DispatchWorkItem!
             workItem = DispatchWorkItem { [weak self] in
@@ -250,7 +248,6 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
 
         let currentGroup = selected.entryParentDir
 
-        // 1. First search for next item with a different entryParentDir or a folder/archive item
         for i in (currentIndex + 1)..<items.count {
             let item = items[i]
             if item.isDirectory || item.type == .archiveZip || item.type == .archiveRar {
@@ -262,7 +259,6 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
             }
         }
 
-        // 2. If no further group in current list, jump across parent hierarchy to next sibling
         selectNextHierarchyItem()
     }
 
@@ -273,14 +269,12 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
 
         let currentGroup = selected.entryParentDir
 
-        // Search backward for start of current group, or start of previous group
         for i in (0..<currentIndex).reversed() {
             let item = items[i]
             if item.isDirectory || item.type == .archiveZip || item.type == .archiveRar {
                 sidebarVC.selectRow(i)
                 return
             } else if let group = item.entryParentDir, group != currentGroup {
-                // Find first image of this previous group
                 var groupStartIdx = i
                 while groupStartIdx > 0 && items[groupStartIdx - 1].entryParentDir == group {
                     groupStartIdx -= 1
@@ -290,7 +284,6 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
             }
         }
 
-        // If at top of current group, jump to start
         if !items.isEmpty {
             let firstIdx = items[0].type == .parentDirectory && items.count > 1 ? 1 : 0
             sidebarVC.selectRow(firstIdx)
@@ -299,30 +292,23 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
 
     public func selectNextHierarchyItem() {
         guard let navMgr = navigationManager else { return }
-        let currentItems = sidebarVC.items
-        let selectedRow = sidebarVC.selectedItem.flatMap { item in currentItems.firstIndex(of: item) } ?? -1
+        cancelAllIOOperations()
+        let result = navMgr.navigateUp()
+        let parentLocation = navMgr.currentLocation
+        let parentMgr = NavigationManager(initialLocation: parentLocation)
+        let parentItems = parentMgr.contents()
 
-        if selectedRow >= 0 && selectedRow < currentItems.count - 1 {
-            sidebarVC.selectNext()
-        } else {
-            cancelAllIOOperations()
-            let result = navMgr.navigateUp()
-            let parentLocation = navMgr.currentLocation
-            let parentMgr = NavigationManager(initialLocation: parentLocation)
-            let parentItems = parentMgr.contents()
-
-            if let exitedIdx = parentItems.firstIndex(where: { $0.path == result.exitedItemPath || $0.id == result.exitedItemPath }),
-               exitedIdx < parentItems.count - 1 {
-                let nextSibling = parentItems[exitedIdx + 1]
-                if nextSibling.isDirectory || nextSibling.type == .archiveZip || nextSibling.type == .archiveRar {
-                    _ = navMgr.navigateTo(nextSibling)
-                    reloadDirectoryContentsAsync()
-                } else {
-                    reloadDirectoryContentsAsync(targetSelectedItemPath: nextSibling.path)
-                }
+        if let exitedIdx = parentItems.firstIndex(where: { $0.path == result.exitedItemPath || $0.id == result.exitedItemPath }),
+           exitedIdx < parentItems.count - 1 {
+            let nextSibling = parentItems[exitedIdx + 1]
+            if nextSibling.isDirectory || nextSibling.type == .archiveZip || nextSibling.type == .archiveRar {
+                _ = navMgr.navigateTo(nextSibling)
+                reloadDirectoryContentsAsync()
             } else {
-                reloadDirectoryContentsAsync(targetSelectedItemPath: result.exitedItemPath, isNavigatingUp: true)
+                reloadDirectoryContentsAsync(targetSelectedItemPath: nextSibling.path)
             }
+        } else {
+            reloadDirectoryContentsAsync(targetSelectedItemPath: result.exitedItemPath, isNavigatingUp: true)
         }
     }
 

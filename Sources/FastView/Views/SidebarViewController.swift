@@ -37,6 +37,9 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
         tableView.onEnterPressed = { [weak self] in
             self?.activateCurrentSelection()
         }
+        tableView.onPageKey = { [weak self] keyType in
+            self?.handlePageNavigation(keyType: keyType)
+        }
 
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("MainColumn"))
         column.resizingMask = .autoresizingMask
@@ -65,18 +68,6 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
         scrollDebounceTimer?.invalidate()
         scrollDebounceTimer = Timer.scheduledTimer(withTimeInterval: 0.15, repeats: false) { [weak self] _ in
             self?.loadVisibleThumbnailsIfIdle()
-        }
-    }
-
-    override public func viewDidLayout() {
-        super.viewDidLayout()
-        let width = view.bounds.width
-        if width > 0 {
-            let targetRowHeight = max(80, min(800, width * 0.75))
-            if abs(tableView.rowHeight - targetRowHeight) > 5 {
-                tableView.rowHeight = targetRowHeight
-                tableView.noteHeightOfRows(withIndexesChanged: IndexSet(integersIn: 0..<items.count))
-            }
         }
     }
 
@@ -120,6 +111,28 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
         let current = tableView.selectedRow
         let prev = max(0, current - 1)
         if prev < items.count { selectRow(prev) }
+    }
+
+    public func handlePageNavigation(keyType: PageKeyType) {
+        guard !items.isEmpty else { return }
+        let visibleRows = tableView.rows(in: scrollView.contentView.bounds)
+        let currentRow = tableView.selectedRow
+
+        switch keyType {
+        case .pageUp:
+            let pageStep = max(1, visibleRows.length - 1)
+            let target = max(0, currentRow - pageStep)
+            selectRow(target)
+        case .pageDown:
+            let pageStep = max(1, visibleRows.length - 1)
+            let target = min(items.count - 1, currentRow + pageStep)
+            selectRow(target)
+        case .home:
+            let firstIdx = items[0].type == .parentDirectory && items.count > 1 ? 1 : 0
+            selectRow(firstIdx)
+        case .end:
+            selectRow(items.count - 1)
+        }
     }
 
     public func reloadSelectedRow() {
@@ -186,13 +199,36 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
     }
 }
 
+public enum PageKeyType {
+    case pageUp
+    case pageDown
+    case home
+    case end
+}
+
 class CustomTableView: NSTableView {
     var onEnterPressed: (() -> Void)?
+    var onPageKey: ((PageKeyType) -> Void)?
 
     override func keyDown(with event: NSEvent) {
-        if event.keyCode == 36 { // Return / Enter
+        switch event.keyCode {
+        case 36: // Return / Enter
             onEnterPressed?()
             return
+        case 116: // PageUp
+            onPageKey?(.pageUp)
+            return
+        case 121: // PageDown
+            onPageKey?(.pageDown)
+            return
+        case 115: // Home
+            onPageKey?(.home)
+            return
+        case 119: // End
+            onPageKey?(.end)
+            return
+        default:
+            break
         }
         super.keyDown(with: event)
     }
@@ -267,6 +303,15 @@ public class SidebarTableCellView: NSTableCellView {
         }
 
         showFilenameTextOnly()
+
+        if item.type == .image {
+            ThumbnailGenerator.shared.generateThumbnail(for: item) { [weak self] image in
+                guard let self = self, self.currentItem?.id == item.id else { return }
+                if let img = image {
+                    self.setThumbnailLoaded(img)
+                }
+            }
+        }
     }
 
     public func loadThumbnailIfIdle(for item: FileItem) {

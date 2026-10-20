@@ -99,10 +99,10 @@ public class ThumbnailGenerator {
             }
         }
 
-        return findSecondImage(in: entries)
+        return findPreferredArchiveImage(in: entries)
     }
 
-    private func findSecondImage(in items: [FileItem]) -> FileItem? {
+    private func findPreferredArchiveImage(in items: [FileItem]) -> FileItem? {
         var imageItems: [FileItem] = []
         for item in items {
             if item.type == .parentDirectory { continue }
@@ -111,7 +111,17 @@ public class ThumbnailGenerator {
             }
         }
 
-        if imageItems.count >= 2 {
+        // Filter out filenames ending with "_CS" before extension
+        let nonCSImages = imageItems.filter { item in
+            let stem = (item.name as NSString).deletingPathExtension
+            return !stem.lowercased().hasSuffix("_cs")
+        }
+
+        if nonCSImages.count >= 2 {
+            return nonCSImages[1]
+        } else if let firstNonCS = nonCSImages.first {
+            return firstNonCS
+        } else if imageItems.count >= 2 {
             return imageItems[1]
         } else {
             return imageItems.first
