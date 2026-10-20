@@ -263,6 +263,8 @@ public class SidebarTableCellView: NSTableCellView {
     }
 
     private func setupUI() {
+        self.wantsLayer = true
+
         thumbnailImageView.translatesAutoresizingMaskIntoConstraints = false
         thumbnailImageView.imageScaling = .scaleProportionallyUpOrDown
         thumbnailImageView.imageAlignment = .alignCenter
@@ -276,6 +278,7 @@ public class SidebarTableCellView: NSTableCellView {
         nameLabel.alignment = .center
 
         favoriteBadge.translatesAutoresizingMaskIntoConstraints = false
+        favoriteBadge.wantsLayer = true
         favoriteBadge.image = NSImage(systemSymbolName: "star.fill", accessibilityDescription: "Favorite")
         favoriteBadge.contentTintColor = NSColor.systemYellow
         favoriteBadge.isHidden = true
@@ -296,8 +299,8 @@ public class SidebarTableCellView: NSTableCellView {
 
             favoriteBadge.topAnchor.constraint(equalTo: topAnchor, constant: 6),
             favoriteBadge.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
-            favoriteBadge.widthAnchor.constraint(equalToConstant: 20),
-            favoriteBadge.heightAnchor.constraint(equalToConstant: 20)
+            favoriteBadge.widthAnchor.constraint(equalToConstant: 22),
+            favoriteBadge.heightAnchor.constraint(equalToConstant: 22)
         ])
     }
 
@@ -351,6 +354,9 @@ public class SidebarTableCellView: NSTableCellView {
         thumbnailImageView.image = image
         thumbnailImageView.isHidden = false
         nameLabel.isHidden = true
+
+        let isFav = currentItem.map { SQLiteCache.shared.isFavorite(path: $0.id) || SQLiteCache.shared.isFavorite(path: $0.path) } ?? false
+        favoriteBadge.isHidden = !isFav
     }
 
     private func showFilenameTextOnly() {

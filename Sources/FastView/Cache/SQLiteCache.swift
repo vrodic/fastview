@@ -85,11 +85,12 @@ public class SQLiteCache {
         guard db != nil else { return false }
 
         let favKey = item.id
-        if isFavoriteUnlocked(path: favKey) {
-            let deleteQuery = "DELETE FROM favorites WHERE path = ?;"
+        if isFavoriteUnlocked(path: favKey) || isFavoriteUnlocked(path: item.path) {
+            let deleteQuery = "DELETE FROM favorites WHERE path = ? OR path = ?;"
             var statement: OpaquePointer?
             if sqlite3_prepare_v2(db, deleteQuery, -1, &statement, nil) == SQLITE_OK {
                 sqlite3_bind_text(statement, 1, favKey, -1, SQLITE_TRANSIENT)
+                sqlite3_bind_text(statement, 2, item.path, -1, SQLITE_TRANSIENT)
                 sqlite3_step(statement)
             }
             sqlite3_finalize(statement)
@@ -246,6 +247,18 @@ private struct CodableFileItem: Codable {
         }
     }
 
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = (try? container.decode(String.self, forKey: .id)) ?? ""
+        self.name = (try? container.decode(String.self, forKey: .name)) ?? ""
+        self.path = (try? container.decode(String.self, forKey: .path)) ?? ""
+        self.typeRaw = (try? container.decode(String.self, forKey: .typeRaw)) ?? "image"
+        self.archivePath = try? container.decodeIfPresent(String.self, forKey: .archivePath)
+        self.isDirectory = (try? container.decode(Bool.self, forKey: .isDirectory)) ?? false
+        self.fileSize = (try? container.decode(UInt64.self, forKey: .fileSize)) ?? 0
+        self.entryParentDir = try? container.decodeIfPresent(String.self, forKey: .entryParentDir)
+    }
+
     func toFileItem() -> FileItem {
         let type: FileType
         switch typeRaw {
@@ -257,8 +270,10 @@ private struct CodableFileItem: Codable {
         default: type = .unsupported
         }
 
+        let effectiveId = id.isEmpty ? path : id
+
         return FileItem(
-            id: id,
+            id: effectiveId,
             name: name,
             path: path,
             type: type,

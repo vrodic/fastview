@@ -22,6 +22,10 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         return sidebarVC.selectedItem?.path
     }
 
+    public var selectedItemId: String? {
+        return sidebarVC.selectedItem?.id
+    }
+
     public var showFavoritesOnly: Bool = false {
         didSet {
             reloadDirectoryContentsAsync()
@@ -104,8 +108,9 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
             statusBarView.updateDirectoryStats(imageCount: favorites.count, totalSizeBytes: 0, locationName: "Favorites")
 
             if let targetPath = targetSelectedItemPath,
-               let idx = favorites.firstIndex(where: { $0.path == targetPath || $0.id == targetPath }) {
+               let idx = favorites.firstIndex(where: { $0.path == targetPath || $0.id == targetPath || $0.name == targetPath }) {
                 sidebarVC.selectRow(idx)
+                displayItem(favorites[idx])
             } else if targetSelectedItemPath == nil, let first = favorites.first {
                 displayItem(first)
             }
@@ -139,6 +144,7 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
                 if let targetPath = targetSelectedItemPath,
                    let idx = items.firstIndex(where: { $0.path == targetPath || $0.id == targetPath || $0.name == targetPath }) {
                     self.sidebarVC.selectRow(idx)
+                    self.displayItem(items[idx])
                 } else if targetSelectedItemPath == nil,
                           let firstItem = items.first(where: { $0.type == .image || $0.type == .archiveZip || $0.type == .archiveRar }) {
                     self.displayItem(firstItem)
@@ -166,6 +172,13 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
     }
 
     public func displayItem(_ item: FileItem) {
+        // Automatically persist current selection state whenever item is displayed
+        if let locPath = currentLocationPath {
+            UserDefaults.standard.set(locPath, forKey: "FastViewLastOpenedPath")
+        }
+        UserDefaults.standard.set(item.path, forKey: "FastViewLastSelectedItemPath")
+        UserDefaults.standard.set(item.id, forKey: "FastViewLastSelectedItemId")
+
         let parentName: String
         if showFavoritesOnly {
             parentName = "Favorites"
@@ -249,6 +262,9 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         if let item = sidebarVC.selectedItem {
             _ = SQLiteCache.shared.toggleFavorite(item: item)
             sidebarVC.reloadSelectedRow()
+            if showFavoritesOnly {
+                reloadDirectoryContentsAsync()
+            }
         }
     }
 

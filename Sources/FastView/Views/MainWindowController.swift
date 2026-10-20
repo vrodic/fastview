@@ -79,16 +79,20 @@ public class MainWindowController: NSWindowController, NSWindowDelegate {
                 break
             }
 
-            // Command key shortcuts for Zooming
+            // Command key shortcuts
             if isCmdPressed {
-                if event.characters == "+" || event.characters == "=" {
+                let chars = event.characters?.lowercased() ?? ""
+                if chars == "+" || chars == "=" {
                     self.splitVC.imageView.zoomIn()
                     return nil
-                } else if event.characters == "-" {
+                } else if chars == "-" {
                     self.splitVC.imageView.zoomOut()
                     return nil
-                } else if event.characters == "0" {
+                } else if chars == "0" {
                     self.splitVC.imageView.resetZoomToFit()
+                    return nil
+                } else if chars == "f" {
+                    self.splitVC.toggleFavoriteOnSelectedItem()
                     return nil
                 }
             }
