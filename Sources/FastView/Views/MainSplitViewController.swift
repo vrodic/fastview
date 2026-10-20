@@ -264,11 +264,14 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
 
     public func toggleFavoriteOnSelectedItem() {
         if let item = sidebarVC.selectedItem {
-            _ = SQLiteCache.shared.toggleFavorite(item: item)
+            let newState = SQLiteCache.shared.toggleFavorite(item: item)
+            print("[MainSplitVC] Toggled favorite for item: \(item.name) (id: \(item.id), path: \(item.path)), newState isFavorite: \(newState)")
             sidebarVC.reloadSelectedRow()
             if showFavoritesOnly {
                 reloadDirectoryContentsAsync()
             }
+        } else {
+            print("[MainSplitVC] toggleFavoriteOnSelectedItem called but no item selected in sidebar")
         }
     }
 

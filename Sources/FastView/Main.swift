@@ -184,6 +184,12 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func toggleFavoriteAction(_ sender: Any?) {
+        print("[AppDelegate] toggleFavoriteAction menu item triggered")
+        windowController?.splitVC.toggleFavoriteOnSelectedItem()
+    }
+
+    public func toggleFavoriteActionFromSidebar() {
+        print("[AppDelegate] toggleFavoriteActionFromSidebar triggered")
         windowController?.splitVC.toggleFavoriteOnSelectedItem()
     }
 

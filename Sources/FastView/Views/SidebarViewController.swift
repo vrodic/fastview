@@ -40,6 +40,10 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
         tableView.onPageKey = { [weak self] keyType in
             self?.handlePageNavigation(keyType: keyType)
         }
+        tableView.onToggleFavoritePressed = { [weak self] in
+            (self?.parent as? MainSplitViewController)?.toggleFavoriteOnSelectedItem()
+                ?? globalAppDelegate?.toggleFavoriteActionFromSidebar()
+        }
 
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("MainColumn"))
         column.resizingMask = .autoresizingMask
@@ -151,6 +155,10 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
         let selectedRow = tableView.selectedRow
         if selectedRow >= 0 {
             tableView.reloadData(forRowIndexes: IndexSet(integer: selectedRow), columnIndexes: IndexSet(integer: 0))
+            if let cell = tableView.view(atColumn: 0, row: selectedRow, makeIfNecessary: false) as? SidebarTableCellView,
+               selectedRow < items.count {
+                cell.configure(with: items[selectedRow])
+            }
         }
     }
 
@@ -221,8 +229,15 @@ public enum PageKeyType {
 class CustomTableView: NSTableView {
     var onEnterPressed: (() -> Void)?
     var onPageKey: ((PageKeyType) -> Void)?
+    var onToggleFavoritePressed: (() -> Void)?
 
     override func keyDown(with event: NSEvent) {
+        if let chars = event.charactersIgnoringModifiers?.lowercased(), chars == "f" {
+            print("[CustomTableView] 'f' key pressed -> trigger toggle favorite")
+            onToggleFavoritePressed?()
+            return
+        }
+
         switch event.keyCode {
         case 36: // Return / Enter
             onEnterPressed?()
@@ -280,7 +295,8 @@ public class SidebarTableCellView: NSTableCellView {
         favoriteBadge.translatesAutoresizingMaskIntoConstraints = false
         favoriteBadge.wantsLayer = true
         favoriteBadge.layer?.zPosition = 10
-        favoriteBadge.image = NSImage(systemSymbolName: "star.fill", accessibilityDescription: "Favorite")
+        let starImg = NSImage(systemSymbolName: "star.fill", accessibilityDescription: "Favorite")
+        favoriteBadge.image = starImg
         favoriteBadge.contentTintColor = NSColor.systemYellow
         favoriteBadge.isHidden = true
 
@@ -311,6 +327,7 @@ public class SidebarTableCellView: NSTableCellView {
 
         let isFav = SQLiteCache.shared.isFavorite(path: item.id) || SQLiteCache.shared.isFavorite(path: item.path)
         favoriteBadge.isHidden = !isFav
+        print("[SidebarCell] configure item '\(item.name)' (id: \(item.id)), isFav: \(isFav)")
 
         let cacheKey = "thumb_\(item.id)_256.0x256.0"
         if let cached = MemoryLRUCache.shared.object(forKey: cacheKey) {
@@ -358,6 +375,7 @@ public class SidebarTableCellView: NSTableCellView {
 
         let isFav = currentItem.map { SQLiteCache.shared.isFavorite(path: $0.id) || SQLiteCache.shared.isFavorite(path: $0.path) } ?? false
         favoriteBadge.isHidden = !isFav
+        print("[SidebarCell] setThumbnailLoaded item '\(currentItem?.name ?? "")', isFav: \(isFav)")
     }
 
     private func showFilenameTextOnly() {
