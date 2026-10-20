@@ -70,11 +70,50 @@ public class ThumbnailGenerator {
         lock.unlock()
     }
 
-    public func generateThumbnail(for item: FileItem, targetSize: CGSize = CGSize(width: 256, height: 256), completion: @escaping (NSImage?) -> Void) {
-        let cacheKey = "thumb_\(item.id)_\(targetSize.width)x\(targetSize.height)"
+    public func loadRawData(for item: FileItem, isCancelled: (() -> Bool)? = nil) -> (targetItem: FileItem, data: Data)? {
+        if isCancelled?() == true { return nil }
 
-        if let cached = MemoryLRUCache.shared.object(forKey: cacheKey) {
-            completion(cached)
+        var targetItem = item
+        if item.type == .archiveZip || item.type == .archiveRar || item.isDirectory {
+            if let peeked = peekFirstImage(in: item) {
+                targetItem = peeked
+            } else {
+                return nil
+            }
+        }
+
+        if let cached = MemoryLRUCache.shared.object(forKey: targetItem.id) {
+            return (targetItem, cached)
+        }
+
+        var imageData: Data?
+        if let archivePath = targetItem.archivePath {
+            let ext = (archivePath as NSString).pathExtension.lowercased()
+            if ext == "zip" {
+                imageData = ArchiveReader.loadZipData(archivePath: archivePath, entryPath: targetItem.path, isCancelled: isCancelled)
+            } else if ext == "rar" {
+                imageData = ArchiveReader.loadRarData(archivePath: archivePath, entryPath: targetItem.path, isCancelled: isCancelled)
+            }
+        } else if targetItem.type == .image {
+            imageData = try? Data(contentsOf: URL(fileURLWithPath: targetItem.path))
+        }
+
+        guard let data = imageData, isCancelled?() != true else { return nil }
+        MemoryLRUCache.shared.setObject(data, forKey: targetItem.id)
+        return (targetItem, data)
+    }
+
+    public func generateThumbnail(for item: FileItem, targetSize: CGSize = CGSize(width: 256, height: 256), completion: @escaping (NSImage?) -> Void) {
+        var lookupItem = item
+        if item.type == .archiveZip || item.type == .archiveRar || item.isDirectory {
+            if let peeked = peekFirstImage(in: item) {
+                lookupItem = peeked
+            }
+        }
+
+        if let cachedData = MemoryLRUCache.shared.object(forKey: lookupItem.id) {
+            let image = NSImage(data: cachedData)
+            completion(image)
             return
         }
 
@@ -91,7 +130,7 @@ public class ThumbnailGenerator {
         op.addExecutionBlock { [weak self, weak op] in
             guard let self = self, let currentOp = op, !currentOp.isCancelled else { return }
 
-            guard let cgImage = self.loadAndScaleCGImage(for: item, targetSize: targetSize, isCancelled: { currentOp.isCancelled }) else {
+            guard let (_, data) = self.loadRawData(for: item, isCancelled: { currentOp.isCancelled }) else {
                 DispatchQueue.main.async {
                     if !currentOp.isCancelled { completion(nil) }
                 }
@@ -102,9 +141,7 @@ public class ThumbnailGenerator {
 
             DispatchQueue.main.async {
                 if !currentOp.isCancelled {
-                    let image = NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
-                    let cost = Int(cgImage.width * cgImage.height * 4)
-                    MemoryLRUCache.shared.setObject(image, forKey: cacheKey, cost: cost)
+                    let image = NSImage(data: data)
                     completion(image)
                 }
             }
@@ -172,27 +209,7 @@ public class ThumbnailGenerator {
 
     public func loadAndScaleCGImage(for item: FileItem, targetSize: CGSize, isCancelled: (() -> Bool)? = nil) -> CGImage? {
         if isCancelled?() == true { return nil }
-
-        if item.type == .archiveZip || item.type == .archiveRar || item.isDirectory {
-            if let peeked = peekFirstImage(in: item) {
-                return loadAndScaleCGImage(for: peeked, targetSize: targetSize, isCancelled: isCancelled)
-            }
-            return nil
-        }
-
-        var imageData: Data?
-        if let archivePath = item.archivePath {
-            let ext = (archivePath as NSString).pathExtension.lowercased()
-            if ext == "zip" {
-                imageData = ArchiveReader.loadZipData(archivePath: archivePath, entryPath: item.path, isCancelled: isCancelled)
-            } else if ext == "rar" {
-                imageData = ArchiveReader.loadRarData(archivePath: archivePath, entryPath: item.path, isCancelled: isCancelled)
-            }
-        } else if item.type == .image {
-            imageData = try? Data(contentsOf: URL(fileURLWithPath: item.path))
-        }
-
-        guard let data = imageData, isCancelled?() != true else { return nil }
+        guard let (_, data) = loadRawData(for: item, isCancelled: isCancelled) else { return nil }
 
         guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
         let maxDimension = max(targetSize.width, targetSize.height)
@@ -200,8 +217,6 @@ public class ThumbnailGenerator {
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceThumbnailMaxPixelSize: maxDimension,
             kCGImageSourceCreateThumbnailWithTransform: true,
-            // Hint the JPEG decoder to subsample rather than decode full
-            // resolution; dramatically reduces memory and CPU for large images.
             kCGImageSourceShouldAllowFloat: false,
             kCGImageSourceShouldCache: false
         ]
@@ -210,10 +225,16 @@ public class ThumbnailGenerator {
     }
 
     public func loadFullImage(for item: FileItem, completion: @escaping (NSImage?) -> Void) {
-        let cacheKey = "full_\(item.id)"
+        var lookupItem = item
+        if item.type == .archiveZip || item.type == .archiveRar || item.isDirectory {
+            if let peeked = peekFirstImage(in: item) {
+                lookupItem = peeked
+            }
+        }
 
-        if let cached = MemoryLRUCache.shared.object(forKey: cacheKey) {
-            completion(cached)
+        if let cachedData = MemoryLRUCache.shared.object(forKey: lookupItem.id) {
+            let image = NSImage(data: cachedData)
+            completion(image)
             return
         }
 
@@ -238,17 +259,14 @@ public class ThumbnailGenerator {
         op.addExecutionBlock { [weak self, weak op] in
             guard let self = self, let currentOp = op, !currentOp.isCancelled else { return }
 
-            var targetItem = item
-            if item.type == .archiveZip || item.type == .archiveRar || item.isDirectory {
-                if let peeked = self.peekFirstImage(in: item) {
-                    targetItem = peeked
-                } else {
-                    DispatchQueue.main.async {
+            guard let (_, data) = self.loadRawData(for: item, isCancelled: { currentOp.isCancelled }) else {
+                DispatchQueue.main.async {
+                    if !currentOp.isCancelled {
                         self.setMainImageLoading(false)
                         completion(nil)
                     }
-                    return
                 }
+                return
             }
 
             if currentOp.isCancelled {
@@ -256,35 +274,10 @@ public class ThumbnailGenerator {
                 return
             }
 
-            var imageData: Data?
-            if let archivePath = targetItem.archivePath {
-                let ext = (archivePath as NSString).pathExtension.lowercased()
-                if ext == "zip" {
-                    imageData = ArchiveReader.loadZipData(archivePath: archivePath, entryPath: targetItem.path, isCancelled: { currentOp.isCancelled })
-                } else if ext == "rar" {
-                    imageData = ArchiveReader.loadRarData(archivePath: archivePath, entryPath: targetItem.path, isCancelled: { currentOp.isCancelled })
-                }
-            } else {
-                imageData = try? Data(contentsOf: URL(fileURLWithPath: targetItem.path))
-            }
-
-            guard let data = imageData, !currentOp.isCancelled else {
-                DispatchQueue.main.async {
-                    self.setMainImageLoading(false)
-                    completion(nil)
-                }
-                return
-            }
-
             DispatchQueue.main.async {
                 self.setMainImageLoading(false)
                 if currentOp.isCancelled { return }
-                guard let image = NSImage(data: data) else {
-                    completion(nil)
-                    return
-                }
-                let cost = Int(image.size.width * image.size.height * 4)
-                MemoryLRUCache.shared.setObject(image, forKey: cacheKey, cost: cost)
+                let image = NSImage(data: data)
                 completion(image)
             }
         }
