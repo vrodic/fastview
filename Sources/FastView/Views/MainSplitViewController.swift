@@ -109,7 +109,14 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
             statusBarView.updateDirectoryStats(imageCount: favorites.count, totalSizeBytes: 0, locationName: "Favorites")
 
             if let targetPath = targetSelectedItemPath,
-               let idx = favorites.firstIndex(where: { $0.path == targetPath || $0.id == targetPath || $0.name == targetPath }) {
+               let idx = favorites.firstIndex(where: {
+                   $0.id == targetPath ||
+                   $0.path == targetPath ||
+                   $0.name == targetPath ||
+                   (targetPath as NSString).lastPathComponent == $0.name ||
+                   $0.path.hasSuffix(targetPath) ||
+                   targetPath.hasSuffix($0.path)
+               }) {
                 sidebarVC.selectRow(idx)
                 displayItem(favorites[idx])
             } else if targetSelectedItemPath == nil, let first = favorites.first {
@@ -169,9 +176,10 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         }
         showFavoritesOnly = false
 
-        let targetPath = item.path
+        let targetPath = item.id.isEmpty ? item.path : item.id
         let locPath = item.archivePath ?? item.path
         let loc = NavigationManager.locationForPath(locPath)
+        print("[MainSplitVC] switchToCurrentItemLocationMode for item '\(item.name)', targetPath: '\(targetPath)', locPath: '\(locPath)'")
         loadLocation(loc, targetSelectedItemPath: targetPath)
     }
 
