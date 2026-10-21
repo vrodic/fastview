@@ -98,14 +98,8 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
     }
 
     public func loadVisibleThumbnailsIfIdle() {
-        guard !ThumbnailGenerator.shared.isLoadingMainImage else { return }
         let visibleRows = tableView.rows(in: scrollView.contentView.bounds)
         guard visibleRows.length > 0 else { return }
-
-        // Drop every pending background thumbnail so that visible rows always
-        // land at the front of the serial thumbnailQueue.  Cached items are
-        // returned immediately, so re-queuing them here costs nothing.
-        ThumbnailGenerator.shared.cancelAllThumbnailTasks()
 
         for row in visibleRows.location..<NSMaxRange(visibleRows) {
             guard row >= 0 && row < items.count else { continue }
@@ -119,7 +113,21 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
     public func selectRow(_ index: Int) {
         guard index >= 0 && index < items.count else { return }
         tableView.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
-        tableView.scrollRowToVisible(index)
+        scrollToCenter(row: index)
+    }
+
+    public func scrollToCenter(row: Int) {
+        guard row >= 0 && row < items.count else { return }
+        let rowRect = tableView.rect(ofRow: row)
+        let clipBounds = scrollView.contentView.bounds
+
+        let centerY = rowRect.origin.y + (rowRect.size.height / 2.0) - (clipBounds.size.height / 2.0)
+        let maxY = max(0, tableView.bounds.size.height - clipBounds.size.height)
+        let targetY = max(0, min(maxY, centerY))
+
+        let targetPoint = NSPoint(x: 0, y: targetY)
+        scrollView.contentView.scroll(to: targetPoint)
+        scrollView.reflectScrolledClipView(scrollView.contentView)
     }
 
     public func selectNext() {
@@ -206,11 +214,6 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
         guard selectedRow >= 0 && selectedRow < items.count else { return }
         let selectedItem = items[selectedRow]
 
-        // Cancel priority tasks (e.g. full-image / archive-open IO) and background thumbnail
-        // work so that old operations are cancelled immediately when selection changes.
-        ThumbnailGenerator.shared.cancelAllPriorityTasks()
-        ThumbnailGenerator.shared.cancelAllThumbnailTasks()
-
         if let cell = tableView.view(atColumn: 0, row: selectedRow, makeIfNecessary: false) as? SidebarTableCellView {
             cell.loadThumbnailOnSelection(for: selectedItem)
         }
@@ -242,12 +245,6 @@ class CustomTableView: NSTableView {
     var onToggleFavoritePressed: (() -> Void)?
 
     override func keyDown(with event: NSEvent) {
-        if let chars = event.charactersIgnoringModifiers?.lowercased(), chars == "f" {
-            print("[CustomTableView] 'f' key pressed -> trigger toggle favorite")
-            onToggleFavoritePressed?()
-            return
-        }
-
         switch event.keyCode {
         case 36: // Return / Enter
             onEnterPressed?()

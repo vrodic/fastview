@@ -58,7 +58,10 @@ public class NavigationManager {
     public func contents() -> [FileItem] {
         let key = currentLocation.cacheKey
         if let cached = SQLiteCache.shared.getDirectoryContents(key: key) {
-            return cached
+            let hasContent = cached.contains { $0.type == .image || $0.type == .directory || $0.type == .archiveZip || $0.type == .archiveRar }
+            if hasContent || !currentLocation.isArchive {
+                return cached
+            }
         }
 
         var results: [FileItem] = []
@@ -113,7 +116,10 @@ public class NavigationManager {
             results.append(contentsOf: ArchiveReader.sortItems(dirItems))
         }
 
-        SQLiteCache.shared.saveDirectoryContents(key: key, items: results)
+        let hasContent = results.contains { $0.type == .image || $0.type == .directory || $0.type == .archiveZip || $0.type == .archiveRar }
+        if hasContent || !currentLocation.isArchive {
+            SQLiteCache.shared.saveDirectoryContents(key: key, items: results)
+        }
         return results
     }
 

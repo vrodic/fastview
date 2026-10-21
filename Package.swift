@@ -10,25 +10,15 @@ let package = Package(
         .executable(name: "FastView", targets: ["FastView"])
     ],
     dependencies: [
-        .package(url: "https://github.com/weichsel/ZIPFoundation.git", .upToNextMajor(from: "0.9.0"))
+        .package(url: "https://github.com/weichsel/ZIPFoundation.git", .upToNextMajor(from: "0.9.0")),
+        .package(url: "https://github.com/mtgto/Unrar.swift", .upToNextMajor(from: "0.2.0"))
     ],
     targets: [
-        .target(
-            name: "UnrarC",
-            path: "Sources/UnrarC",
-            publicHeadersPath: "include",
-            cSettings: [
-                .define("SILENT"),
-                .define("_FILE_OFFSET_BITS", to: "64"),
-                .define("_LARGEFILE_SOURCE"),
-                .define("RAR_SMP")
-            ]
-        ),
         .target(
             name: "FastView",
             dependencies: [
                 "ZIPFoundation",
-                "UnrarC"
+                .product(name: "Unrar", package: "Unrar.swift")
             ],
             path: "Sources/FastView",
             swiftSettings: [

@@ -17,6 +17,8 @@ public class MainImageView: NSView {
 
     private let imageView = NSImageView()
     private let scrollView = NSScrollView()
+
+    private let loadingContainerView = NSView()
     private let loadingIndicator = NSProgressIndicator()
     private let progressBar = NSProgressIndicator()
     private let speedLabel = NSTextField(labelWithString: "")
@@ -51,10 +53,17 @@ public class MainImageView: NSView {
         imageView.imageScaling = .scaleProportionallyUpOrDown
         imageView.imageAlignment = .alignCenter
 
+        loadingContainerView.translatesAutoresizingMaskIntoConstraints = false
+        loadingContainerView.wantsLayer = true
+        loadingContainerView.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.85).cgColor
+        loadingContainerView.layer?.cornerRadius = 14
+        loadingContainerView.layer?.borderWidth = 1
+        loadingContainerView.layer?.borderColor = NSColor.white.withAlphaComponent(0.15).cgColor
+        loadingContainerView.isHidden = true
+
         loadingIndicator.translatesAutoresizingMaskIntoConstraints = false
         loadingIndicator.style = .spinning
         loadingIndicator.controlSize = .large
-        loadingIndicator.isHidden = true
 
         progressBar.translatesAutoresizingMaskIntoConstraints = false
         progressBar.style = .bar
@@ -62,21 +71,21 @@ public class MainImageView: NSView {
         progressBar.minValue = 0
         progressBar.maxValue = 100
         progressBar.doubleValue = 0
-        progressBar.isHidden = true
 
         speedLabel.translatesAutoresizingMaskIntoConstraints = false
-        speedLabel.font = NSFont.systemFont(ofSize: 11, weight: .medium)
-        speedLabel.textColor = NSColor.lightGray
+        speedLabel.font = NSFont.systemFont(ofSize: 14, weight: .semibold)
+        speedLabel.textColor = NSColor.white
         speedLabel.alignment = .center
-        speedLabel.isHidden = true
 
         let clipView = scrollView.contentView
         clipView.documentView = imageView
 
         addSubview(scrollView)
-        addSubview(loadingIndicator)
-        addSubview(progressBar)
-        addSubview(speedLabel)
+        addSubview(loadingContainerView)
+
+        loadingContainerView.addSubview(loadingIndicator)
+        loadingContainerView.addSubview(progressBar)
+        loadingContainerView.addSubview(speedLabel)
 
         NSLayoutConstraint.activate([
             scrollView.leadingAnchor.constraint(equalTo: leadingAnchor),
@@ -84,59 +93,77 @@ public class MainImageView: NSView {
             scrollView.topAnchor.constraint(equalTo: topAnchor),
             scrollView.bottomAnchor.constraint(equalTo: bottomAnchor),
 
-            loadingIndicator.centerXAnchor.constraint(equalTo: centerXAnchor),
-            loadingIndicator.centerYAnchor.constraint(equalTo: centerYAnchor, constant: -20),
+            loadingContainerView.centerXAnchor.constraint(equalTo: centerXAnchor),
+            loadingContainerView.centerYAnchor.constraint(equalTo: centerYAnchor),
+            loadingContainerView.widthAnchor.constraint(equalToConstant: 540),
 
-            progressBar.centerXAnchor.constraint(equalTo: centerXAnchor),
-            progressBar.topAnchor.constraint(equalTo: loadingIndicator.bottomAnchor, constant: 12),
-            progressBar.widthAnchor.constraint(equalToConstant: 240),
+            loadingIndicator.centerXAnchor.constraint(equalTo: loadingContainerView.centerXAnchor),
+            loadingIndicator.topAnchor.constraint(equalTo: loadingContainerView.topAnchor, constant: 20),
 
-            speedLabel.centerXAnchor.constraint(equalTo: centerXAnchor),
-            speedLabel.topAnchor.constraint(equalTo: progressBar.bottomAnchor, constant: 6)
+            progressBar.leadingAnchor.constraint(equalTo: loadingContainerView.leadingAnchor, constant: 28),
+            progressBar.trailingAnchor.constraint(equalTo: loadingContainerView.trailingAnchor, constant: -28),
+            progressBar.topAnchor.constraint(equalTo: loadingIndicator.bottomAnchor, constant: 16),
+
+            speedLabel.leadingAnchor.constraint(equalTo: loadingContainerView.leadingAnchor, constant: 20),
+            speedLabel.trailingAnchor.constraint(equalTo: loadingContainerView.trailingAnchor, constant: -20),
+            speedLabel.topAnchor.constraint(equalTo: progressBar.bottomAnchor, constant: 12),
+            speedLabel.bottomAnchor.constraint(equalTo: loadingContainerView.bottomAnchor, constant: -20)
         ])
     }
 
-    public func showLoading(fileSizeBytes: UInt64, pastSpeedMBs: Double) {
-        progressTimer?.invalidate()
-        elapsedProgressTime = 0
-
-        let speed = max(0.5, pastSpeedMBs)
-        let sizeMB = Double(fileSizeBytes) / (1024.0 * 1024.0)
-        estimatedDuration = max(0.3, sizeMB / speed)
-
-        // Only show progress UI for operations expected to take > 250ms
-        if estimatedDuration < 0.25 {
-            return
-        }
-
-        loadingIndicator.isHidden = false
-        loadingIndicator.startAnimation(nil)
-
-        progressBar.doubleValue = 0
-        progressBar.isHidden = false
-
-        speedLabel.stringValue = String(format: "Loading... (%.1f MB/s)", speed)
-        speedLabel.isHidden = false
-
-        progressTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
+    public func showLoading(fileSizeBytes: UInt64, pastSpeedMBs: Double, statusText: String? = nil) {
+        DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
-            self.elapsedProgressTime += 0.05
-            let progress = min(95.0, (self.elapsedProgressTime / self.estimatedDuration) * 100.0)
-            self.progressBar.doubleValue = progress
+
+            self.progressTimer?.invalidate()
+            self.elapsedProgressTime = 0
+
+            let sizeBytes = max(100 * 1024, fileSizeBytes)
+            let speed = max(0.5, pastSpeedMBs)
+            let sizeMB = Double(sizeBytes) / (1024.0 * 1024.0)
+            self.estimatedDuration = max(0.5, sizeMB / speed)
+
+            self.loadingContainerView.isHidden = false
+
+            self.loadingIndicator.isHidden = false
+            self.loadingIndicator.startAnimation(nil)
+
+            self.progressBar.isIndeterminate = false
+            self.progressBar.doubleValue = 0
+            self.progressBar.isHidden = false
+            self.progressBar.startAnimation(nil)
+
+            let text = statusText ?? String(format: "Loading... (%.1f MB/s)", speed)
+            self.speedLabel.stringValue = text
+            self.speedLabel.isHidden = false
+
+            self.progressTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
+                guard let self = self else { return }
+                self.elapsedProgressTime += 0.05
+                let progress = min(95.0, (self.elapsedProgressTime / self.estimatedDuration) * 100.0)
+                self.progressBar.doubleValue = progress
+            }
         }
     }
 
     public func hideLoading() {
-        progressTimer?.invalidate()
-        progressTimer = nil
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
 
-        loadingIndicator.stopAnimation(nil)
-        loadingIndicator.isHidden = true
+            self.progressTimer?.invalidate()
+            self.progressTimer = nil
 
-        progressBar.doubleValue = 100
-        progressBar.isHidden = true
+            self.loadingContainerView.isHidden = true
 
-        speedLabel.isHidden = true
+            self.loadingIndicator.stopAnimation(nil)
+            self.loadingIndicator.isHidden = true
+
+            self.progressBar.stopAnimation(nil)
+            self.progressBar.doubleValue = 100
+            self.progressBar.isHidden = true
+
+            self.speedLabel.isHidden = true
+        }
     }
 
     public func setImage(_ image: NSImage?, keepZoom: Bool = true) {

@@ -81,10 +81,10 @@ public class ThumbnailGenerator {
         let opKey = "thumb_\(item.id)"
 
         lock.lock()
-        // Cancel any previous thumbnail request for the same item before
-        // queuing a new one – avoids duplicate IO for the same entry.
-        if let existing = activeOperations[opKey] {
-            existing.cancel()
+        // If a thumbnail operation for this item is already in flight, let it complete
+        if let existing = activeOperations[opKey], !existing.isFinished, !existing.isCancelled {
+            lock.unlock()
+            return
         }
 
         let op = BlockOperation()
@@ -123,18 +123,26 @@ public class ThumbnailGenerator {
 
         var entries: [FileItem] = []
         if item.type == .archiveZip {
-            // listZipContents caches after the first open, so subsequent calls
-            // for the same archive cost no disk IO.
-            entries = ArchiveReader.listZipContents(archivePath: item.path)
+            entries = ArchiveReader.listAllZipImages(archivePath: item.path)
         } else if item.type == .archiveRar {
-            entries = ArchiveReader.listRarContents(archivePath: item.path)
+            entries = ArchiveReader.listAllRarImages(archivePath: item.path)
         } else if item.isDirectory {
             if let archivePath = item.archivePath {
                 let ext = (archivePath as NSString).pathExtension.lowercased()
+                let cleanSub = item.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+                let prefix = cleanSub.isEmpty ? "" : cleanSub + "/"
+
+                let all: [FileItem]
                 if ext == "zip" {
-                    entries = ArchiveReader.listZipContents(archivePath: archivePath, subfolder: item.path)
-                } else if ext == "rar" {
-                    entries = ArchiveReader.listRarContents(archivePath: archivePath, subfolder: item.path)
+                    all = ArchiveReader.listAllZipImages(archivePath: archivePath)
+                } else {
+                    all = ArchiveReader.listAllRarImages(archivePath: archivePath)
+                }
+
+                if !prefix.isEmpty {
+                    entries = all.filter { $0.path.hasPrefix(prefix) || $0.id.hasPrefix(prefix) }
+                } else {
+                    entries = all
                 }
             } else {
                 let mgr = NavigationManager(initialLocation: NavigationLocation(physicalPath: item.path))

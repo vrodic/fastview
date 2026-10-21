@@ -55,12 +55,46 @@ public class StatusBarView: NSView {
         }
     }
 
-    public func updateSelectedItemStats(item: FileItem, containedImagesCount: Int? = nil, parentName: String? = nil) {
-        if let parent = parentName, !parent.isEmpty {
-            leftLabel.stringValue = parent
+    public static func formatLeftPath(for item: FileItem) -> String {
+        if item.type == .parentDirectory {
+            return item.name
         }
 
-        var parts: [String] = [item.name]
+        var components: [String] = []
+
+        if let archivePath = item.archivePath, !archivePath.isEmpty {
+            let archiveURL = URL(fileURLWithPath: archivePath)
+            let folderName = archiveURL.deletingLastPathComponent().lastPathComponent
+            let archiveName = archiveURL.lastPathComponent
+
+            if !folderName.isEmpty {
+                components.append(folderName)
+            }
+            components.append(archiveName)
+
+            if let sub = item.entryParentDir, !sub.isEmpty, sub != "." && sub != "/" {
+                let cleanSub = sub.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+                if !cleanSub.isEmpty {
+                    components.append(cleanSub)
+                }
+            }
+            components.append(item.name)
+        } else {
+            let fileURL = URL(fileURLWithPath: item.path)
+            let folderName = fileURL.deletingLastPathComponent().lastPathComponent
+            if !folderName.isEmpty {
+                components.append(folderName)
+            }
+            components.append(item.name)
+        }
+
+        return components.joined(separator: " / ")
+    }
+
+    public func updateSelectedItemStats(item: FileItem, containedImagesCount: Int? = nil, parentName: String? = nil) {
+        leftLabel.stringValue = StatusBarView.formatLeftPath(for: item)
+
+        var parts: [String] = []
 
         if let count = containedImagesCount {
             parts.append("\(count) images")
@@ -84,17 +118,13 @@ public class StatusBarView: NSView {
     }
 
     public func updateImageInfo(item: FileItem, image: NSImage?, currentIndex: Int? = nil, totalImages: Int? = nil, parentName: String? = nil) {
-        if let parent = parentName, !parent.isEmpty {
-            leftLabel.stringValue = parent
-        }
+        leftLabel.stringValue = StatusBarView.formatLeftPath(for: item)
 
         var infoParts: [String] = []
 
         if let index = currentIndex, let total = totalImages, total > 0 {
             infoParts.append("\(index) / \(total)")
         }
-
-        infoParts.append(item.name)
 
         var sizeBytes = item.fileSize
         if sizeBytes == 0 {
