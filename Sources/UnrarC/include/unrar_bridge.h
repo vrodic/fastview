@@ -24,6 +24,7 @@ typedef struct {
 
 UnrarArchive* unrar_open(const char* filepath);
 void unrar_close(UnrarArchive* archive);
+void unrar_set_buffer_size(size_t size);
 
 UnrarEntryList* unrar_list_files(UnrarArchive* archive);
 void unrar_free_entry_list(UnrarEntryList* list);

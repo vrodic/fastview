@@ -39,7 +39,9 @@ private final class ZipArchiveCache {
         if cache[archivePath] != nil {
             cache[archivePath]!.lastUsed = Date()
         } else {
-            guard let archive = Archive(url: URL(fileURLWithPath: archivePath), accessMode: .read) else {
+            let url = URL(fileURLWithPath: archivePath)
+            guard let data = try? Data(contentsOf: url, options: .mappedIfSafe),
+                  let archive = Archive(data: data, accessMode: .read) else {
                 return nil
             }
             evictIfNeeded()
@@ -114,6 +116,12 @@ public struct FileItem: Identifiable, Hashable {
 }
 
 public class ArchiveReader {
+    public static var archiveBufferSize: Int = 4 * 1024 * 1024 {
+        didSet {
+            unrar_set_buffer_size(archiveBufferSize)
+        }
+    }
+
     public static let supportedImageExtensions: Set<String> = [
         "jpg", "jpeg", "png", "gif", "webp", "heic", "heif", "tiff", "tif", "bmp", "ico"
     ]
@@ -157,7 +165,7 @@ public class ArchiveReader {
             var data = Data()
             var aborted = false
 
-            _ = try? archive.extract(entry, consumer: { chunk in
+            _ = try? archive.extract(entry, bufferSize: ArchiveReader.archiveBufferSize, consumer: { chunk in
                 if isCancelled?() == true {
                     aborted = true
                     struct ZipCancelledError: Error {}
