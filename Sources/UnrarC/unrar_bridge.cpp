@@ -1,5 +1,6 @@
-#include "include/unrar_bridge.h"
+#include "rar.hpp"
 #include "dll.hpp"
+#include "include/unrar_bridge.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
