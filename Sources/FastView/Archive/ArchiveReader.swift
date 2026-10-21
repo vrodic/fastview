@@ -188,15 +188,18 @@ public class ArchiveReader {
         let startTime = CFAbsoluteTimeGetCurrent()
         FileLogger.shared.log("READ_RAR_ENTRY_START", path: "\(archivePath) -> \(entryPath)")
 
-        let archiveURL = URL(fileURLWithPath: archivePath)
+        let archiveURL = URL(fileURLWithPath: archivePath).standardized
         guard let archive = try? Unrar.Archive(fileURL: archiveURL),
               let entries = try? archive.entries() else { return nil }
 
         if isCancelled?() == true { return nil }
 
-        let normEntryPath = entryPath.replacingOccurrences(of: "\\", with: "/")
+        let normEntryPath = entryPath.replacingOccurrences(of: "\\", with: "/").trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         guard let entry = entries.first(where: {
-            $0.fileName.replacingOccurrences(of: "\\", with: "/") == normEntryPath
+            let norm = $0.fileName.replacingOccurrences(of: "\\", with: "/").trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            return norm == normEntryPath || norm.hasSuffix("/" + normEntryPath) || normEntryPath.hasSuffix("/" + norm)
+        }) ?? entries.first(where: {
+            ($0.fileName as NSString).lastPathComponent == (entryPath as NSString).lastPathComponent
         }) else {
             return nil
         }
@@ -413,13 +416,15 @@ public class ArchiveReader {
             }
         }
 
-        if items.count == 1 && items[0].isDirectory {
+        if items.isEmpty || (items.count == 1 && items[0].isDirectory) {
             let all = listAllRarImages(archivePath: archivePath, isCancelled: isCancelled)
             if isCancelled?() == true { return [] }
-            DirectoryCache.shared.set(key: cacheKey, items: all)
-            let duration = (CFAbsoluteTimeGetCurrent() - startTime) * 1000.0
-            FileLogger.shared.log("LIST_RAR_END", path: archivePath, durationMs: duration)
-            return all
+            if !all.isEmpty {
+                DirectoryCache.shared.set(key: cacheKey, items: all)
+                let duration = (CFAbsoluteTimeGetCurrent() - startTime) * 1000.0
+                FileLogger.shared.log("LIST_RAR_END", path: archivePath, durationMs: duration)
+                return all
+            }
         }
 
         let sorted = sortItems(items)
