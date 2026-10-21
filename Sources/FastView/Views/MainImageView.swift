@@ -100,14 +100,10 @@ public class MainImageView: NSView {
         progressTimer?.invalidate()
         elapsedProgressTime = 0
 
+        let sizeBytes = max(100 * 1024, fileSizeBytes)
         let speed = max(0.5, pastSpeedMBs)
-        let sizeMB = Double(fileSizeBytes) / (1024.0 * 1024.0)
-        estimatedDuration = max(0.3, sizeMB / speed)
-
-        // Only show progress UI for operations expected to take > 250ms
-        if estimatedDuration < 0.25 {
-            return
-        }
+        let sizeMB = Double(sizeBytes) / (1024.0 * 1024.0)
+        estimatedDuration = max(0.5, sizeMB / speed)
 
         loadingIndicator.isHidden = false
         loadingIndicator.startAnimation(nil)

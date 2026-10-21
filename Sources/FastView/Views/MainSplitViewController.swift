@@ -174,8 +174,6 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
                 if workItem.isCancelled { return }
                 self.sidebarVC.setItems(items, selectFirst: targetSelectedItemPath == nil)
 
-                self.statusBarView.updateDirectoryStats(imageCount: imageItems.count, totalSizeBytes: archiveSize, locationName: locationTitle)
-
                 if let targetPath = targetSelectedItemPath,
                    let idx = items.firstIndex(where: {
                        $0.id == targetPath ||
@@ -192,8 +190,11 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
                 } else if targetSelectedItemPath == nil,
                           let firstItem = items.first(where: { $0.type == .image || $0.type == .archiveZip || $0.type == .archiveRar }) {
                     self.displayItem(firstItem)
-                } else if imageItems.isEmpty {
-                    self.mainImageView.setImage(nil, keepZoom: false)
+                } else {
+                    self.statusBarView.updateDirectoryStats(imageCount: imageItems.count, totalSizeBytes: archiveSize, locationName: locationTitle)
+                    if imageItems.isEmpty {
+                        self.mainImageView.setImage(nil, keepZoom: false)
+                    }
                 }
 
                 self.sidebarVC.loadVisibleThumbnailsIfIdle()
