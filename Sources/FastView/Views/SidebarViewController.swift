@@ -113,7 +113,21 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
     public func selectRow(_ index: Int) {
         guard index >= 0 && index < items.count else { return }
         tableView.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
-        tableView.scrollRowToVisible(index)
+        scrollToCenter(row: index)
+    }
+
+    public func scrollToCenter(row: Int) {
+        guard row >= 0 && row < items.count else { return }
+        let rowRect = tableView.rect(ofRow: row)
+        let clipBounds = scrollView.contentView.bounds
+
+        let centerY = rowRect.origin.y + (rowRect.size.height / 2.0) - (clipBounds.size.height / 2.0)
+        let maxY = max(0, tableView.bounds.size.height - clipBounds.size.height)
+        let targetY = max(0, min(maxY, centerY))
+
+        let targetPoint = NSPoint(x: 0, y: targetY)
+        scrollView.contentView.scroll(to: targetPoint)
+        scrollView.reflectScrolledClipView(scrollView.contentView)
     }
 
     public func selectNext() {
