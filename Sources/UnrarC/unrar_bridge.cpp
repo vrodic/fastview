@@ -41,22 +41,35 @@ void unrar_close(UnrarArchive* archive) {
 }
 
 static std::string get_entry_name(const RARHeaderDataEx& headerData) {
+    std::string name;
     if (headerData.FileNameW[0] != 0) {
-        std::string utf8Name;
-        mbstate_t state = mbstate_t();
         for (int i = 0; headerData.FileNameW[i] != 0; ++i) {
-            char buf[MB_LEN_MAX + 1];
-            size_t len = wcrtomb(buf, headerData.FileNameW[i], &state);
-            if (len != (size_t)-1 && len > 0) {
-                buf[len] = '\0';
-                utf8Name += buf;
+            uint32_t cp = (uint32_t)headerData.FileNameW[i];
+            if (cp < 0x80) {
+                name.push_back((char)cp);
+            } else if (cp < 0x800) {
+                name.push_back((char)(0xC0 | (cp >> 6)));
+                name.push_back((char)(0x80 | (cp & 0x3F)));
+            } else if (cp < 0x10000) {
+                name.push_back((char)(0xE0 | (cp >> 12)));
+                name.push_back((char)(0x80 | ((cp >> 6) & 0x3F)));
+                name.push_back((char)(0x80 | (cp & 0x3F)));
+            } else {
+                name.push_back((char)(0xF0 | (cp >> 18)));
+                name.push_back((char)(0x80 | ((cp >> 12) & 0x3F)));
+                name.push_back((char)(0x80 | ((cp >> 6) & 0x3F)));
+                name.push_back((char)(0x80 | (cp & 0x3F)));
             }
         }
-        if (!utf8Name.empty()) {
-            return utf8Name;
+    } else {
+        name = headerData.FileName;
+    }
+    for (size_t i = 0; i < name.size(); ++i) {
+        if (name[i] == '\\') {
+            name[i] = '/';
         }
     }
-    return std::string(headerData.FileName);
+    return name;
 }
 
 UnrarEntryList* unrar_list_files(UnrarArchive* archive) {
@@ -135,6 +148,13 @@ unsigned char* unrar_extract_file_to_memory(UnrarArchive* archive, const char* t
     if (!archive || !target_name || !out_size) return NULL;
     *out_size = 0;
 
+    std::string normTarget = target_name;
+    for (size_t i = 0; i < normTarget.size(); ++i) {
+        if (normTarget[i] == '\\') {
+            normTarget[i] = '/';
+        }
+    }
+
     RAROpenArchiveDataEx openData;
     memset(&openData, 0, sizeof(openData));
     openData.ArcName = archive->filepath;
@@ -154,7 +174,7 @@ unsigned char* unrar_extract_file_to_memory(UnrarArchive* archive, const char* t
 
     while (RARReadHeaderEx(hArc, &headerData) == ERAR_SUCCESS) {
         std::string entryName = get_entry_name(headerData);
-        if (entryName == target_name) {
+        if (entryName == normTarget) {
             int res = RARProcessFile(hArc, RAR_EXTRACT, NULL, NULL);
             if (res == ERAR_SUCCESS) {
                 found = true;

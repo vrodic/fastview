@@ -17,11 +17,20 @@ let package = Package(
             name: "UnrarC",
             path: "Sources/UnrarC",
             exclude: [
+                "arccmt.cpp",
+                "blake2sp.cpp",
+                "crypt1.cpp",
+                "crypt2.cpp",
                 "unpack15.cpp",
                 "unpack20.cpp",
                 "unpack30.cpp",
                 "unpack50.cpp",
-                "unpack50frag.cpp"
+                "unpack50frag.cpp",
+                "unpack50mt.cpp",
+                "unpackinline.cpp",
+                "win32acl.cpp",
+                "win32lnk.cpp",
+                "win32stm.cpp"
             ],
             publicHeadersPath: "include",
             cSettings: [
