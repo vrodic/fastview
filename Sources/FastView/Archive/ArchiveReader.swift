@@ -1,6 +1,6 @@
 import Foundation
 import ZIPFoundation
-import UnrarC
+import Unrar
 
 // MARK: - ZipArchiveCache
 
@@ -21,7 +21,7 @@ private final class ZipArchiveCache {
     static let shared = ZipArchiveCache()
 
     private struct CacheEntry {
-        let archive: Archive
+        let archive: ZIPFoundation.Archive
         var lastUsed: Date
     }
 
@@ -32,7 +32,7 @@ private final class ZipArchiveCache {
 
     /// Executes `block` with a cached (or freshly opened) Archive for
     /// `archivePath`.  Returns `nil` if the archive cannot be opened.
-    func withArchive<T>(at archivePath: String, block: (Archive) -> T?) -> T? {
+    func withArchive<T>(at archivePath: String, block: (ZIPFoundation.Archive) -> T?) -> T? {
         lock.lock()
         defer { lock.unlock() }
 
@@ -41,7 +41,7 @@ private final class ZipArchiveCache {
         } else {
             let url = URL(fileURLWithPath: archivePath)
             guard let data = try? Data(contentsOf: url, options: .mappedIfSafe),
-                  let archive = Archive(data: data, accessMode: .read) else {
+                  let archive = ZIPFoundation.Archive(data: data, accessMode: .read) else {
                 return nil
             }
             evictIfNeeded()
@@ -116,11 +116,7 @@ public struct FileItem: Identifiable, Hashable {
 }
 
 public class ArchiveReader {
-    public static var archiveBufferSize: Int = 4 * 1024 * 1024 {
-        didSet {
-            unrar_set_buffer_size(archiveBufferSize)
-        }
-    }
+    public static var archiveBufferSize: Int = 4 * 1024 * 1024
 
     public static let supportedImageExtensions: Set<String> = [
         "jpg", "jpeg", "png", "gif", "webp", "heic", "heif", "tiff", "tif", "bmp", "ico"
@@ -192,17 +188,19 @@ public class ArchiveReader {
         let startTime = CFAbsoluteTimeGetCurrent()
         FileLogger.shared.log("READ_RAR_ENTRY_START", path: "\(archivePath) -> \(entryPath)")
 
-        guard let archive = unrar_open(archivePath) else { return nil }
-        defer { unrar_close(archive) }
+        let archiveURL = URL(fileURLWithPath: archivePath)
+        guard let archive = try? Unrar.Archive(fileURL: archiveURL) else { return nil }
 
         if isCancelled?() == true { return nil }
 
-        var size: Int = 0
-        guard let buffer = unrar_extract_file_to_memory(archive, entryPath, &size), size > 0 else {
+        let normEntryPath = entryPath.replacingOccurrences(of: "\\", with: "/")
+        guard let entry = archive.entries.first(where: {
+            $0.path.replacingOccurrences(of: "\\", with: "/") == normEntryPath
+        }) else {
             return nil
         }
-        let data = Data(bytes: buffer, count: size)
-        free(buffer)
+
+        guard let data = try? archive.extract(entry) else { return nil }
 
         let duration = (CFAbsoluteTimeGetCurrent() - startTime) * 1000.0
         FileLogger.shared.log("READ_RAR_ENTRY_END", path: "\(archivePath) -> \(entryPath)", durationMs: duration)
@@ -356,28 +354,19 @@ public class ArchiveReader {
         let startTime = CFAbsoluteTimeGetCurrent()
         FileLogger.shared.log("LIST_RAR_START", path: archivePath)
 
-        guard let archive = unrar_open(archivePath) else { return [] }
-        defer { unrar_close(archive) }
-
-        guard let listPtr = unrar_list_files(archive) else { return [] }
-        defer { unrar_free_entry_list(listPtr) }
-
-        var items: [FileItem] = []
-        let count = listPtr.pointee.count
-        guard count > 0, let rawEntries = listPtr.pointee.entries else { return [] }
+        let archiveURL = URL(fileURLWithPath: archivePath)
+        guard let archive = try? Unrar.Archive(fileURL: archiveURL) else { return [] }
 
         let cleanSubfolder = subfolder.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         let prefix = cleanSubfolder.isEmpty ? "" : cleanSubfolder + "/"
+
+        var items: [FileItem] = []
         var seenFolders = Set<String>()
 
-        for i in 0..<count {
+        for entry in archive.entries {
             if isCancelled?() == true { return [] }
-            var entry = rawEntries[i]
-            let rawPath = withUnsafeBytes(of: &entry.name) { ptr -> String in
-                guard let base = ptr.baseAddress?.assumingMemoryBound(to: CChar.self) else { return "" }
-                return String(cString: base)
-            }
-            let path = rawPath.replacingOccurrences(of: "\\", with: "/")
+
+            let path = entry.path.replacingOccurrences(of: "\\", with: "/")
             guard !path.isEmpty && path != cleanSubfolder && path != cleanSubfolder + "/" else { continue }
 
             if !prefix.isEmpty && !path.hasPrefix(prefix) {
@@ -389,7 +378,7 @@ public class ArchiveReader {
 
             guard let firstComponent = components.first else { continue }
             let itemName = String(firstComponent)
-            let isSubDir = components.count > 1 || entry.is_directory
+            let isSubDir = components.count > 1 || entry.isDirectory
 
             if isSubDir {
                 if !seenFolders.contains(itemName) {
@@ -415,7 +404,7 @@ public class ArchiveReader {
                         type: .image,
                         archivePath: archivePath,
                         isDirectory: false,
-                        fileSize: entry.uncompressed_size,
+                        fileSize: UInt64(entry.uncompressedSize),
                         entryParentDir: innerParent
                     ))
                 }
@@ -448,25 +437,16 @@ public class ArchiveReader {
 
         if isCancelled?() == true { return [] }
 
-        guard let archive = unrar_open(archivePath) else { return [] }
-        defer { unrar_close(archive) }
-
-        guard let listPtr = unrar_list_files(archive) else { return [] }
-        defer { unrar_free_entry_list(listPtr) }
+        let archiveURL = URL(fileURLWithPath: archivePath)
+        guard let archive = try? Unrar.Archive(fileURL: archiveURL) else { return [] }
 
         var items: [FileItem] = []
-        let count = listPtr.pointee.count
-        guard count > 0, let rawEntries = listPtr.pointee.entries else { return [] }
 
-        for i in 0..<count {
+        for entry in archive.entries {
             if isCancelled?() == true { return [] }
-            var entry = rawEntries[i]
-            if entry.is_directory { continue }
-            let rawPath = withUnsafeBytes(of: &entry.name) { ptr -> String in
-                guard let base = ptr.baseAddress?.assumingMemoryBound(to: CChar.self) else { return "" }
-                return String(cString: base)
-            }
-            let path = rawPath.replacingOccurrences(of: "\\", with: "/")
+            if entry.isDirectory { continue }
+
+            let path = entry.path.replacingOccurrences(of: "\\", with: "/")
             let ext = (path as NSString).pathExtension.lowercased()
             if isImageExtension(ext) {
                 let name = (path as NSString).lastPathComponent
@@ -478,11 +458,12 @@ public class ArchiveReader {
                     type: .image,
                     archivePath: archivePath,
                     isDirectory: false,
-                    fileSize: entry.uncompressed_size,
+                    fileSize: UInt64(entry.uncompressedSize),
                     entryParentDir: innerParent
                 ))
             }
         }
+
         let sorted = sortItems(items)
         if isCancelled?() != true {
             DirectoryCache.shared.set(key: cacheKey, items: sorted)
