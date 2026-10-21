@@ -100,6 +100,10 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         ThumbnailGenerator.shared.cancelAllPendingTasks()
     }
 
+    public func reloadDirectoryContentsPublic() {
+        reloadDirectoryContentsAsync()
+    }
+
     private func reloadDirectoryContentsAsync(targetSelectedItemPath: String? = nil, isNavigatingUp: Bool = false) {
         cancelAllIOOperations()
 

@@ -296,10 +296,23 @@ public class ArchiveReader {
         return data
     }
 
+    public static var flattenArchiveDirectories: Bool {
+        get {
+            return UserDefaults.standard.bool(forKey: "FastViewFlattenArchiveDirectories")
+        }
+        set {
+            UserDefaults.standard.set(newValue, forKey: "FastViewFlattenArchiveDirectories")
+        }
+    }
+
     public static func listZipContents(archivePath: String, subfolder: String = "", isCancelled: (() -> Bool)? = nil) -> [FileItem] {
         let cacheKey = "zip_\(archivePath)_\(subfolder)"
         if let cached = DirectoryCache.shared.get(key: cacheKey) {
             return cached
+        }
+
+        if flattenArchiveDirectories {
+            return listAllZipImages(archivePath: archivePath, isCancelled: isCancelled)
         }
 
         if isCancelled?() == true { return [] }
@@ -393,6 +406,10 @@ public class ArchiveReader {
         let cacheKey = "zip_all_\(archivePath)"
         if let cached = DirectoryCache.shared.get(key: cacheKey) {
             return cached
+        }
+
+        if flattenArchiveDirectories {
+            return listAllRarImages(archivePath: archivePath, isCancelled: isCancelled)
         }
 
         if isCancelled?() == true { return [] }

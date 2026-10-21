@@ -242,12 +242,6 @@ class CustomTableView: NSTableView {
     var onToggleFavoritePressed: (() -> Void)?
 
     override func keyDown(with event: NSEvent) {
-        if let chars = event.charactersIgnoringModifiers?.lowercased(), chars == "f" {
-            print("[CustomTableView] 'f' key pressed -> trigger toggle favorite")
-            onToggleFavoritePressed?()
-            return
-        }
-
         switch event.keyCode {
         case 36: // Return / Enter
             onEnterPressed?()

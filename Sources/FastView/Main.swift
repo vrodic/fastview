@@ -150,12 +150,56 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         viewMenu.addItem(withTitle: "Show All Items", action: #selector(showAllItemsAction(_:)), keyEquivalent: "")
         viewMenu.addItem(withTitle: "Show Favorites Only", action: #selector(showFavoritesOnlyAction(_:)), keyEquivalent: "")
         viewMenu.addItem(NSMenuItem.separator())
+
+        let flattenItem = NSMenuItem(title: "Flatten Archive Directories", action: #selector(toggleFlattenArchivesAction(_:)), keyEquivalent: "")
+        flattenItem.state = ArchiveReader.flattenArchiveDirectories ? .on : .off
+        viewMenu.addItem(flattenItem)
+
+        viewMenu.addItem(NSMenuItem.separator())
         viewMenu.addItem(withTitle: "Zoom In", action: #selector(zoomInAction), keyEquivalent: "+")
         viewMenu.addItem(withTitle: "Zoom Out", action: #selector(zoomOutAction), keyEquivalent: "-")
         viewMenu.addItem(withTitle: "Actual Size", action: #selector(actualSizeAction), keyEquivalent: "1")
         viewMenu.addItem(withTitle: "Zoom to Fit", action: #selector(zoomToFitAction), keyEquivalent: "0")
 
-        // 4. Window Menu
+        // 4. Controls Menu
+        let controlsMenuItem = NSMenuItem()
+        mainMenu.addItem(controlsMenuItem)
+        let controlsMenu = NSMenu(title: "Controls")
+        controlsMenuItem.submenu = controlsMenu
+
+        controlsMenu.addItem(withTitle: "Next Image (Down Arrow)", action: #selector(nextImageAction), keyEquivalent: "\u{F701}")
+        controlsMenu.addItem(withTitle: "Previous Image (Up Arrow)", action: #selector(previousImageAction), keyEquivalent: "\u{F700}")
+
+        let nextGroupItem = NSMenuItem(title: "Next Folder / Archive First Image", action: #selector(nextGroupAction), keyEquivalent: "\u{F701}")
+        nextGroupItem.keyEquivalentModifierMask = [.command]
+        controlsMenu.addItem(nextGroupItem)
+
+        let prevGroupItem = NSMenuItem(title: "Previous Folder / Archive First Image", action: #selector(prevGroupAction), keyEquivalent: "\u{F700}")
+        prevGroupItem.keyEquivalentModifierMask = [.command]
+        controlsMenu.addItem(prevGroupItem)
+
+        controlsMenu.addItem(NSMenuItem.separator())
+
+        controlsMenu.addItem(withTitle: "Next Sibling Directory or Archive", action: #selector(nextSiblingAction), keyEquivalent: "\u{F703}")
+        controlsMenu.addItem(withTitle: "Previous Sibling Directory or Archive", action: #selector(prevSiblingAction), keyEquivalent: "\u{F702}")
+
+        let enterItem = NSMenuItem(title: "Enter / Activate Selected Item", action: #selector(activateSelectedItemAction), keyEquivalent: "\r")
+        controlsMenu.addItem(enterItem)
+
+        let escapeItem = NSMenuItem(title: "Navigate Up / Exit Archive", action: #selector(navigateUpAction), keyEquivalent: "\u{1B}")
+        controlsMenu.addItem(escapeItem)
+
+        controlsMenu.addItem(NSMenuItem.separator())
+
+        let favItem = NSMenuItem(title: "Toggle Favorite", action: #selector(toggleFavoriteAction(_:)), keyEquivalent: "f")
+        favItem.keyEquivalentModifierMask = [.command]
+        controlsMenu.addItem(favItem)
+
+        let switchAllItem = NSMenuItem(title: "Switch to All Mode", action: #selector(switchToAllModeAction(_:)), keyEquivalent: "l")
+        switchAllItem.keyEquivalentModifierMask = [.command]
+        controlsMenu.addItem(switchAllItem)
+
+        // 5. Window Menu
         let windowMenuItem = NSMenuItem()
         mainMenu.addItem(windowMenuItem)
         let windowMenu = NSMenu(title: "Window")
@@ -213,6 +257,46 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func showFavoritesOnlyAction(_ sender: Any?) {
         windowController?.splitVC.showFavoritesOnly = true
+    }
+
+    @objc private func toggleFlattenArchivesAction(_ sender: NSMenuItem) {
+        let newState = !ArchiveReader.flattenArchiveDirectories
+        ArchiveReader.flattenArchiveDirectories = newState
+        sender.state = newState ? .on : .off
+        DirectoryCache.shared.clear()
+        windowController?.splitVC.reloadDirectoryContentsPublic()
+    }
+
+    @objc private func nextImageAction() {
+        windowController?.splitVC.selectNextImage()
+    }
+
+    @objc private func previousImageAction() {
+        windowController?.splitVC.selectPreviousImage()
+    }
+
+    @objc private func nextGroupAction() {
+        windowController?.splitVC.selectNextArchiveOrFolderFirstImage()
+    }
+
+    @objc private func prevGroupAction() {
+        windowController?.splitVC.selectPreviousArchiveOrFolderFirstImage()
+    }
+
+    @objc private func nextSiblingAction() {
+        windowController?.splitVC.selectNextHierarchyItem()
+    }
+
+    @objc private func prevSiblingAction() {
+        windowController?.splitVC.selectPreviousHierarchyItem()
+    }
+
+    @objc private func activateSelectedItemAction() {
+        windowController?.splitVC.activateSelectedItem()
+    }
+
+    @objc private func navigateUpAction() {
+        windowController?.splitVC.navigateUp()
     }
 
     @objc private func zoomInAction() {
