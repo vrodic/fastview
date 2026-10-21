@@ -65,7 +65,7 @@ public class MainImageView: NSView {
         progressBar.isHidden = true
 
         speedLabel.translatesAutoresizingMaskIntoConstraints = false
-        speedLabel.font = NSFont.systemFont(ofSize: 11, weight: .medium)
+        speedLabel.font = NSFont.systemFont(ofSize: 14, weight: .semibold)
         speedLabel.textColor = NSColor.lightGray
         speedLabel.alignment = .center
         speedLabel.isHidden = true
@@ -85,14 +85,14 @@ public class MainImageView: NSView {
             scrollView.bottomAnchor.constraint(equalTo: bottomAnchor),
 
             loadingIndicator.centerXAnchor.constraint(equalTo: centerXAnchor),
-            loadingIndicator.centerYAnchor.constraint(equalTo: centerYAnchor, constant: -20),
+            loadingIndicator.centerYAnchor.constraint(equalTo: centerYAnchor, constant: -30),
 
             progressBar.centerXAnchor.constraint(equalTo: centerXAnchor),
-            progressBar.topAnchor.constraint(equalTo: loadingIndicator.bottomAnchor, constant: 12),
-            progressBar.widthAnchor.constraint(equalToConstant: 240),
+            progressBar.topAnchor.constraint(equalTo: loadingIndicator.bottomAnchor, constant: 16),
+            progressBar.widthAnchor.constraint(equalToConstant: 480),
 
             speedLabel.centerXAnchor.constraint(equalTo: centerXAnchor),
-            speedLabel.topAnchor.constraint(equalTo: progressBar.bottomAnchor, constant: 6)
+            speedLabel.topAnchor.constraint(equalTo: progressBar.bottomAnchor, constant: 10)
         ])
     }
 

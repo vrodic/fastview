@@ -130,6 +130,32 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         guard let navMgr = navigationManager else { return }
 
         let path = navMgr.currentLocation.physicalPath
+        let isArchive = navMgr.currentLocation.isArchive
+
+        let archiveURL = URL(fileURLWithPath: path)
+        let archiveName = archiveURL.lastPathComponent
+        let folderName = archiveURL.deletingLastPathComponent().lastPathComponent
+        let locationTitle: String
+        if !folderName.isEmpty {
+            locationTitle = "\(folderName) / \(archiveName)"
+        } else {
+            locationTitle = archiveName
+        }
+
+        var archiveSize: UInt64 = 0
+        if let attrs = try? FileManager.default.attributesOfItem(atPath: path),
+           let size = attrs[.size] as? UInt64 {
+            archiveSize = size
+        }
+
+        // Draw status bar information immediately before starting LIST_(ZIP/RAR)_START operations
+        statusBarView.updateDirectoryStats(imageCount: 0, totalSizeBytes: archiveSize, locationName: locationTitle)
+
+        // Show progress bar immediately for archive opening operations
+        if isArchive {
+            mainImageView.showLoading(fileSizeBytes: archiveSize, pastSpeedMBs: lastMeasuredSpeedMBs)
+        }
+
         FileLogger.shared.log("DIR_OPEN_START", path: path)
 
         var workItem: DispatchWorkItem!
@@ -148,8 +174,7 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
                 if workItem.isCancelled { return }
                 self.sidebarVC.setItems(items, selectFirst: targetSelectedItemPath == nil)
 
-                let parentName = (path as NSString).lastPathComponent
-                self.statusBarView.updateDirectoryStats(imageCount: imageItems.count, totalSizeBytes: 0, locationName: parentName)
+                self.statusBarView.updateDirectoryStats(imageCount: imageItems.count, totalSizeBytes: archiveSize, locationName: locationTitle)
 
                 if let targetPath = targetSelectedItemPath,
                    let idx = items.firstIndex(where: {
@@ -167,6 +192,8 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
                 } else if targetSelectedItemPath == nil,
                           let firstItem = items.first(where: { $0.type == .image || $0.type == .archiveZip || $0.type == .archiveRar }) {
                     self.displayItem(firstItem)
+                } else if imageItems.isEmpty {
+                    self.mainImageView.setImage(nil, keepZoom: false)
                 }
 
                 self.sidebarVC.loadVisibleThumbnailsIfIdle()
