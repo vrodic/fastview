@@ -98,14 +98,8 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
     }
 
     public func loadVisibleThumbnailsIfIdle() {
-        guard !ThumbnailGenerator.shared.isLoadingMainImage else { return }
         let visibleRows = tableView.rows(in: scrollView.contentView.bounds)
         guard visibleRows.length > 0 else { return }
-
-        // Drop every pending background thumbnail so that visible rows always
-        // land at the front of the serial thumbnailQueue.  Cached items are
-        // returned immediately, so re-queuing them here costs nothing.
-        ThumbnailGenerator.shared.cancelAllThumbnailTasks()
 
         for row in visibleRows.location..<NSMaxRange(visibleRows) {
             guard row >= 0 && row < items.count else { continue }
@@ -205,11 +199,6 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
         let selectedRow = tableView.selectedRow
         guard selectedRow >= 0 && selectedRow < items.count else { return }
         let selectedItem = items[selectedRow]
-
-        // Cancel priority tasks (e.g. full-image / archive-open IO) and background thumbnail
-        // work so that old operations are cancelled immediately when selection changes.
-        ThumbnailGenerator.shared.cancelAllPriorityTasks()
-        ThumbnailGenerator.shared.cancelAllThumbnailTasks()
 
         if let cell = tableView.view(atColumn: 0, row: selectedRow, makeIfNecessary: false) as? SidebarTableCellView {
             cell.loadThumbnailOnSelection(for: selectedItem)

@@ -81,10 +81,10 @@ public class ThumbnailGenerator {
         let opKey = "thumb_\(item.id)"
 
         lock.lock()
-        // Cancel any previous thumbnail request for the same item before
-        // queuing a new one – avoids duplicate IO for the same entry.
-        if let existing = activeOperations[opKey] {
-            existing.cancel()
+        // If a thumbnail operation for this item is already in flight, let it complete
+        if let existing = activeOperations[opKey], !existing.isFinished, !existing.isCancelled {
+            lock.unlock()
+            return
         }
 
         let op = BlockOperation()
