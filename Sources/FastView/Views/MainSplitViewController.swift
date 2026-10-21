@@ -334,20 +334,23 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
             guard let self = self else { return }
             guard self.sidebarVC.selectedItem?.id == item.id else { return }
 
-            let duration = CFAbsoluteTimeGetCurrent() - readStartTime
-            if duration > 0 && item.fileSize > 0 {
-                let speedMBs = (Double(item.fileSize) / (1024.0 * 1024.0)) / duration
-                self.lastMeasuredSpeedMBs = (self.lastMeasuredSpeedMBs * 0.7) + (speedMBs * 0.3)
-            }
-
-            self.mainImageView.setImage(image, keepZoom: true)
-            self.statusBarView.updateImageInfo(item: item, image: image, currentIndex: currentIndex, totalImages: totalImages, parentName: parentName)
-
             if let image = image {
+                let duration = CFAbsoluteTimeGetCurrent() - readStartTime
+                if duration > 0 && item.fileSize > 0 {
+                    let speedMBs = (Double(item.fileSize) / (1024.0 * 1024.0)) / duration
+                    self.lastMeasuredSpeedMBs = (self.lastMeasuredSpeedMBs * 0.7) + (speedMBs * 0.3)
+                }
+
+                self.mainImageView.setImage(image, keepZoom: true)
+                self.statusBarView.updateImageInfo(item: item, image: image, currentIndex: currentIndex, totalImages: totalImages, parentName: parentName)
+
                 let cacheKey = "thumb_\(item.id)_256.0x256.0"
                 let cost = Int(image.size.width * image.size.height * 4)
                 MemoryLRUCache.shared.setObject(image, forKey: cacheKey, cost: cost)
                 self.sidebarVC.updateThumbnailForSelectedItem(image: image)
+            } else {
+                self.mainImageView.hideLoading()
+                self.mainImageView.setImage(nil, keepZoom: false)
             }
 
             self.sidebarVC.loadVisibleThumbnailsIfIdle()
