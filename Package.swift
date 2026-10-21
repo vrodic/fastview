@@ -16,7 +16,6 @@ let package = Package(
         .target(
             name: "UnrarC",
             path: "Sources/UnrarC",
-            publicHeadersPath: "include",
             exclude: [
                 "unpack15.cpp",
                 "unpack20.cpp",
@@ -24,6 +23,7 @@ let package = Package(
                 "unpack50.cpp",
                 "unpack50frag.cpp"
             ],
+            publicHeadersPath: "include",
             cSettings: [
                 .define("SILENT"),
                 .define("RARDLL"),
