@@ -287,7 +287,17 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
             }
         } else if item.type == .archiveZip || item.type == .archiveRar {
             statusBarView.updateSelectedItemStats(item: item, containedImagesCount: nil, parentName: parentName)
-            mainImageView.showLoading(fileSizeBytes: item.fileSize, pastSpeedMBs: lastMeasuredSpeedMBs)
+
+            let thumbKey = "thumb_\(item.id)_256.0x256.0"
+            let fullKey = "full_\(item.id)"
+
+            if let cachedFull = MemoryLRUCache.shared.object(forKey: fullKey) {
+                mainImageView.setImage(cachedFull, keepZoom: true)
+            } else if let cachedThumb = MemoryLRUCache.shared.object(forKey: thumbKey) {
+                mainImageView.setImage(cachedThumb, keepZoom: true)
+            } else {
+                mainImageView.showLoading(fileSizeBytes: item.fileSize, pastSpeedMBs: lastMeasuredSpeedMBs)
+            }
 
             // Count images in the archive for the status bar.  This runs on a
             // plain background queue (not the priority IO queue) because it only
