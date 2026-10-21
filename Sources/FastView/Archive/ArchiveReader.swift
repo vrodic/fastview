@@ -1,6 +1,9 @@
 import Foundation
 import ZIPFoundation
 import Unrar
+#if os(macOS)
+import Darwin
+#endif
 
 // MARK: - ZipArchiveCache
 
@@ -93,19 +96,22 @@ private final class RarArchiveCache {
     private let maxOpenArchives = 4
 
     private func enableKernelReadAhead(for archivePath: String) {
+        #if os(macOS)
         let url = URL(fileURLWithPath: archivePath).standardized
         guard let handle = try? FileHandle(forReadingFrom: url) else { return }
         defer { try? handle.close() }
 
         let fd = handle.fileDescriptor
-        fcntl(fd, F_READAHEAD, 1)
+        let fReadAheadCmd: Int32 = 45
+        let fRdAdviseCmd: Int32 = 44
 
-        #if os(macOS)
+        _ = fcntl(fd, fReadAheadCmd, 1)
+
         if let attrs = try? FileManager.default.attributesOfItem(atPath: archivePath),
            let fileSize = attrs[.size] as? Int64, fileSize > 0 {
             let prefetchSize = min(fileSize, 256 * 1024 * 1024)
             var radv = radvisory(ra_offset: 0, ra_count: Int32(min(prefetchSize, Int64(Int32.max))))
-            _ = fcntl(fd, F_RDADVISE, &radv)
+            _ = fcntl(fd, fRdAdviseCmd, &radv)
         }
         #endif
     }
