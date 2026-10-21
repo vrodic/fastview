@@ -39,7 +39,7 @@ private final class ZipArchiveCache {
         if cache[archivePath] != nil {
             cache[archivePath]!.lastUsed = Date()
         } else {
-            guard let archive = Archive(url: URL(fileURLWithPath: archivePath), accessMode: .read, preferredBufferSize: ArchiveReader.archiveBufferSize) else {
+            guard let archive = Archive(url: URL(fileURLWithPath: archivePath), accessMode: .read, preferredBufferSize: UInt32(ArchiveReader.archiveBufferSize)) else {
                 return nil
             }
             evictIfNeeded()
