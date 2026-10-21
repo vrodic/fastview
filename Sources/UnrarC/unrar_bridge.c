@@ -3,6 +3,14 @@
 #include <stdlib.h>
 #include <string.h>
 
+static size_t g_unrar_buffer_size = 4 * 1024 * 1024;
+
+void unrar_set_buffer_size(size_t size) {
+    if (size > 0) {
+        g_unrar_buffer_size = size;
+    }
+}
+
 struct UnrarArchive {
     char filepath[1024];
 };
@@ -35,9 +43,18 @@ UnrarEntryList* unrar_list_files(UnrarArchive* archive) {
     FILE* f = fopen(archive->filepath, "rb");
     if (!f) return list;
 
+    char* stream_buf = NULL;
+    if (g_unrar_buffer_size > 0) {
+        stream_buf = (char*)malloc(g_unrar_buffer_size);
+        if (stream_buf) {
+            setvbuf(f, stream_buf, _IOFBF, g_unrar_buffer_size);
+        }
+    }
+
     unsigned char sig[7];
     if (fread(sig, 1, 7, f) < 7) {
         fclose(f);
+        if (stream_buf) free(stream_buf);
         return list;
     }
 
@@ -45,6 +62,7 @@ UnrarEntryList* unrar_list_files(UnrarArchive* archive) {
     if (sig[0] != 0x52 || sig[1] != 0x61 || sig[2] != 0x72 || sig[3] != 0x21 ||
         sig[4] != 0x1A || sig[5] != 0x07) {
         fclose(f);
+        if (stream_buf) free(stream_buf);
         return list;
     }
 
@@ -137,6 +155,7 @@ UnrarEntryList* unrar_list_files(UnrarArchive* archive) {
     }
 
     fclose(f);
+    if (stream_buf) free(stream_buf);
     return list;
 }
 
@@ -155,15 +174,25 @@ unsigned char* unrar_extract_file_to_memory(UnrarArchive* archive, const char* t
     FILE* f = fopen(archive->filepath, "rb");
     if (!f) return NULL;
 
+    char* stream_buf = NULL;
+    if (g_unrar_buffer_size > 0) {
+        stream_buf = (char*)malloc(g_unrar_buffer_size);
+        if (stream_buf) {
+            setvbuf(f, stream_buf, _IOFBF, g_unrar_buffer_size);
+        }
+    }
+
     unsigned char sig[7];
     if (fread(sig, 1, 7, f) < 7) {
         fclose(f);
+        if (stream_buf) free(stream_buf);
         return NULL;
     }
 
     if (sig[0] != 0x52 || sig[1] != 0x61 || sig[2] != 0x72 || sig[3] != 0x21 ||
         sig[4] != 0x1A || sig[5] != 0x07) {
         fclose(f);
+        if (stream_buf) free(stream_buf);
         return NULL;
     }
 
@@ -223,6 +252,7 @@ unsigned char* unrar_extract_file_to_memory(UnrarArchive* archive, const char* t
                                 if (buf && fread(buf, 1, pack_size, f) == pack_size) {
                                     *out_size = pack_size;
                                     fclose(f);
+                                    if (stream_buf) free(stream_buf);
                                     return buf;
                                 }
                                 if (buf) free(buf);
@@ -233,6 +263,7 @@ unsigned char* unrar_extract_file_to_memory(UnrarArchive* archive, const char* t
                                     size_t read_bytes = fread(buf, 1, pack_size < unp_size ? pack_size : unp_size, f);
                                     *out_size = read_bytes;
                                     fclose(f);
+                                    if (stream_buf) free(stream_buf);
                                     return buf;
                                 }
                             }
@@ -257,5 +288,6 @@ unsigned char* unrar_extract_file_to_memory(UnrarArchive* archive, const char* t
     }
 
     fclose(f);
+    if (stream_buf) free(stream_buf);
     return NULL;
 }
