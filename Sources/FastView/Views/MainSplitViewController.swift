@@ -240,9 +240,10 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         let loc: NavigationLocation
         if let archivePath = item.archivePath, !archivePath.isEmpty {
             let archiveType = ArchiveReader.fileType(for: URL(fileURLWithPath: archivePath))
+            let subfolder = ArchiveReader.flattenArchiveDirectories ? "" : (item.entryParentDir ?? "")
             loc = NavigationLocation(
                 physicalPath: archivePath,
-                archiveSubfolder: item.entryParentDir ?? "",
+                archiveSubfolder: subfolder,
                 isArchive: true,
                 archiveType: archiveType
             )
