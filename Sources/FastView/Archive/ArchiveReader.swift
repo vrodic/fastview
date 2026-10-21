@@ -384,14 +384,6 @@ public class ArchiveReader {
 
         if !ok { return [] }
 
-        if items.count == 1 && items[0].isDirectory {
-            let all = listAllZipImages(archivePath: archivePath, isCancelled: isCancelled)
-            if isCancelled?() == true { return [] }
-            DirectoryCache.shared.set(key: cacheKey, items: all)
-            let duration = (CFAbsoluteTimeGetCurrent() - startTime) * 1000.0
-            FileLogger.shared.log("LIST_ZIP_END", path: archivePath, durationMs: duration)
-            return all
-        }
 
         let sorted = sortItems(items)
         if isCancelled?() != true {
@@ -408,9 +400,6 @@ public class ArchiveReader {
             return cached
         }
 
-        if flattenArchiveDirectories {
-            return listAllRarImages(archivePath: archivePath, isCancelled: isCancelled)
-        }
 
         if isCancelled?() == true { return [] }
 
@@ -453,6 +442,10 @@ public class ArchiveReader {
         let cacheKey = "rar_\(archivePath)_\(subfolder)"
         if let cached = DirectoryCache.shared.get(key: cacheKey) {
             return cached
+        }
+
+        if flattenArchiveDirectories {
+            return listAllRarImages(archivePath: archivePath, isCancelled: isCancelled)
         }
 
         if isCancelled?() == true { return [] }
@@ -519,7 +512,7 @@ public class ArchiveReader {
 
         guard let finalItems = result else { return [] }
 
-        if finalItems.isEmpty || (finalItems.count == 1 && finalItems[0].isDirectory) {
+        if finalItems.isEmpty && cleanSubfolder.isEmpty {
             let all = listAllRarImages(archivePath: archivePath, isCancelled: isCancelled)
             if isCancelled?() == true { return [] }
             if !all.isEmpty {

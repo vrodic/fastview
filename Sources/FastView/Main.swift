@@ -264,6 +264,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         ArchiveReader.flattenArchiveDirectories = newState
         sender.state = newState ? .on : .off
         DirectoryCache.shared.clear()
+        SQLiteCache.shared.clear()
         windowController?.splitVC.reloadDirectoryContentsPublic()
     }
 

@@ -212,6 +212,7 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
                 } else {
                     self.statusBarView.updateDirectoryStats(imageCount: imageItems.count, totalSizeBytes: archiveSize, locationName: locationTitle)
                     if imageItems.isEmpty {
+                        self.mainImageView.hideLoading()
                         self.mainImageView.setImage(nil, keepZoom: false)
                     }
                 }
