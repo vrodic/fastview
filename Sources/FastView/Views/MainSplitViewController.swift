@@ -255,6 +255,11 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
     }
 
     public func displayItem(_ item: FileItem) {
+        // Ensure progress bar and main image loading only run for the currently selected item
+        if let currentSelected = sidebarVC.selectedItem, currentSelected.id != item.id {
+            return
+        }
+
         // Automatically persist current selection state whenever item is displayed
         if let locPath = currentLocationPath {
             UserDefaults.standard.set(locPath, forKey: "FastViewLastOpenedPath")
