@@ -242,7 +242,11 @@ public class ArchiveReader {
         FileLogger.shared.log("READ_ZIP_ENTRY_START", path: "\(archivePath) -> \(entryPath)")
 
         let result = ZipArchiveCache.shared.withArchive(at: archivePath) { archive -> Data? in
-            guard let entry = archive[entryPath] else { return nil }
+            let normEntryPath = entryPath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            guard let entry = archive[entryPath] ?? archive[normEntryPath] ?? archive.first(where: {
+                let p = $0.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+                return p == normEntryPath || p.hasSuffix("/" + normEntryPath) || normEntryPath.hasSuffix("/" + p)
+            }) else { return nil }
 
             var data = Data()
             var aborted = false
