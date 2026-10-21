@@ -373,10 +373,11 @@ public class ArchiveReader {
         for i in 0..<count {
             if isCancelled?() == true { return [] }
             var entry = rawEntries[i]
-            let path = withUnsafeBytes(of: &entry.name) { ptr -> String in
+            let rawPath = withUnsafeBytes(of: &entry.name) { ptr -> String in
                 guard let base = ptr.baseAddress?.assumingMemoryBound(to: CChar.self) else { return "" }
                 return String(cString: base)
             }
+            let path = rawPath.replacingOccurrences(of: "\\", with: "/")
             guard !path.isEmpty && path != cleanSubfolder && path != cleanSubfolder + "/" else { continue }
 
             if !prefix.isEmpty && !path.hasPrefix(prefix) {
@@ -461,10 +462,11 @@ public class ArchiveReader {
             if isCancelled?() == true { return [] }
             var entry = rawEntries[i]
             if entry.is_directory { continue }
-            let path = withUnsafeBytes(of: &entry.name) { ptr -> String in
+            let rawPath = withUnsafeBytes(of: &entry.name) { ptr -> String in
                 guard let base = ptr.baseAddress?.assumingMemoryBound(to: CChar.self) else { return "" }
                 return String(cString: base)
             }
+            let path = rawPath.replacingOccurrences(of: "\\", with: "/")
             let ext = (path as NSString).pathExtension.lowercased()
             if isImageExtension(ext) {
                 let name = (path as NSString).lastPathComponent

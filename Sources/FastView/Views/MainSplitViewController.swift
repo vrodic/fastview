@@ -324,6 +324,10 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
     }
 
     public func handleActivation(of item: FileItem) {
+        if showFavoritesOnly {
+            switchToCurrentItemLocationMode()
+            return
+        }
         guard let navMgr = navigationManager else { return }
         if item.type == .image {
             selectNextImage()

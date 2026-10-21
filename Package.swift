@@ -19,6 +19,14 @@ let package = Package(
             publicHeadersPath: "include",
             cSettings: [
                 .define("SILENT"),
+                .define("RARDLL"),
+                .define("_FILE_OFFSET_BITS", to: "64"),
+                .define("_LARGEFILE_SOURCE"),
+                .define("RAR_SMP")
+            ],
+            cxxSettings: [
+                .define("SILENT"),
+                .define("RARDLL"),
                 .define("_FILE_OFFSET_BITS", to: "64"),
                 .define("_LARGEFILE_SOURCE"),
                 .define("RAR_SMP")
