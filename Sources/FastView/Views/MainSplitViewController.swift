@@ -135,12 +135,6 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         let archiveURL = URL(fileURLWithPath: path)
         let archiveName = archiveURL.lastPathComponent
         let folderName = archiveURL.deletingLastPathComponent().lastPathComponent
-        let locationTitle: String
-        if !folderName.isEmpty {
-            locationTitle = "\(folderName) / \(archiveName)"
-        } else {
-            locationTitle = archiveName
-        }
 
         var archiveSize: UInt64 = 0
         if let attrs = try? FileManager.default.attributesOfItem(atPath: path),
@@ -148,12 +142,33 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
             archiveSize = size
         }
 
+        let locationTitle: String
+        if isArchive {
+            if let targetPath = targetSelectedItemPath {
+                let targetName = (targetPath as NSString).lastPathComponent
+                if !folderName.isEmpty {
+                    locationTitle = "\(folderName) / \(archiveName) / \(targetName)"
+                } else {
+                    locationTitle = "\(archiveName) / \(targetName)"
+                }
+            } else {
+                if !folderName.isEmpty {
+                    locationTitle = "\(folderName) / \(archiveName) / Loading..."
+                } else {
+                    locationTitle = "\(archiveName) / Loading..."
+                }
+            }
+        } else {
+            locationTitle = (path as NSString).lastPathComponent
+        }
+
         // Draw status bar information immediately before starting LIST_(ZIP/RAR)_START operations
         statusBarView.updateDirectoryStats(imageCount: 0, totalSizeBytes: archiveSize, locationName: locationTitle)
 
         // Show progress bar immediately for archive opening operations
         if isArchive {
-            mainImageView.showLoading(fileSizeBytes: archiveSize, pastSpeedMBs: lastMeasuredSpeedMBs)
+            let loadingMessage = String(format: "Opening archive %@...", archiveName)
+            mainImageView.showLoading(fileSizeBytes: archiveSize, pastSpeedMBs: lastMeasuredSpeedMBs, statusText: loadingMessage)
         }
 
         FileLogger.shared.log("DIR_OPEN_START", path: path)

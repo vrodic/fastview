@@ -96,43 +96,55 @@ public class MainImageView: NSView {
         ])
     }
 
-    public func showLoading(fileSizeBytes: UInt64, pastSpeedMBs: Double) {
-        progressTimer?.invalidate()
-        elapsedProgressTime = 0
-
-        let sizeBytes = max(100 * 1024, fileSizeBytes)
-        let speed = max(0.5, pastSpeedMBs)
-        let sizeMB = Double(sizeBytes) / (1024.0 * 1024.0)
-        estimatedDuration = max(0.5, sizeMB / speed)
-
-        loadingIndicator.isHidden = false
-        loadingIndicator.startAnimation(nil)
-
-        progressBar.doubleValue = 0
-        progressBar.isHidden = false
-
-        speedLabel.stringValue = String(format: "Loading... (%.1f MB/s)", speed)
-        speedLabel.isHidden = false
-
-        progressTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
+    public func showLoading(fileSizeBytes: UInt64, pastSpeedMBs: Double, statusText: String? = nil) {
+        DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
-            self.elapsedProgressTime += 0.05
-            let progress = min(95.0, (self.elapsedProgressTime / self.estimatedDuration) * 100.0)
-            self.progressBar.doubleValue = progress
+
+            self.progressTimer?.invalidate()
+            self.elapsedProgressTime = 0
+
+            let sizeBytes = max(100 * 1024, fileSizeBytes)
+            let speed = max(0.5, pastSpeedMBs)
+            let sizeMB = Double(sizeBytes) / (1024.0 * 1024.0)
+            self.estimatedDuration = max(0.5, sizeMB / speed)
+
+            self.loadingIndicator.isHidden = false
+            self.loadingIndicator.startAnimation(nil)
+
+            self.progressBar.isIndeterminate = false
+            self.progressBar.doubleValue = 0
+            self.progressBar.isHidden = false
+            self.progressBar.startAnimation(nil)
+
+            let text = statusText ?? String(format: "Loading... (%.1f MB/s)", speed)
+            self.speedLabel.stringValue = text
+            self.speedLabel.isHidden = false
+
+            self.progressTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
+                guard let self = self else { return }
+                self.elapsedProgressTime += 0.05
+                let progress = min(95.0, (self.elapsedProgressTime / self.estimatedDuration) * 100.0)
+                self.progressBar.doubleValue = progress
+            }
         }
     }
 
     public func hideLoading() {
-        progressTimer?.invalidate()
-        progressTimer = nil
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
 
-        loadingIndicator.stopAnimation(nil)
-        loadingIndicator.isHidden = true
+            self.progressTimer?.invalidate()
+            self.progressTimer = nil
 
-        progressBar.doubleValue = 100
-        progressBar.isHidden = true
+            self.loadingIndicator.stopAnimation(nil)
+            self.loadingIndicator.isHidden = true
 
-        speedLabel.isHidden = true
+            self.progressBar.stopAnimation(nil)
+            self.progressBar.doubleValue = 100
+            self.progressBar.isHidden = true
+
+            self.speedLabel.isHidden = true
+        }
     }
 
     public func setImage(_ image: NSImage?, keepZoom: Bool = true) {

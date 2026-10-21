@@ -52,20 +52,26 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
 
-            windowController.splitVC.loadLocation(loc, targetSelectedItemPath: targetPath)
-            if isFavoritesMode {
-                windowController.splitVC.showFavoritesOnly = true
+            DispatchQueue.main.async {
+                windowController.splitVC.loadLocation(loc, targetSelectedItemPath: targetPath)
+                if isFavoritesMode {
+                    windowController.splitVC.showFavoritesOnly = true
+                }
             }
         } else if isFavoritesMode {
-            if let path = initialPath {
-                let loc = NavigationManager.locationForPath(path)
-                windowController.splitVC.loadLocation(loc, targetSelectedItemPath: targetItem)
+            DispatchQueue.main.async {
+                if let path = initialPath {
+                    let loc = NavigationManager.locationForPath(path)
+                    windowController.splitVC.loadLocation(loc, targetSelectedItemPath: targetItem)
+                }
+                windowController.splitVC.showFavoritesOnly = true
             }
-            windowController.splitVC.showFavoritesOnly = true
         } else if let path = initialPath {
             saveLastOpenedPath(path)
             let loc = NavigationManager.locationForPath(path)
-            windowController.splitVC.loadLocation(loc, targetSelectedItemPath: targetItem)
+            DispatchQueue.main.async {
+                windowController.splitVC.loadLocation(loc, targetSelectedItemPath: targetItem)
+            }
         }
     }
 
