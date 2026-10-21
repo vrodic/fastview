@@ -74,6 +74,82 @@ private final class ZipArchiveCache {
     }
 }
 
+// MARK: - RarArchiveCache
+
+/// Caches open Unrar.Archive handles and parsed entry lists to prevent repeated
+/// disk opens and full header scans on every thumbnail and full-image extraction.
+/// Uses Darwin kernel advisories (F_READAHEAD, F_RDADVISE) to maximize disk I/O throughput.
+private final class RarArchiveCache {
+    static let shared = RarArchiveCache()
+
+    private struct CacheEntry {
+        let archive: Unrar.Archive
+        let entries: [Unrar.Entry]
+        var lastUsed: Date
+    }
+
+    private var cache: [String: CacheEntry] = [:]
+    private let lock = NSLock()
+    private let maxOpenArchives = 4
+
+    private func enableKernelReadAhead(for archivePath: String) {
+        let url = URL(fileURLWithPath: archivePath).standardized
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return }
+        defer { try? handle.close() }
+
+        let fd = handle.fileDescriptor
+        fcntl(fd, F_READAHEAD, 1)
+
+        #if os(macOS)
+        if let attrs = try? FileManager.default.attributesOfItem(atPath: archivePath),
+           let fileSize = attrs[.size] as? Int64, fileSize > 0 {
+            let prefetchSize = min(fileSize, 256 * 1024 * 1024)
+            var radv = radvisory(ra_offset: 0, ra_count: Int32(min(prefetchSize, Int64(Int32.max))))
+            _ = fcntl(fd, F_RDADVISE, &radv)
+        }
+        #endif
+    }
+
+    func withArchive<T>(at archivePath: String, block: (Unrar.Archive, [Unrar.Entry]) -> T?) -> T? {
+        lock.lock()
+        defer { lock.unlock() }
+
+        if let existing = cache[archivePath] {
+            cache[archivePath]!.lastUsed = Date()
+            return block(existing.archive, existing.entries)
+        } else {
+            enableKernelReadAhead(for: archivePath)
+            let url = URL(fileURLWithPath: archivePath).standardized
+            guard let archive = try? Unrar.Archive(fileURL: url),
+                  let entries = try? archive.entries() else {
+                return nil
+            }
+            evictIfNeeded()
+            cache[archivePath] = CacheEntry(archive: archive, entries: entries, lastUsed: Date())
+            return block(archive, entries)
+        }
+    }
+
+    func invalidate(archivePath: String) {
+        lock.lock()
+        cache.removeValue(forKey: archivePath)
+        lock.unlock()
+    }
+
+    func invalidateAll() {
+        lock.lock()
+        cache.removeAll()
+        lock.unlock()
+    }
+
+    private func evictIfNeeded() {
+        while cache.count >= maxOpenArchives {
+            guard let lruKey = cache.min(by: { $0.value.lastUsed < $1.value.lastUsed })?.key else { break }
+            cache.removeValue(forKey: lruKey)
+        }
+    }
+}
+
 public enum FileType: Equatable {
     case image
     case archiveZip
@@ -188,24 +264,23 @@ public class ArchiveReader {
         let startTime = CFAbsoluteTimeGetCurrent()
         FileLogger.shared.log("READ_RAR_ENTRY_START", path: "\(archivePath) -> \(entryPath)")
 
-        let archiveURL = URL(fileURLWithPath: archivePath).standardized
-        guard let archive = try? Unrar.Archive(fileURL: archiveURL),
-              let entries = try? archive.entries() else { return nil }
+        let result = RarArchiveCache.shared.withArchive(at: archivePath) { archive, entries -> Data? in
+            if isCancelled?() == true { return nil }
 
-        if isCancelled?() == true { return nil }
+            let normEntryPath = entryPath.replacingOccurrences(of: "\\", with: "/").trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            guard let entry = entries.first(where: {
+                let norm = $0.fileName.replacingOccurrences(of: "\\", with: "/").trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+                return norm == normEntryPath || norm.hasSuffix("/" + normEntryPath) || normEntryPath.hasSuffix("/" + norm)
+            }) ?? entries.first(where: {
+                ($0.fileName as NSString).lastPathComponent == (entryPath as NSString).lastPathComponent
+            }) else {
+                return nil
+            }
 
-        let normEntryPath = entryPath.replacingOccurrences(of: "\\", with: "/").trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        guard let entry = entries.first(where: {
-            let norm = $0.fileName.replacingOccurrences(of: "\\", with: "/").trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-            return norm == normEntryPath || norm.hasSuffix("/" + normEntryPath) || normEntryPath.hasSuffix("/" + norm)
-        }) ?? entries.first(where: {
-            ($0.fileName as NSString).lastPathComponent == (entryPath as NSString).lastPathComponent
-        }) else {
-            return nil
+            return try? archive.extract(entry)
         }
 
-        guard let data = try? archive.extract(entry) else { return nil }
-
+        guard let data = result else { return nil }
         let duration = (CFAbsoluteTimeGetCurrent() - startTime) * 1000.0
         FileLogger.shared.log("READ_RAR_ENTRY_END", path: "\(archivePath) -> \(entryPath)", durationMs: duration)
         return data
@@ -358,65 +433,66 @@ public class ArchiveReader {
         let startTime = CFAbsoluteTimeGetCurrent()
         FileLogger.shared.log("LIST_RAR_START", path: archivePath)
 
-        let archiveURL = URL(fileURLWithPath: archivePath)
-        guard let archive = try? Unrar.Archive(fileURL: archiveURL),
-              let entries = try? archive.entries() else { return [] }
-
         let cleanSubfolder = subfolder.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         let prefix = cleanSubfolder.isEmpty ? "" : cleanSubfolder + "/"
 
-        var items: [FileItem] = []
-        var seenFolders = Set<String>()
+        let result = RarArchiveCache.shared.withArchive(at: archivePath) { archive, entries -> [FileItem]? in
+            var seenFolders = Set<String>()
+            var list: [FileItem] = []
 
-        for entry in entries {
-            if isCancelled?() == true { return [] }
+            for entry in entries {
+                if isCancelled?() == true { return nil }
 
-            let path = entry.fileName.replacingOccurrences(of: "\\", with: "/")
-            guard !path.isEmpty && path != cleanSubfolder && path != cleanSubfolder + "/" else { continue }
+                let path = entry.fileName.replacingOccurrences(of: "\\", with: "/")
+                guard !path.isEmpty && path != cleanSubfolder && path != cleanSubfolder + "/" else { continue }
 
-            if !prefix.isEmpty && !path.hasPrefix(prefix) {
-                continue
-            }
-
-            let relativePath = prefix.isEmpty ? path : String(path.dropFirst(prefix.count))
-            let components = relativePath.split(separator: "/", omittingEmptySubsequences: true)
-
-            guard let firstComponent = components.first else { continue }
-            let itemName = String(firstComponent)
-            let isSubDir = components.count > 1 || entry.directory
-
-            if isSubDir {
-                if !seenFolders.contains(itemName) {
-                    seenFolders.insert(itemName)
-                    let fullVirtualPath = prefix + itemName
-                    items.append(FileItem(
-                        id: fullVirtualPath,
-                        name: itemName,
-                        path: fullVirtualPath,
-                        type: .directory,
-                        archivePath: archivePath,
-                        isDirectory: true
-                    ))
+                if !prefix.isEmpty && !path.hasPrefix(prefix) {
+                    continue
                 }
-            } else {
-                let ext = (itemName as NSString).pathExtension.lowercased()
-                if isImageExtension(ext) {
-                    let innerParent = (path as NSString).deletingLastPathComponent
-                    items.append(FileItem(
-                        id: path,
-                        name: itemName,
-                        path: path,
-                        type: .image,
-                        archivePath: archivePath,
-                        isDirectory: false,
-                        fileSize: entry.uncompressedSize,
-                        entryParentDir: innerParent
-                    ))
+
+                let relativePath = prefix.isEmpty ? path : String(path.dropFirst(prefix.count))
+                let components = relativePath.split(separator: "/", omittingEmptySubsequences: true)
+
+                guard let firstComponent = components.first else { continue }
+                let itemName = String(firstComponent)
+                let isSubDir = components.count > 1 || entry.directory
+
+                if isSubDir {
+                    if !seenFolders.contains(itemName) {
+                        seenFolders.insert(itemName)
+                        let fullVirtualPath = prefix + itemName
+                        list.append(FileItem(
+                            id: fullVirtualPath,
+                            name: itemName,
+                            path: fullVirtualPath,
+                            type: .directory,
+                            archivePath: archivePath,
+                            isDirectory: true
+                        ))
+                    }
+                } else {
+                    let ext = (itemName as NSString).pathExtension.lowercased()
+                    if isImageExtension(ext) {
+                        let innerParent = (path as NSString).deletingLastPathComponent
+                        list.append(FileItem(
+                            id: path,
+                            name: itemName,
+                            path: path,
+                            type: .image,
+                            archivePath: archivePath,
+                            isDirectory: false,
+                            fileSize: entry.uncompressedSize,
+                            entryParentDir: innerParent
+                        ))
+                    }
                 }
             }
+            return list
         }
 
-        if items.isEmpty || (items.count == 1 && items[0].isDirectory) {
+        guard let finalItems = result else { return [] }
+
+        if finalItems.isEmpty || (finalItems.count == 1 && finalItems[0].isDirectory) {
             let all = listAllRarImages(archivePath: archivePath, isCancelled: isCancelled)
             if isCancelled?() == true { return [] }
             if !all.isEmpty {
@@ -427,7 +503,7 @@ public class ArchiveReader {
             }
         }
 
-        let sorted = sortItems(items)
+        let sorted = sortItems(finalItems)
         if isCancelled?() != true {
             DirectoryCache.shared.set(key: cacheKey, items: sorted)
         }
@@ -444,33 +520,34 @@ public class ArchiveReader {
 
         if isCancelled?() == true { return [] }
 
-        let archiveURL = URL(fileURLWithPath: archivePath)
-        guard let archive = try? Unrar.Archive(fileURL: archiveURL),
-              let entries = try? archive.entries() else { return [] }
+        let result = RarArchiveCache.shared.withArchive(at: archivePath) { archive, entries -> [FileItem]? in
+            var list: [FileItem] = []
 
-        var items: [FileItem] = []
+            for entry in entries {
+                if isCancelled?() == true { return nil }
+                if entry.directory { continue }
 
-        for entry in entries {
-            if isCancelled?() == true { return [] }
-            if entry.directory { continue }
-
-            let path = entry.fileName.replacingOccurrences(of: "\\", with: "/")
-            let ext = (path as NSString).pathExtension.lowercased()
-            if isImageExtension(ext) {
-                let name = (path as NSString).lastPathComponent
-                let innerParent = (path as NSString).deletingLastPathComponent
-                items.append(FileItem(
-                    id: path,
-                    name: name,
-                    path: path,
-                    type: .image,
-                    archivePath: archivePath,
-                    isDirectory: false,
-                    fileSize: entry.uncompressedSize,
-                    entryParentDir: innerParent
-                ))
+                let path = entry.fileName.replacingOccurrences(of: "\\", with: "/")
+                let ext = (path as NSString).pathExtension.lowercased()
+                if isImageExtension(ext) {
+                    let name = (path as NSString).lastPathComponent
+                    let innerParent = (path as NSString).deletingLastPathComponent
+                    list.append(FileItem(
+                        id: path,
+                        name: name,
+                        path: path,
+                        type: .image,
+                        archivePath: archivePath,
+                        isDirectory: false,
+                        fileSize: entry.uncompressedSize,
+                        entryParentDir: innerParent
+                    ))
+                }
             }
+            return list
         }
+
+        guard let items = result else { return [] }
 
         let sorted = sortItems(items)
         if isCancelled?() != true {
