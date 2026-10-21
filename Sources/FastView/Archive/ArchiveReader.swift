@@ -189,13 +189,14 @@ public class ArchiveReader {
         FileLogger.shared.log("READ_RAR_ENTRY_START", path: "\(archivePath) -> \(entryPath)")
 
         let archiveURL = URL(fileURLWithPath: archivePath)
-        guard let archive = try? Unrar.Archive(fileURL: archiveURL) else { return nil }
+        guard let archive = try? Unrar.Archive(fileURL: archiveURL),
+              let entries = try? archive.entries() else { return nil }
 
         if isCancelled?() == true { return nil }
 
         let normEntryPath = entryPath.replacingOccurrences(of: "\\", with: "/")
-        guard let entry = archive.entries.first(where: {
-            $0.path.replacingOccurrences(of: "\\", with: "/") == normEntryPath
+        guard let entry = entries.first(where: {
+            $0.fileName.replacingOccurrences(of: "\\", with: "/") == normEntryPath
         }) else {
             return nil
         }
@@ -355,7 +356,8 @@ public class ArchiveReader {
         FileLogger.shared.log("LIST_RAR_START", path: archivePath)
 
         let archiveURL = URL(fileURLWithPath: archivePath)
-        guard let archive = try? Unrar.Archive(fileURL: archiveURL) else { return [] }
+        guard let archive = try? Unrar.Archive(fileURL: archiveURL),
+              let entries = try? archive.entries() else { return [] }
 
         let cleanSubfolder = subfolder.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         let prefix = cleanSubfolder.isEmpty ? "" : cleanSubfolder + "/"
@@ -363,10 +365,10 @@ public class ArchiveReader {
         var items: [FileItem] = []
         var seenFolders = Set<String>()
 
-        for entry in archive.entries {
+        for entry in entries {
             if isCancelled?() == true { return [] }
 
-            let path = entry.path.replacingOccurrences(of: "\\", with: "/")
+            let path = entry.fileName.replacingOccurrences(of: "\\", with: "/")
             guard !path.isEmpty && path != cleanSubfolder && path != cleanSubfolder + "/" else { continue }
 
             if !prefix.isEmpty && !path.hasPrefix(prefix) {
@@ -378,7 +380,7 @@ public class ArchiveReader {
 
             guard let firstComponent = components.first else { continue }
             let itemName = String(firstComponent)
-            let isSubDir = components.count > 1 || entry.isDirectory
+            let isSubDir = components.count > 1 || entry.directory
 
             if isSubDir {
                 if !seenFolders.contains(itemName) {
@@ -404,7 +406,7 @@ public class ArchiveReader {
                         type: .image,
                         archivePath: archivePath,
                         isDirectory: false,
-                        fileSize: UInt64(entry.uncompressedSize),
+                        fileSize: entry.uncompressedSize,
                         entryParentDir: innerParent
                     ))
                 }
@@ -438,15 +440,16 @@ public class ArchiveReader {
         if isCancelled?() == true { return [] }
 
         let archiveURL = URL(fileURLWithPath: archivePath)
-        guard let archive = try? Unrar.Archive(fileURL: archiveURL) else { return [] }
+        guard let archive = try? Unrar.Archive(fileURL: archiveURL),
+              let entries = try? archive.entries() else { return [] }
 
         var items: [FileItem] = []
 
-        for entry in archive.entries {
+        for entry in entries {
             if isCancelled?() == true { return [] }
-            if entry.isDirectory { continue }
+            if entry.directory { continue }
 
-            let path = entry.path.replacingOccurrences(of: "\\", with: "/")
+            let path = entry.fileName.replacingOccurrences(of: "\\", with: "/")
             let ext = (path as NSString).pathExtension.lowercased()
             if isImageExtension(ext) {
                 let name = (path as NSString).lastPathComponent
@@ -458,7 +461,7 @@ public class ArchiveReader {
                     type: .image,
                     archivePath: archivePath,
                     isDirectory: false,
-                    fileSize: UInt64(entry.uncompressedSize),
+                    fileSize: entry.uncompressedSize,
                     entryParentDir: innerParent
                 ))
             }
