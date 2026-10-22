@@ -363,7 +363,7 @@ public class SidebarTableCellView: NSTableCellView {
 
         showFilenameTextOnly()
 
-        if item.type == .image {
+        if item.type == .image || item.isDirectory || item.type == .archiveZip || item.type == .archiveRar {
             ThumbnailGenerator.shared.generateThumbnail(for: item) { [weak self] image in
                 guard let self = self, self.currentItem?.id == item.id else { return }
                 if let img = image {
