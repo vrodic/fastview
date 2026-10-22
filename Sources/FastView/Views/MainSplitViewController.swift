@@ -1,5 +1,20 @@
 import AppKit
 
+private var BlockTargetKey: UInt8 = 0
+
+private final class BlockTarget: NSObject {
+    private let actionBlock: () -> Void
+
+    init(actionBlock: @escaping () -> Void) {
+        self.actionBlock = actionBlock
+        super.init()
+    }
+
+    @objc func performAction() {
+        actionBlock()
+    }
+}
+
 public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
     private let sidebarVC = SidebarViewController()
     private let mainContentVC = NSViewController()
@@ -527,16 +542,17 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         let alert = NSAlert()
         alert.messageText = "File Information"
         alert.alertStyle = .informational
-        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: "Close")
 
-        let filePath = item.path
+        let fullPath = item.archivePath != nil ? "\(item.archivePath!) / \(item.path)" : item.path
+        let fsPath = item.archivePath ?? item.path
         let fileManager = FileManager.default
 
         var createdStr = "N/A"
         var modifiedStr = "N/A"
         var sizeStr = ByteCountFormatter.string(fromByteCount: Int64(item.fileSize), countStyle: .file)
 
-        if let attrs = try? fileManager.attributesOfItem(atPath: filePath) {
+        if let attrs = try? fileManager.attributesOfItem(atPath: fsPath) {
             let dateFormatter = DateFormatter()
             dateFormatter.dateStyle = .medium
             dateFormatter.timeStyle = .medium
@@ -552,15 +568,68 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
             }
         }
 
-        let infoText = """
-        Name: \(item.name)
-        Path: \(filePath)
-        Size: \(sizeStr)
-        Created: \(createdStr)
-        Modified: \(modifiedStr)
-        """
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 550, height: 160))
 
-        alert.informativeText = infoText
+        let gridView = NSGridView(numberOfColumns: 2, rows: 0)
+        gridView.translatesAutoresizingMaskIntoConstraints = false
+        gridView.rowSpacing = 8
+        gridView.columnSpacing = 12
+
+        func makeLabel(_ text: String, bold: Bool = false) -> NSTextField {
+            let tf = NSTextField(labelWithString: text)
+            tf.font = bold ? NSFont.boldSystemFont(ofSize: 12) : NSFont.systemFont(ofSize: 12)
+            tf.textColor = NSColor.secondaryLabelColor
+            return tf
+        }
+
+        func makeValueField(_ text: String) -> NSTextField {
+            let tf = NSTextField(string: text)
+            tf.isEditable = false
+            tf.isSelectable = true
+            tf.drawsBackground = false
+            tf.isBezeled = false
+            tf.font = NSFont.systemFont(ofSize: 12)
+            tf.textColor = NSColor.labelColor
+            tf.lineBreakMode = .byCharWrapping
+            return tf
+        }
+
+        let pathContainer = NSStackView()
+        pathContainer.orientation = .horizontal
+        pathContainer.spacing = 8
+        pathContainer.alignment = .centerY
+
+        let pathField = makeValueField(fullPath)
+        pathContainer.addArrangedSubview(pathField)
+
+        let copyBtn = NSButton(title: "Copy Path", target: nil, action: nil)
+        copyBtn.bezelStyle = .inline
+        copyBtn.controlSize = .small
+        let targetHandler = BlockTarget {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(fullPath, forType: .string)
+        }
+        objc_setAssociatedObject(copyBtn, &BlockTargetKey, targetHandler, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+        copyBtn.target = targetHandler
+        copyBtn.action = #selector(BlockTarget.performAction)
+        pathContainer.addArrangedSubview(copyBtn)
+
+        gridView.addRow(with: [makeLabel("Name:", bold: true), makeValueField(item.name)])
+        gridView.addRow(with: [makeLabel("Path:", bold: true), pathContainer])
+        gridView.addRow(with: [makeLabel("Size:", bold: true), makeValueField(sizeStr)])
+        gridView.addRow(with: [makeLabel("Created:", bold: true), makeValueField(createdStr)])
+        gridView.addRow(with: [makeLabel("Modified:", bold: true), makeValueField(modifiedStr)])
+
+        container.addSubview(gridView)
+        NSLayoutConstraint.activate([
+            gridView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            gridView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            gridView.topAnchor.constraint(equalTo: container.topAnchor, constant: 4),
+            gridView.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -4)
+        ])
+
+        alert.accessoryView = container
+
         if let window = view.window {
             alert.beginSheetModal(for: window, completionHandler: nil)
         } else {
