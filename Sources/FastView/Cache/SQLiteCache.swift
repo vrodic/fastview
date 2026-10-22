@@ -373,13 +373,15 @@ public class SQLiteCache {
         lock.lock()
         defer { lock.unlock() }
 
-        guard db != nil else { return }
+        guard db != nil, !items.isEmpty else { return }
 
+        sqlite3_exec(db, "BEGIN TRANSACTION;", nil, nil, nil)
         for item in items {
             if item.type == .parentDirectory { continue }
             let comps = SQLiteCache.decomposeComponents(for: item)
             _ = ensureNodeHierarchy(for: comps)
         }
+        sqlite3_exec(db, "COMMIT;", nil, nil, nil)
     }
 
     public func isFavorite(path: String) -> Bool {

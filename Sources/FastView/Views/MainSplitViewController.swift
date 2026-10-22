@@ -191,8 +191,13 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
             SQLiteCache.shared.preloadFolderViewStatus(locationPath: path)
             let tPreloadMs = (CFAbsoluteTimeGetCurrent() - t1) * 1000.0
 
+            DispatchQueue.global(qos: .utility).async {
+                SQLiteCache.shared.registerLocationItems(items: items)
+            }
+
             let elapsedTime = (CFAbsoluteTimeGetCurrent() - startTime) * 1000.0
-            FileLogger.shared.log("DIR_OPEN_TIMING", path: path, durationMs: elapsedTime, extra: "contentsMs: \(String(format: "%.2f", tContentsMs)), preloadMs: \(String(format: "%.2f", tPreloadMs)), items: \(items.count)")
+            let opMsg = "DIR_OPEN_TIMING (contentsMs: \(String(format: "%.2f", tContentsMs)), preloadMs: \(String(format: "%.2f", tPreloadMs)), items: \(items.count))"
+            FileLogger.shared.log(opMsg, path: path, durationMs: elapsedTime)
 
             let imageItems = items.filter { $0.type == .image }
 
