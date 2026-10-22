@@ -88,6 +88,25 @@ public class SQLiteCache {
         public let isDirectory: Bool
     }
 
+    public static func candidateNames(for name: String) -> [String] {
+        var names = [name]
+        let ns = name as NSString
+        let ext = ns.pathExtension.lowercased()
+        let stem = ns.deletingPathExtension
+
+        if !ext.isEmpty {
+            if ["zip", "rar", "cbz", "cbr"].contains(ext) {
+                if !names.contains(stem) { names.append(stem) }
+            }
+        } else {
+            for archiveExt in ["zip", "rar", "cbz", "cbr"] {
+                let withExt = "\(name).\(archiveExt)"
+                if !names.contains(withExt) { names.append(withExt) }
+            }
+        }
+        return names
+    }
+
     public static func decomposeComponents(for item: FileItem) -> [PathComponent] {
         var comps: [PathComponent] = []
 
@@ -130,22 +149,28 @@ public class SQLiteCache {
         var currentParentId: Int64? = nil
 
         for comp in components {
+            let candidates = SQLiteCache.candidateNames(for: comp.name)
+            let placeholders = candidates.map { _ in "?" }.joined(separator: ", ")
+
             let query: String
             if currentParentId == nil {
-                query = "SELECT id FROM view_nodes WHERE parent_id IS NULL AND name = ?;"
+                query = "SELECT id FROM view_nodes WHERE parent_id IS NULL AND name IN (\(placeholders));"
             } else {
-                query = "SELECT id FROM view_nodes WHERE parent_id = ? AND name = ?;"
+                query = "SELECT id FROM view_nodes WHERE parent_id = ? AND name IN (\(placeholders));"
             }
 
             var stmt: OpaquePointer?
             var foundId: Int64? = nil
 
             if sqlite3_prepare_v2(db, query, -1, &stmt, nil) == SQLITE_OK {
+                var bindIdx: Int32 = 1
                 if let pId = currentParentId {
-                    sqlite3_bind_int64(stmt, 1, pId)
-                    sqlite3_bind_text(stmt, 2, comp.name, -1, SQLITE_TRANSIENT)
-                } else {
-                    sqlite3_bind_text(stmt, 1, comp.name, -1, SQLITE_TRANSIENT)
+                    sqlite3_bind_int64(stmt, bindIdx, pId)
+                    bindIdx += 1
+                }
+                for candidate in candidates {
+                    sqlite3_bind_text(stmt, bindIdx, candidate, -1, SQLITE_TRANSIENT)
+                    bindIdx += 1
                 }
 
                 if sqlite3_step(stmt) == SQLITE_ROW {
@@ -166,22 +191,28 @@ public class SQLiteCache {
         var currentParentId: Int64? = nil
 
         for comp in components {
+            let candidates = SQLiteCache.candidateNames(for: comp.name)
+            let placeholders = candidates.map { _ in "?" }.joined(separator: ", ")
+
             let querySelect: String
             if currentParentId == nil {
-                querySelect = "SELECT id FROM view_nodes WHERE parent_id IS NULL AND name = ?;"
+                querySelect = "SELECT id FROM view_nodes WHERE parent_id IS NULL AND name IN (\(placeholders));"
             } else {
-                querySelect = "SELECT id FROM view_nodes WHERE parent_id = ? AND name = ?;"
+                querySelect = "SELECT id FROM view_nodes WHERE parent_id = ? AND name IN (\(placeholders));"
             }
 
             var stmtSelect: OpaquePointer?
             var existingId: Int64? = nil
 
             if sqlite3_prepare_v2(db, querySelect, -1, &stmtSelect, nil) == SQLITE_OK {
+                var bindIdx: Int32 = 1
                 if let pId = currentParentId {
-                    sqlite3_bind_int64(stmtSelect, 1, pId)
-                    sqlite3_bind_text(stmtSelect, 2, comp.name, -1, SQLITE_TRANSIENT)
-                } else {
-                    sqlite3_bind_text(stmtSelect, 1, comp.name, -1, SQLITE_TRANSIENT)
+                    sqlite3_bind_int64(stmtSelect, bindIdx, pId)
+                    bindIdx += 1
+                }
+                for candidate in candidates {
+                    sqlite3_bind_text(stmtSelect, bindIdx, candidate, -1, SQLITE_TRANSIENT)
+                    bindIdx += 1
                 }
 
                 if sqlite3_step(stmtSelect) == SQLITE_ROW {
