@@ -272,6 +272,7 @@ public class SidebarTableCellView: NSTableCellView {
     private let thumbnailImageView = NSImageView()
     private let nameLabel = NSTextField(labelWithString: "")
     private let favoriteBadge = NSImageView()
+    private let typeBadge = NSImageView()
     private var currentItem: FileItem?
 
     override public init(frame frameRect: NSRect) {
@@ -302,13 +303,23 @@ public class SidebarTableCellView: NSTableCellView {
         favoriteBadge.translatesAutoresizingMaskIntoConstraints = false
         favoriteBadge.wantsLayer = true
         favoriteBadge.layer?.zPosition = 10
-        let starImg = NSImage(systemSymbolName: "star.fill", accessibilityDescription: "Favorite")
+        let starConfig = NSImage.SymbolConfiguration(pointSize: 28, weight: .bold)
+        let starImg = NSImage(systemSymbolName: "star.fill", accessibilityDescription: "Favorite")?.withSymbolConfiguration(starConfig)
         favoriteBadge.image = starImg
+        favoriteBadge.imageScaling = .scaleProportionallyUpOrDown
         favoriteBadge.contentTintColor = NSColor.systemYellow
         favoriteBadge.isHidden = true
 
+        typeBadge.translatesAutoresizingMaskIntoConstraints = false
+        typeBadge.wantsLayer = true
+        typeBadge.layer?.zPosition = 10
+        typeBadge.imageScaling = .scaleProportionallyUpOrDown
+        typeBadge.contentTintColor = NSColor.controlAccentColor
+        typeBadge.isHidden = true
+
         addSubview(thumbnailImageView)
         addSubview(nameLabel)
+        addSubview(typeBadge)
         addSubview(favoriteBadge)
 
         NSLayoutConstraint.activate([
@@ -321,16 +332,32 @@ public class SidebarTableCellView: NSTableCellView {
             nameLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
             nameLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
 
+            typeBadge.topAnchor.constraint(equalTo: topAnchor, constant: 6),
+            typeBadge.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 6),
+            typeBadge.widthAnchor.constraint(equalToConstant: 44),
+            typeBadge.heightAnchor.constraint(equalToConstant: 44),
+
             favoriteBadge.topAnchor.constraint(equalTo: topAnchor, constant: 6),
             favoriteBadge.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
-            favoriteBadge.widthAnchor.constraint(equalToConstant: 22),
-            favoriteBadge.heightAnchor.constraint(equalToConstant: 22)
+            favoriteBadge.widthAnchor.constraint(equalToConstant: 44),
+            favoriteBadge.heightAnchor.constraint(equalToConstant: 44)
         ])
     }
 
     public func configure(with item: FileItem) {
         self.currentItem = item
         nameLabel.stringValue = item.name
+
+        let badgeConfig = NSImage.SymbolConfiguration(pointSize: 28, weight: .bold)
+        if item.isDirectory || item.type == .parentDirectory {
+            typeBadge.image = NSImage(systemSymbolName: "folder.fill", accessibilityDescription: "Folder")?.withSymbolConfiguration(badgeConfig)
+            typeBadge.isHidden = false
+        } else if item.type == .archiveZip || item.type == .archiveRar {
+            typeBadge.image = NSImage(systemSymbolName: "doc.zipper", accessibilityDescription: "Archive")?.withSymbolConfiguration(badgeConfig)
+            typeBadge.isHidden = false
+        } else {
+            typeBadge.isHidden = true
+        }
 
         let isFav = SQLiteCache.shared.isFavorite(path: item.id) || SQLiteCache.shared.isFavorite(path: item.path)
         favoriteBadge.isHidden = !isFav

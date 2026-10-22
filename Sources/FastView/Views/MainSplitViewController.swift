@@ -520,4 +520,51 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
     public var imageView: MainImageView {
         return mainImageView
     }
+
+    public func showInfoForSelectedItem() {
+        guard let item = sidebarVC.selectedItem else { return }
+
+        let alert = NSAlert()
+        alert.messageText = "File Information"
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "OK")
+
+        let filePath = item.path
+        let fileManager = FileManager.default
+
+        var createdStr = "N/A"
+        var modifiedStr = "N/A"
+        var sizeStr = ByteCountFormatter.string(fromByteCount: Int64(item.fileSize), countStyle: .file)
+
+        if let attrs = try? fileManager.attributesOfItem(atPath: filePath) {
+            let dateFormatter = DateFormatter()
+            dateFormatter.dateStyle = .medium
+            dateFormatter.timeStyle = .medium
+
+            if let creationDate = attrs[.creationDate] as? Date {
+                createdStr = dateFormatter.string(from: creationDate)
+            }
+            if let modDate = attrs[.modificationDate] as? Date {
+                modifiedStr = dateFormatter.string(from: modDate)
+            }
+            if let sizeNum = attrs[.size] as? Int64 {
+                sizeStr = ByteCountFormatter.string(fromByteCount: sizeNum, countStyle: .file)
+            }
+        }
+
+        let infoText = """
+        Name: \(item.name)
+        Path: \(filePath)
+        Size: \(sizeStr)
+        Created: \(createdStr)
+        Modified: \(modifiedStr)
+        """
+
+        alert.informativeText = infoText
+        if let window = view.window {
+            alert.beginSheetModal(for: window, completionHandler: nil)
+        } else {
+            alert.runModal()
+        }
+    }
 }

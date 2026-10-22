@@ -23,6 +23,15 @@ public class MemoryLRUCache {
     private let maxMemoryLimit: Int
     private let lock = NSLock()
 
+    public var isLowMemoryMode: Bool = UserDefaults.standard.bool(forKey: "FastViewLowMemoryMode") {
+        didSet {
+            UserDefaults.standard.set(isLowMemoryMode, forKey: "FastViewLowMemoryMode")
+            lock.lock()
+            evictIfNecessary()
+            lock.unlock()
+        }
+    }
+
     public init(memoryFraction: Double = 0.30) {
         let sysMemory = ProcessInfo.processInfo.physicalMemory
         self.maxMemoryLimit = Int(Double(sysMemory) * memoryFraction)
@@ -55,7 +64,8 @@ public class MemoryLRUCache {
     }
 
     private func evictIfNecessary() {
-        while totalCost > maxMemoryLimit && !cache.isEmpty {
+        let effectiveLimit = isLowMemoryMode ? 10 : Int.max
+        while (totalCost > maxMemoryLimit || cache.count > effectiveLimit) && !cache.isEmpty {
             guard let oldest = cache.values.min(by: { $0.lastAccessed < $1.lastAccessed }) else { break }
             cache.removeValue(forKey: oldest.key)
             totalCost -= oldest.cost
