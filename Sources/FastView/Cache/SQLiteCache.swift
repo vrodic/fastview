@@ -7,9 +7,11 @@ public class SQLiteCache {
     public static let shared = SQLiteCache()
     private var db: OpaquePointer?
     private let lock = NSLock()
+    private var viewedKeysSet = Set<String>()
 
     public init() {
         setupDatabase()
+        loadViewedKeysCache()
     }
 
     deinit {
@@ -61,9 +63,9 @@ public class SQLiteCache {
         let createViewHistoryTable = """
         CREATE TABLE IF NOT EXISTS view_history (
             path TEXT PRIMARY KEY,
-            last_viewed_at REAL,
+            last_viewed_at INTEGER,
             view_count INTEGER
-        );
+        ) WITHOUT ROWID;
         """
 
         sqlite3_exec(db, createDirectoryTable, nil, nil, nil)
@@ -75,6 +77,24 @@ public class SQLiteCache {
         sqlite3_exec(db, "ALTER TABLE favorites ADD COLUMN timestamp REAL;", nil, nil, nil)
 
         print("[SQLiteCache] Database initialized at \(dbPath)")
+    }
+
+    private func loadViewedKeysCache() {
+        lock.lock()
+        defer { lock.unlock() }
+
+        guard db != nil else { return }
+        let query = "SELECT path FROM view_history WHERE view_count > 0;"
+        var statement: OpaquePointer?
+        if sqlite3_prepare_v2(db, query, -1, &statement, nil) == SQLITE_OK {
+            while sqlite3_step(statement) == SQLITE_ROW {
+                if let cString = sqlite3_column_text(statement, 0) {
+                    let p = String(cString: cString)
+                    viewedKeysSet.insert(p)
+                }
+            }
+        }
+        sqlite3_finalize(statement)
     }
 
     public func isFavorite(path: String) -> Bool {
@@ -265,9 +285,11 @@ public class SQLiteCache {
             keysToUpdateSet.insert("\(archivePath)#\(item.path)")
         }
         let keysToUpdate = Array(keysToUpdateSet).filter { !$0.isEmpty }
-        let now = Date().timeIntervalSince1970
+        let nowInt = Int64(Date().timeIntervalSince1970)
 
         for key in keysToUpdate {
+            viewedKeysSet.insert(key)
+
             var currentCount = 0
             let querySelect = "SELECT view_count FROM view_history WHERE path = ?;"
             var stmtSelect: OpaquePointer?
@@ -284,7 +306,7 @@ public class SQLiteCache {
             var stmtInsert: OpaquePointer?
             if sqlite3_prepare_v2(db, insertQuery, -1, &stmtInsert, nil) == SQLITE_OK {
                 sqlite3_bind_text(stmtInsert, 1, key, -1, SQLITE_TRANSIENT)
-                sqlite3_bind_double(stmtInsert, 2, now)
+                sqlite3_bind_int64(stmtInsert, 2, nowInt)
                 sqlite3_bind_int64(stmtInsert, 3, Int64(newCount))
                 sqlite3_step(stmtInsert)
             }
@@ -295,10 +317,20 @@ public class SQLiteCache {
     public func isViewed(path: String) -> Bool {
         lock.lock()
         defer { lock.unlock() }
-        return isViewedUnlocked(path: path)
+
+        if viewedKeysSet.contains(path) { return true }
+        if path.contains("#") {
+            let alt = path.replacingOccurrences(of: "#", with: " / ")
+            if viewedKeysSet.contains(alt) { return true }
+        } else if path.contains(" / ") {
+            let alt = path.replacingOccurrences(of: " / ", with: "#")
+            if viewedKeysSet.contains(alt) { return true }
+        }
+        return false
     }
 
     private func isViewedUnlocked(path: String) -> Bool {
+        if viewedKeysSet.contains(path) { return true }
         let query = "SELECT view_count FROM view_history WHERE path = ? AND view_count > 0;"
         var statement: OpaquePointer?
         var result = false
