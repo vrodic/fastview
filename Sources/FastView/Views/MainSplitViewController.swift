@@ -493,12 +493,12 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         gridView.columnSpacing = 12
 
         for rowIdx in 0..<gridView.numberOfRows {
-            let cell = gridView.cell(atColumn: 0, row: rowIdx)
+            let cell = gridView.cell(atColumnIndex: 0, rowIndex: rowIdx)
             if let label = cell.contentView as? NSTextField {
                 label.font = NSFont.systemFont(ofSize: 12, weight: .medium)
                 label.textColor = NSColor.secondaryLabelColor
             }
-            let valCell = gridView.cell(atColumn: 1, row: rowIdx)
+            let valCell = gridView.cell(atColumnIndex: 1, rowIndex: rowIdx)
             if let valLabel = valCell.contentView as? NSTextField {
                 valLabel.font = NSFont.systemFont(ofSize: 12, weight: .regular)
                 valLabel.isSelectable = true
