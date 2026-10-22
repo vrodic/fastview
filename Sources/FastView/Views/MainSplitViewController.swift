@@ -346,6 +346,8 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
             guard self.sidebarVC.selectedItem?.id == item.id else { return }
 
             if let image = image {
+                SQLiteCache.shared.recordView(item: item)
+
                 let duration = CFAbsoluteTimeGetCurrent() - readStartTime
                 if duration > 0 && item.fileSize > 0 {
                     let speedMBs = (Double(item.fileSize) / (1024.0 * 1024.0)) / duration
@@ -359,6 +361,7 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
                 let cost = Int(image.size.width * image.size.height * 4)
                 MemoryLRUCache.shared.setObject(image, forKey: cacheKey, cost: cost)
                 self.sidebarVC.updateThumbnailForSelectedItem(image: image)
+                self.sidebarVC.reloadSelectedRow()
             } else {
                 self.mainImageView.hideLoading()
                 self.mainImageView.setImage(nil, keepZoom: false)
@@ -379,6 +382,50 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         } else {
             print("[MainSplitVC] toggleFavoriteOnSelectedItem called but no item selected in sidebar")
         }
+    }
+
+    public func showInfoForSelectedItem() {
+        guard let item = sidebarVC.selectedItem else {
+            let alert = NSAlert()
+            alert.messageText = "File Information"
+            alert.informativeText = "No file selected."
+            alert.alertStyle = .informational
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+            return
+        }
+
+        let viewInfo1 = SQLiteCache.shared.getViewInfo(path: item.id)
+        let viewInfo2 = SQLiteCache.shared.getViewInfo(path: item.path)
+        let lastViewedDate = viewInfo1.lastViewedAt ?? viewInfo2.lastViewedAt
+        let effectiveViewCount = max(viewInfo1.viewCount, viewInfo2.viewCount)
+
+        let lastViewedStr: String
+        if let date = lastViewedDate {
+            let formatter = DateFormatter()
+            formatter.dateStyle = .medium
+            formatter.timeStyle = .medium
+            lastViewedStr = formatter.string(from: date)
+        } else {
+            lastViewedStr = "Never"
+        }
+
+        let sizeFormatted = ByteCountFormatter.string(fromByteCount: Int64(item.fileSize), countStyle: .file)
+        let fullPathStr = item.path
+
+        let alert = NSAlert()
+        alert.messageText = item.name
+        alert.informativeText = """
+        Full Path:
+        \(fullPathStr)
+
+        File Size: \(sizeFormatted) (\(item.fileSize) bytes)
+        Last Viewed: \(lastViewedStr)
+        View Count: \(effectiveViewCount)
+        """
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
     }
 
     // SidebarDelegate

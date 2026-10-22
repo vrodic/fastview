@@ -272,6 +272,7 @@ public class SidebarTableCellView: NSTableCellView {
     private let thumbnailImageView = NSImageView()
     private let nameLabel = NSTextField(labelWithString: "")
     private let favoriteBadge = NSImageView()
+    private let checkmarkBadge = NSImageView()
     private var currentItem: FileItem?
 
     override public init(frame frameRect: NSRect) {
@@ -307,9 +308,18 @@ public class SidebarTableCellView: NSTableCellView {
         favoriteBadge.contentTintColor = NSColor.systemYellow
         favoriteBadge.isHidden = true
 
+        checkmarkBadge.translatesAutoresizingMaskIntoConstraints = false
+        checkmarkBadge.wantsLayer = true
+        checkmarkBadge.layer?.zPosition = 10
+        let checkImg = NSImage(systemSymbolName: "checkmark.circle.fill", accessibilityDescription: "Viewed")
+        checkmarkBadge.image = checkImg
+        checkmarkBadge.contentTintColor = NSColor.systemGreen
+        checkmarkBadge.isHidden = true
+
         addSubview(thumbnailImageView)
         addSubview(nameLabel)
         addSubview(favoriteBadge)
+        addSubview(checkmarkBadge)
 
         NSLayoutConstraint.activate([
             thumbnailImageView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
@@ -324,7 +334,12 @@ public class SidebarTableCellView: NSTableCellView {
             favoriteBadge.topAnchor.constraint(equalTo: topAnchor, constant: 6),
             favoriteBadge.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
             favoriteBadge.widthAnchor.constraint(equalToConstant: 22),
-            favoriteBadge.heightAnchor.constraint(equalToConstant: 22)
+            favoriteBadge.heightAnchor.constraint(equalToConstant: 22),
+
+            checkmarkBadge.topAnchor.constraint(equalTo: topAnchor, constant: 6),
+            checkmarkBadge.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 6),
+            checkmarkBadge.widthAnchor.constraint(equalToConstant: 22),
+            checkmarkBadge.heightAnchor.constraint(equalToConstant: 22)
         ])
     }
 
@@ -334,7 +349,11 @@ public class SidebarTableCellView: NSTableCellView {
 
         let isFav = SQLiteCache.shared.isFavorite(path: item.id) || SQLiteCache.shared.isFavorite(path: item.path)
         favoriteBadge.isHidden = !isFav
-        print("[SidebarCell] configure item '\(item.name)' (id: \(item.id)), isFav: \(isFav)")
+
+        let isViewed = SQLiteCache.shared.isViewed(path: item.id) || SQLiteCache.shared.isViewed(path: item.path)
+        checkmarkBadge.isHidden = !isViewed
+
+        print("[SidebarCell] configure item '\(item.name)' (id: \(item.id)), isFav: \(isFav), isViewed: \(isViewed)")
 
         let cacheKey = "thumb_\(item.id)_256.0x256.0"
         if let cached = MemoryLRUCache.shared.object(forKey: cacheKey) {
@@ -382,7 +401,11 @@ public class SidebarTableCellView: NSTableCellView {
 
         let isFav = currentItem.map { SQLiteCache.shared.isFavorite(path: $0.id) || SQLiteCache.shared.isFavorite(path: $0.path) } ?? false
         favoriteBadge.isHidden = !isFav
-        print("[SidebarCell] setThumbnailLoaded item '\(currentItem?.name ?? "")', isFav: \(isFav)")
+
+        let isViewed = currentItem.map { SQLiteCache.shared.isViewed(path: $0.id) || SQLiteCache.shared.isViewed(path: $0.path) } ?? false
+        checkmarkBadge.isHidden = !isViewed
+
+        print("[SidebarCell] setThumbnailLoaded item '\(currentItem?.name ?? "")', isFav: \(isFav), isViewed: \(isViewed)")
     }
 
     private func showFilenameTextOnly() {

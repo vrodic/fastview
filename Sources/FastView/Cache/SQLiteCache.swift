@@ -55,8 +55,17 @@ public class SQLiteCache {
         );
         """
 
+        let createViewHistoryTable = """
+        CREATE TABLE IF NOT EXISTS view_history (
+            path TEXT PRIMARY KEY,
+            last_viewed_at REAL,
+            view_count INTEGER
+        );
+        """
+
         sqlite3_exec(db, createDirectoryTable, nil, nil, nil)
         sqlite3_exec(db, createFavoritesTable, nil, nil, nil)
+        sqlite3_exec(db, createViewHistoryTable, nil, nil, nil)
 
         // Ensure missing columns exist in case of legacy schema
         sqlite3_exec(db, "ALTER TABLE favorites ADD COLUMN item_json TEXT;", nil, nil, nil)
@@ -229,6 +238,94 @@ public class SQLiteCache {
             }
         }
         sqlite3_finalize(statement)
+    }
+
+    public struct ViewInfo {
+        public let lastViewedAt: Date?
+        public let viewCount: Int
+
+        public init(lastViewedAt: Date?, viewCount: Int) {
+            self.lastViewedAt = lastViewedAt
+            self.viewCount = viewCount
+        }
+    }
+
+    public func recordView(item: FileItem) {
+        lock.lock()
+        defer { lock.unlock() }
+
+        guard db != nil else { return }
+
+        let keysToUpdate = Array(Set([item.id, item.path])).filter { !$0.isEmpty }
+        let now = Date().timeIntervalSince1970
+
+        for key in keysToUpdate {
+            var currentCount = 0
+            let querySelect = "SELECT view_count FROM view_history WHERE path = ?;"
+            var stmtSelect: OpaquePointer?
+            if sqlite3_prepare_v2(db, querySelect, -1, &stmtSelect, nil) == SQLITE_OK {
+                sqlite3_bind_text(stmtSelect, 1, key, -1, SQLITE_TRANSIENT)
+                if sqlite3_step(stmtSelect) == SQLITE_ROW {
+                    currentCount = Int(sqlite3_column_int64(stmtSelect, 0))
+                }
+            }
+            sqlite3_finalize(stmtSelect)
+
+            let newCount = currentCount + 1
+            let insertQuery = "INSERT OR REPLACE INTO view_history (path, last_viewed_at, view_count) VALUES (?, ?, ?);"
+            var stmtInsert: OpaquePointer?
+            if sqlite3_prepare_v2(db, insertQuery, -1, &stmtInsert, nil) == SQLITE_OK {
+                sqlite3_bind_text(stmtInsert, 1, key, -1, SQLITE_TRANSIENT)
+                sqlite3_bind_double(stmtInsert, 2, now)
+                sqlite3_bind_int64(stmtInsert, 3, Int64(newCount))
+                sqlite3_step(stmtInsert)
+            }
+            sqlite3_finalize(stmtInsert)
+        }
+    }
+
+    public func isViewed(path: String) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return isViewedUnlocked(path: path)
+    }
+
+    private func isViewedUnlocked(path: String) -> Bool {
+        let query = "SELECT view_count FROM view_history WHERE path = ? AND view_count > 0;"
+        var statement: OpaquePointer?
+        var result = false
+        if sqlite3_prepare_v2(db, query, -1, &statement, nil) == SQLITE_OK {
+            sqlite3_bind_text(statement, 1, path, -1, SQLITE_TRANSIENT)
+            if sqlite3_step(statement) == SQLITE_ROW {
+                result = true
+            }
+        }
+        sqlite3_finalize(statement)
+        return result
+    }
+
+    public func getViewInfo(path: String) -> ViewInfo {
+        lock.lock()
+        defer { lock.unlock() }
+
+        let query = "SELECT last_viewed_at, view_count FROM view_history WHERE path = ?;"
+        var statement: OpaquePointer?
+        var lastViewed: Date? = nil
+        var viewCount = 0
+
+        if sqlite3_prepare_v2(db, query, -1, &statement, nil) == SQLITE_OK {
+            sqlite3_bind_text(statement, 1, path, -1, SQLITE_TRANSIENT)
+            if sqlite3_step(statement) == SQLITE_ROW {
+                let timestamp = sqlite3_column_double(statement, 0)
+                if timestamp > 0 {
+                    lastViewed = Date(timeIntervalSince1970: timestamp)
+                }
+                viewCount = Int(sqlite3_column_int64(statement, 1))
+            }
+        }
+        sqlite3_finalize(statement)
+
+        return ViewInfo(lastViewedAt: lastViewed, viewCount: viewCount)
     }
 
     public func clear() {

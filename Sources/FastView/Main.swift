@@ -8,6 +8,8 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     private static let lastPathKey = "FastViewLastOpenedPath"
     private static let lastSelectedItemKey = "FastViewLastSelectedItemPath"
     private static let lastSelectedItemIdKey = "FastViewLastSelectedItemId"
+    private static let recentCmdDirsKey = "FastViewRecentCmdLineDirs"
+    private var recentDirsMenu: NSMenu?
 
     public static func main() {
         let app = NSApplication.shared
@@ -37,6 +39,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         let targetItem = lastSavedSelectedItemId ?? lastSavedSelectedItem
 
         if CommandLine.arguments.count > 1, let suppliedPath = initialPath {
+            addRecentCommandLineDirectory(suppliedPath)
             let loc = NavigationManager.locationForPath(suppliedPath)
             saveLastOpenedPath(suppliedPath)
 
@@ -53,10 +56,8 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
             }
 
             DispatchQueue.main.async {
+                windowController.splitVC.showFavoritesOnly = false
                 windowController.splitVC.loadLocation(loc, targetSelectedItemPath: targetPath)
-                if isFavoritesMode {
-                    windowController.splitVC.showFavoritesOnly = true
-                }
             }
         } else if isFavoritesMode {
             DispatchQueue.main.async {
@@ -136,6 +137,17 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         let fileMenu = NSMenu(title: "File")
         fileMenuItem.submenu = fileMenu
         fileMenu.addItem(withTitle: "Open…", action: #selector(openDocument(_:)), keyEquivalent: "o")
+
+        let recentMenuItem = NSMenuItem(title: "Open Recent Directory", action: nil, keyEquivalent: "")
+        let recentSubMenu = NSMenu(title: "Open Recent Directory")
+        recentMenuItem.submenu = recentSubMenu
+        self.recentDirsMenu = recentSubMenu
+        rebuildRecentDirsMenu()
+        fileMenu.addItem(recentMenuItem)
+
+        let infoItem = NSMenuItem(title: "Show Info", action: #selector(showInfoAction(_:)), keyEquivalent: "i")
+        infoItem.keyEquivalentModifierMask = [.command]
+        fileMenu.addItem(infoItem)
         fileMenu.addItem(withTitle: "Toggle Favorite", action: #selector(toggleFavoriteAction(_:)), keyEquivalent: "f")
         fileMenu.addItem(withTitle: "Switch to All Mode", action: #selector(switchToAllModeAction(_:)), keyEquivalent: "l")
         fileMenu.addItem(NSMenuItem.separator())
@@ -148,7 +160,9 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         viewMenuItem.submenu = viewMenu
 
         viewMenu.addItem(withTitle: "Show All Items", action: #selector(showAllItemsAction(_:)), keyEquivalent: "")
-        viewMenu.addItem(withTitle: "Show Favorites Only", action: #selector(showFavoritesOnlyAction(_:)), keyEquivalent: "")
+        let favModeItem = NSMenuItem(title: "Show Favorites Only", action: #selector(showFavoritesOnlyAction(_:)), keyEquivalent: "f")
+        favModeItem.keyEquivalentModifierMask = [.option]
+        viewMenu.addItem(favModeItem)
         viewMenu.addItem(NSMenuItem.separator())
 
         let flattenItem = NSMenuItem(title: "Flatten Archive Directories", action: #selector(toggleFlattenArchivesAction(_:)), keyEquivalent: "")
@@ -199,7 +213,17 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         switchAllItem.keyEquivalentModifierMask = [.command]
         controlsMenu.addItem(switchAllItem)
 
-        // 5. Window Menu
+        // 5. Options Menu
+        let optionsMenuItem = NSMenuItem()
+        mainMenu.addItem(optionsMenuItem)
+        let optionsMenu = NSMenu(title: "Options")
+        optionsMenuItem.submenu = optionsMenu
+
+        let lowMemItem = NSMenuItem(title: "Low Memory Mode", action: #selector(toggleLowMemoryModeAction(_:)), keyEquivalent: "")
+        lowMemItem.state = MemoryLRUCache.shared.isLowMemoryMode ? .on : .off
+        optionsMenu.addItem(lowMemItem)
+
+        // 6. Window Menu
         let windowMenuItem = NSMenuItem()
         mainMenu.addItem(windowMenuItem)
         let windowMenu = NSMenu(title: "Window")
@@ -207,7 +231,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         windowMenu.addItem(withTitle: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
         windowMenu.addItem(withTitle: "Zoom", action: #selector(NSWindow.performZoom(_:)), keyEquivalent: "")
 
-        // 5. Help Menu
+        // 7. Help Menu
         let helpMenuItem = NSMenuItem()
         mainMenu.addItem(helpMenuItem)
         let helpMenu = NSMenu(title: "Help")
@@ -216,6 +240,13 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
 
         NSApp.mainMenu = mainMenu
         NSApp.windowsMenu = windowMenu
+    }
+
+    @objc private func toggleLowMemoryModeAction(_ sender: NSMenuItem) {
+        let newState = !MemoryLRUCache.shared.isLowMemoryMode
+        MemoryLRUCache.shared.isLowMemoryMode = newState
+        sender.state = newState ? .on : .off
+        print("[AppDelegate] Low Memory Mode set to \(newState)")
     }
 
     @objc private func openDocument(_ sender: Any?) {
@@ -234,6 +265,65 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.windowController?.splitVC.loadLocation(loc, targetSelectedItemPath: lastSavedSelectedItemId ?? lastSavedSelectedItem)
             }
         }
+    }
+
+    private func addRecentCommandLineDirectory(_ path: String) {
+        var isDir: ObjCBool = false
+        if FileManager.default.fileExists(atPath: path, isDirectory: &isDir) {
+            let dirPath: String
+            if isDir.boolValue {
+                dirPath = URL(fileURLWithPath: path).standardized.path
+            } else {
+                dirPath = URL(fileURLWithPath: path).deletingLastPathComponent().standardized.path
+            }
+
+            var recent = UserDefaults.standard.stringArray(forKey: AppDelegate.recentCmdDirsKey) ?? []
+            recent.removeAll(where: { $0 == dirPath })
+            recent.insert(dirPath, at: 0)
+            if recent.count > 10 {
+                recent = Array(recent.prefix(10))
+            }
+            UserDefaults.standard.set(recent, forKey: AppDelegate.recentCmdDirsKey)
+            rebuildRecentDirsMenu()
+        }
+    }
+
+    private func rebuildRecentDirsMenu() {
+        guard let menu = recentDirsMenu else { return }
+        menu.removeAllItems()
+
+        let recent = UserDefaults.standard.stringArray(forKey: AppDelegate.recentCmdDirsKey) ?? []
+
+        if recent.isEmpty {
+            let emptyItem = NSMenuItem(title: "No Recent Directories", action: nil, keyEquivalent: "")
+            emptyItem.isEnabled = false
+            menu.addItem(emptyItem)
+        } else {
+            for dirPath in recent {
+                let item = NSMenuItem(title: dirPath, action: #selector(openRecentCmdLineDirectoryAction(_:)), keyEquivalent: "")
+                item.representedObject = dirPath
+                menu.addItem(item)
+            }
+            menu.addItem(NSMenuItem.separator())
+            let clearItem = NSMenuItem(title: "Clear Menu", action: #selector(clearRecentCmdLineDirectoriesAction(_:)), keyEquivalent: "")
+            menu.addItem(clearItem)
+        }
+    }
+
+    @objc private func openRecentCmdLineDirectoryAction(_ sender: NSMenuItem) {
+        guard let path = sender.representedObject as? String ?? (sender.title.isEmpty ? nil : sender.title) else { return }
+        saveLastOpenedPath(path)
+        let loc = NavigationManager.locationForPath(path)
+        windowController?.splitVC.loadLocation(loc)
+    }
+
+    @objc private func clearRecentCmdLineDirectoriesAction(_ sender: Any?) {
+        UserDefaults.standard.set([], forKey: AppDelegate.recentCmdDirsKey)
+        rebuildRecentDirsMenu()
+    }
+
+    @objc private func showInfoAction(_ sender: Any?) {
+        windowController?.splitVC.showInfoForSelectedItem()
     }
 
     @objc private func toggleFavoriteAction(_ sender: Any?) {
@@ -256,7 +346,8 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func showFavoritesOnlyAction(_ sender: Any?) {
-        windowController?.splitVC.showFavoritesOnly = true
+        guard let splitVC = windowController?.splitVC else { return }
+        splitVC.showFavoritesOnly = !splitVC.showFavoritesOnly
     }
 
     @objc private func toggleFlattenArchivesAction(_ sender: NSMenuItem) {

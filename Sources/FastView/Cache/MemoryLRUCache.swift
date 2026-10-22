@@ -3,6 +3,7 @@ import AppKit
 
 public class MemoryLRUCache {
     public static let shared = MemoryLRUCache()
+    public static let lowMemoryModeKey = "FastViewLowMemoryMode"
 
     private class CacheEntry {
         let key: String
@@ -22,6 +23,18 @@ public class MemoryLRUCache {
     private var totalCost: Int = 0
     private let maxMemoryLimit: Int
     private let lock = NSLock()
+
+    public var isLowMemoryMode: Bool {
+        get {
+            return UserDefaults.standard.bool(forKey: MemoryLRUCache.lowMemoryModeKey)
+        }
+        set {
+            UserDefaults.standard.set(newValue, forKey: MemoryLRUCache.lowMemoryModeKey)
+            lock.lock()
+            evictIfNecessary()
+            lock.unlock()
+        }
+    }
 
     public init(memoryFraction: Double = 0.30) {
         let sysMemory = ProcessInfo.processInfo.physicalMemory
@@ -55,7 +68,8 @@ public class MemoryLRUCache {
     }
 
     private func evictIfNecessary() {
-        while totalCost > maxMemoryLimit && !cache.isEmpty {
+        let maxCount = isLowMemoryMode ? 10 : Int.max
+        while (totalCost > maxMemoryLimit || cache.count > maxCount) && !cache.isEmpty {
             guard let oldest = cache.values.min(by: { $0.lastAccessed < $1.lastAccessed }) else { break }
             cache.removeValue(forKey: oldest.key)
             totalCost -= oldest.cost
