@@ -7,11 +7,9 @@ public class SQLiteCache {
     public static let shared = SQLiteCache()
     private var db: OpaquePointer?
     private let lock = NSLock()
-    private var viewedKeysSet = Set<String>()
 
     public init() {
         setupDatabase()
-        loadViewedKeysCache()
     }
 
     deinit {
@@ -60,17 +58,23 @@ public class SQLiteCache {
         );
         """
 
-        let createViewHistoryTable = """
-        CREATE TABLE IF NOT EXISTS view_history (
+        let createViewNodesTable = """
+        CREATE TABLE IF NOT EXISTS view_nodes (
             path TEXT PRIMARY KEY,
+            parent_path TEXT,
+            name TEXT,
+            is_directory INTEGER,
             last_viewed_at INTEGER,
             view_count INTEGER
         ) WITHOUT ROWID;
         """
 
+        let createParentIndex = "CREATE INDEX IF NOT EXISTS idx_view_nodes_parent ON view_nodes(parent_path);"
+
         sqlite3_exec(db, createDirectoryTable, nil, nil, nil)
         sqlite3_exec(db, createFavoritesTable, nil, nil, nil)
-        sqlite3_exec(db, createViewHistoryTable, nil, nil, nil)
+        sqlite3_exec(db, createViewNodesTable, nil, nil, nil)
+        sqlite3_exec(db, createParentIndex, nil, nil, nil)
 
         // Ensure missing columns exist in case of legacy schema
         sqlite3_exec(db, "ALTER TABLE favorites ADD COLUMN item_json TEXT;", nil, nil, nil)
@@ -79,22 +83,97 @@ public class SQLiteCache {
         print("[SQLiteCache] Database initialized at \(dbPath)")
     }
 
-    private func loadViewedKeysCache() {
+    public struct PathNode {
+        public let path: String
+        public let parentPath: String
+        public let name: String
+        public let isDirectory: Bool
+    }
+
+    public static func decomposeHierarchy(for item: FileItem) -> [PathNode] {
+        var result: [PathNode] = []
+
+        if let archivePath = item.archivePath, !archivePath.isEmpty {
+            let archiveNodes = decomposePathString(archivePath, isLeafDirectory: true)
+            result.append(contentsOf: archiveNodes)
+
+            let entryClean = item.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            let components = entryClean.components(separatedBy: "/").filter { !$0.isEmpty }
+
+            var currentParent = archivePath
+            for (idx, comp) in components.enumerated() {
+                let isLast = (idx == components.count - 1)
+                let nodeIsDirectory = isLast ? item.isDirectory : true
+                let nodePath = "\(currentParent)#\(comp)"
+                result.append(PathNode(path: nodePath, parentPath: currentParent, name: comp, isDirectory: nodeIsDirectory))
+                currentParent = nodePath
+            }
+        } else {
+            let nodes = decomposePathString(item.path, isLeafDirectory: item.isDirectory)
+            result.append(contentsOf: nodes)
+        }
+
+        return result
+    }
+
+    private static func decomposePathString(_ fullPath: String, isLeafDirectory: Bool) -> [PathNode] {
+        let normPath = URL(fileURLWithPath: fullPath).standardized.path
+        let components = normPath.components(separatedBy: "/").filter { !$0.isEmpty }
+        var result: [PathNode] = []
+
+        var currentPath = ""
+        var currentParent = ""
+
+        for (idx, comp) in components.enumerated() {
+            currentPath = currentParent.isEmpty ? "/\(comp)" : "\(currentParent)/\(comp)"
+            let isLast = (idx == components.count - 1)
+            let nodeIsDirectory = isLast ? isLeafDirectory : true
+            result.append(PathNode(path: currentPath, parentPath: currentParent, name: comp, isDirectory: nodeIsDirectory))
+            currentParent = currentPath
+        }
+
+        return result
+    }
+
+    public func registerLocationItems(items: [FileItem]) {
         lock.lock()
         defer { lock.unlock() }
 
         guard db != nil else { return }
-        let query = "SELECT path FROM view_history WHERE view_count > 0;"
-        var statement: OpaquePointer?
-        if sqlite3_prepare_v2(db, query, -1, &statement, nil) == SQLITE_OK {
-            while sqlite3_step(statement) == SQLITE_ROW {
-                if let cString = sqlite3_column_text(statement, 0) {
-                    let p = String(cString: cString)
-                    viewedKeysSet.insert(p)
-                }
+
+        for item in items {
+            if item.type == .parentDirectory { continue }
+            let nodes = SQLiteCache.decomposeHierarchy(for: item)
+            for node in nodes {
+                insertNodeIfMissing(node: node)
             }
         }
-        sqlite3_finalize(statement)
+    }
+
+    private func insertNodeIfMissing(node: PathNode) {
+        let selectQuery = "SELECT view_count FROM view_nodes WHERE path = ?;"
+        var stmtSelect: OpaquePointer?
+        var exists = false
+        if sqlite3_prepare_v2(db, selectQuery, -1, &stmtSelect, nil) == SQLITE_OK {
+            sqlite3_bind_text(stmtSelect, 1, node.path, -1, SQLITE_TRANSIENT)
+            if sqlite3_step(stmtSelect) == SQLITE_ROW {
+                exists = true
+            }
+        }
+        sqlite3_finalize(stmtSelect)
+
+        if !exists {
+            let insertQuery = "INSERT OR IGNORE INTO view_nodes (path, parent_path, name, is_directory, last_viewed_at, view_count) VALUES (?, ?, ?, ?, 0, 0);"
+            var stmtInsert: OpaquePointer?
+            if sqlite3_prepare_v2(db, insertQuery, -1, &stmtInsert, nil) == SQLITE_OK {
+                sqlite3_bind_text(stmtInsert, 1, node.path, -1, SQLITE_TRANSIENT)
+                sqlite3_bind_text(stmtInsert, 2, node.parentPath, -1, SQLITE_TRANSIENT)
+                sqlite3_bind_text(stmtInsert, 3, node.name, -1, SQLITE_TRANSIENT)
+                sqlite3_bind_int(stmtInsert, 4, node.isDirectory ? 1 : 0)
+                sqlite3_step(stmtInsert)
+            }
+            sqlite3_finalize(stmtInsert)
+        }
     }
 
     public func isFavorite(path: String) -> Bool {
@@ -279,38 +358,110 @@ public class SQLiteCache {
 
         guard db != nil else { return }
 
-        var keysToUpdateSet = Set([item.id, item.path])
-        if let archivePath = item.archivePath, !archivePath.isEmpty {
-            keysToUpdateSet.insert("\(archivePath) / \(item.path)")
-            keysToUpdateSet.insert("\(archivePath)#\(item.path)")
+        let nodes = SQLiteCache.decomposeHierarchy(for: item)
+        guard let leafNode = nodes.last else { return }
+
+        for node in nodes {
+            insertNodeIfMissing(node: node)
         }
-        let keysToUpdate = Array(keysToUpdateSet).filter { !$0.isEmpty }
+
         let nowInt = Int64(Date().timeIntervalSince1970)
 
-        for key in keysToUpdate {
-            viewedKeysSet.insert(key)
+        var currentCount = 0
+        let querySelect = "SELECT view_count FROM view_nodes WHERE path = ?;"
+        var stmtSelect: OpaquePointer?
+        if sqlite3_prepare_v2(db, querySelect, -1, &stmtSelect, nil) == SQLITE_OK {
+            sqlite3_bind_text(stmtSelect, 1, leafNode.path, -1, SQLITE_TRANSIENT)
+            if sqlite3_step(stmtSelect) == SQLITE_ROW {
+                currentCount = Int(sqlite3_column_int64(stmtSelect, 0))
+            }
+        }
+        sqlite3_finalize(stmtSelect)
 
-            var currentCount = 0
-            let querySelect = "SELECT view_count FROM view_history WHERE path = ?;"
-            var stmtSelect: OpaquePointer?
-            if sqlite3_prepare_v2(db, querySelect, -1, &stmtSelect, nil) == SQLITE_OK {
-                sqlite3_bind_text(stmtSelect, 1, key, -1, SQLITE_TRANSIENT)
-                if sqlite3_step(stmtSelect) == SQLITE_ROW {
-                    currentCount = Int(sqlite3_column_int64(stmtSelect, 0))
+        let newCount = currentCount + 1
+
+        let updateLeaf = "UPDATE view_nodes SET last_viewed_at = ?, view_count = ? WHERE path = ?;"
+        var stmtUpdate: OpaquePointer?
+        if sqlite3_prepare_v2(db, updateLeaf, -1, &stmtUpdate, nil) == SQLITE_OK {
+            sqlite3_bind_int64(stmtUpdate, 1, nowInt)
+            sqlite3_bind_int64(stmtUpdate, 2, Int64(newCount))
+            sqlite3_bind_text(stmtUpdate, 3, leafNode.path, -1, SQLITE_TRANSIENT)
+            sqlite3_step(stmtUpdate)
+        }
+        sqlite3_finalize(stmtUpdate)
+
+        let altKeys = [item.id, item.path, "\(item.archivePath ?? "") / \(item.path)"].filter { !$0.isEmpty && $0 != leafNode.path }
+        for altKey in altKeys {
+            let altNode = PathNode(path: altKey, parentPath: leafNode.parentPath, name: leafNode.name, isDirectory: false)
+            insertNodeIfMissing(node: altNode)
+            var stmtAlt: OpaquePointer?
+            if sqlite3_prepare_v2(db, updateLeaf, -1, &stmtAlt, nil) == SQLITE_OK {
+                sqlite3_bind_int64(stmtAlt, 1, nowInt)
+                sqlite3_bind_int64(stmtAlt, 2, Int64(newCount))
+                sqlite3_bind_text(stmtAlt, 3, altKey, -1, SQLITE_TRANSIENT)
+                sqlite3_step(stmtAlt)
+            }
+            sqlite3_finalize(stmtAlt)
+        }
+
+        var currentParentPath = leafNode.parentPath
+        while !currentParentPath.isEmpty {
+            let childQuery = "SELECT view_count, last_viewed_at FROM view_nodes WHERE parent_path = ?;"
+            var stmtChild: OpaquePointer?
+            var allChildrenViewed = true
+            var childCount = 0
+            var maxChildLastViewed: Int64 = 0
+
+            if sqlite3_prepare_v2(db, childQuery, -1, &stmtChild, nil) == SQLITE_OK {
+                sqlite3_bind_text(stmtChild, 1, currentParentPath, -1, SQLITE_TRANSIENT)
+                while sqlite3_step(stmtChild) == SQLITE_ROW {
+                    childCount += 1
+                    let vCount = sqlite3_column_int64(stmtChild, 0)
+                    let vDate = sqlite3_column_int64(stmtChild, 1)
+                    if vCount == 0 {
+                        allChildrenViewed = false
+                    }
+                    if vDate > maxChildLastViewed {
+                        maxChildLastViewed = vDate
+                    }
                 }
             }
-            sqlite3_finalize(stmtSelect)
+            sqlite3_finalize(stmtChild)
 
-            let newCount = currentCount + 1
-            let insertQuery = "INSERT OR REPLACE INTO view_history (path, last_viewed_at, view_count) VALUES (?, ?, ?);"
-            var stmtInsert: OpaquePointer?
-            if sqlite3_prepare_v2(db, insertQuery, -1, &stmtInsert, nil) == SQLITE_OK {
-                sqlite3_bind_text(stmtInsert, 1, key, -1, SQLITE_TRANSIENT)
-                sqlite3_bind_int64(stmtInsert, 2, nowInt)
-                sqlite3_bind_int64(stmtInsert, 3, Int64(newCount))
-                sqlite3_step(stmtInsert)
+            if childCount > 0 && allChildrenViewed {
+                let updateParent = "UPDATE view_nodes SET view_count = 1, last_viewed_at = ? WHERE path = ?;"
+                var stmtParent: OpaquePointer?
+                if sqlite3_prepare_v2(db, updateParent, -1, &stmtParent, nil) == SQLITE_OK {
+                    sqlite3_bind_int64(stmtParent, 1, maxChildLastViewed)
+                    sqlite3_bind_text(stmtParent, 2, currentParentPath, -1, SQLITE_TRANSIENT)
+                    sqlite3_step(stmtParent)
+                }
+                sqlite3_finalize(stmtParent)
+            } else {
+                let resetParent = "UPDATE view_nodes SET view_count = 0 WHERE path = ?;"
+                var stmtReset: OpaquePointer?
+                if sqlite3_prepare_v2(db, resetParent, -1, &stmtReset, nil) == SQLITE_OK {
+                    sqlite3_bind_text(stmtReset, 1, currentParentPath, -1, SQLITE_TRANSIENT)
+                    sqlite3_step(stmtReset)
+                }
+                sqlite3_finalize(stmtReset)
             }
-            sqlite3_finalize(stmtInsert)
+
+            var nextParent = ""
+            let parentLookup = "SELECT parent_path FROM view_nodes WHERE path = ?;"
+            var stmtPLookup: OpaquePointer?
+            if sqlite3_prepare_v2(db, parentLookup, -1, &stmtPLookup, nil) == SQLITE_OK {
+                sqlite3_bind_text(stmtPLookup, 1, currentParentPath, -1, SQLITE_TRANSIENT)
+                if sqlite3_step(stmtPLookup) == SQLITE_ROW {
+                    if let cStr = sqlite3_column_text(stmtPLookup, 0) {
+                        nextParent = String(cString: cStr)
+                    }
+                }
+            }
+            sqlite3_finalize(stmtPLookup)
+
+            if nextParent == currentParentPath { break }
+            currentParentPath = nextParent
         }
     }
 
@@ -318,22 +469,10 @@ public class SQLiteCache {
         lock.lock()
         defer { lock.unlock() }
 
-        if viewedKeysSet.contains(path) { return true }
-        if path.contains("#") {
-            let alt = path.replacingOccurrences(of: "#", with: " / ")
-            if viewedKeysSet.contains(alt) { return true }
-        } else if path.contains(" / ") {
-            let alt = path.replacingOccurrences(of: " / ", with: "#")
-            if viewedKeysSet.contains(alt) { return true }
-        }
-        return false
-    }
-
-    private func isViewedUnlocked(path: String) -> Bool {
-        if viewedKeysSet.contains(path) { return true }
-        let query = "SELECT view_count FROM view_history WHERE path = ? AND view_count > 0;"
+        let query = "SELECT view_count FROM view_nodes WHERE path = ? AND view_count > 0;"
         var statement: OpaquePointer?
         var result = false
+
         if sqlite3_prepare_v2(db, query, -1, &statement, nil) == SQLITE_OK {
             sqlite3_bind_text(statement, 1, path, -1, SQLITE_TRANSIENT)
             if sqlite3_step(statement) == SQLITE_ROW {
@@ -341,6 +480,29 @@ public class SQLiteCache {
             }
         }
         sqlite3_finalize(statement)
+
+        if !result {
+            let altKey: String
+            if path.contains("#") {
+                altKey = path.replacingOccurrences(of: "#", with: " / ")
+            } else if path.contains(" / ") {
+                altKey = path.replacingOccurrences(of: " / ", with: "#")
+            } else {
+                altKey = ""
+            }
+
+            if !altKey.isEmpty {
+                var stmtAlt: OpaquePointer?
+                if sqlite3_prepare_v2(db, query, -1, &stmtAlt, nil) == SQLITE_OK {
+                    sqlite3_bind_text(stmtAlt, 1, altKey, -1, SQLITE_TRANSIENT)
+                    if sqlite3_step(stmtAlt) == SQLITE_ROW {
+                        result = true
+                    }
+                }
+                sqlite3_finalize(stmtAlt)
+            }
+        }
+
         return result
     }
 
@@ -348,7 +510,7 @@ public class SQLiteCache {
         lock.lock()
         defer { lock.unlock() }
 
-        let query = "SELECT last_viewed_at, view_count FROM view_history WHERE path = ?;"
+        let query = "SELECT last_viewed_at, view_count FROM view_nodes WHERE path = ?;"
         var statement: OpaquePointer?
         var lastViewed: Date? = nil
         var viewCount = 0
@@ -356,9 +518,9 @@ public class SQLiteCache {
         if sqlite3_prepare_v2(db, query, -1, &statement, nil) == SQLITE_OK {
             sqlite3_bind_text(statement, 1, path, -1, SQLITE_TRANSIENT)
             if sqlite3_step(statement) == SQLITE_ROW {
-                let timestamp = sqlite3_column_double(statement, 0)
+                let timestamp = sqlite3_column_int64(statement, 0)
                 if timestamp > 0 {
-                    lastViewed = Date(timeIntervalSince1970: timestamp)
+                    lastViewed = Date(timeIntervalSince1970: TimeInterval(timestamp))
                 }
                 viewCount = Int(sqlite3_column_int64(statement, 1))
             }

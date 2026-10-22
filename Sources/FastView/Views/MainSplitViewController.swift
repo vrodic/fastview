@@ -191,6 +191,7 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
 
             DispatchQueue.main.async {
                 if workItem.isCancelled { return }
+                SQLiteCache.shared.registerLocationItems(items: items)
                 self.sidebarVC.setItems(items, selectFirst: targetSelectedItemPath == nil)
 
                 if let targetPath = targetSelectedItemPath,
