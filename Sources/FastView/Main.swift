@@ -53,10 +53,8 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
             }
 
             DispatchQueue.main.async {
+                windowController.splitVC.showFavoritesOnly = false
                 windowController.splitVC.loadLocation(loc, targetSelectedItemPath: targetPath)
-                if isFavoritesMode {
-                    windowController.splitVC.showFavoritesOnly = true
-                }
             }
         } else if isFavoritesMode {
             DispatchQueue.main.async {
@@ -136,6 +134,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         let fileMenu = NSMenu(title: "File")
         fileMenuItem.submenu = fileMenu
         fileMenu.addItem(withTitle: "Open…", action: #selector(openDocument(_:)), keyEquivalent: "o")
+        fileMenu.addItem(withTitle: "Show Info", action: #selector(showInfoAction(_:)), keyEquivalent: "i")
         fileMenu.addItem(withTitle: "Toggle Favorite", action: #selector(toggleFavoriteAction(_:)), keyEquivalent: "f")
         fileMenu.addItem(withTitle: "Switch to All Mode", action: #selector(switchToAllModeAction(_:)), keyEquivalent: "l")
         fileMenu.addItem(NSMenuItem.separator())
@@ -154,6 +153,10 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         let flattenItem = NSMenuItem(title: "Flatten Archive Directories", action: #selector(toggleFlattenArchivesAction(_:)), keyEquivalent: "")
         flattenItem.state = ArchiveReader.flattenArchiveDirectories ? .on : .off
         viewMenu.addItem(flattenItem)
+
+        let lowMemItem = NSMenuItem(title: "Low Memory Mode", action: #selector(toggleLowMemoryModeAction(_:)), keyEquivalent: "")
+        lowMemItem.state = MemoryLRUCache.shared.isLowMemoryMode ? .on : .off
+        viewMenu.addItem(lowMemItem)
 
         viewMenu.addItem(NSMenuItem.separator())
         viewMenu.addItem(withTitle: "Zoom In", action: #selector(zoomInAction), keyEquivalent: "+")
@@ -195,6 +198,10 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         favItem.keyEquivalentModifierMask = [.command]
         controlsMenu.addItem(favItem)
 
+        let toggleFavModeItem = NSMenuItem(title: "Toggle Favorites Mode", action: #selector(toggleFavoritesModeAction(_:)), keyEquivalent: "f")
+        toggleFavModeItem.keyEquivalentModifierMask = [.option]
+        controlsMenu.addItem(toggleFavModeItem)
+
         let switchAllItem = NSMenuItem(title: "Switch to All Mode", action: #selector(switchToAllModeAction(_:)), keyEquivalent: "l")
         switchAllItem.keyEquivalentModifierMask = [.command]
         controlsMenu.addItem(switchAllItem)
@@ -216,6 +223,10 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
 
         NSApp.mainMenu = mainMenu
         NSApp.windowsMenu = windowMenu
+    }
+
+    @objc private func showInfoAction(_ sender: Any?) {
+        windowController?.splitVC.showInfoForSelectedItem()
     }
 
     @objc private func openDocument(_ sender: Any?) {
@@ -259,6 +270,11 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         windowController?.splitVC.showFavoritesOnly = true
     }
 
+    @objc private func toggleFavoritesModeAction(_ sender: Any?) {
+        guard let splitVC = windowController?.splitVC else { return }
+        splitVC.showFavoritesOnly = !splitVC.showFavoritesOnly
+    }
+
     @objc private func toggleFlattenArchivesAction(_ sender: NSMenuItem) {
         let newState = !ArchiveReader.flattenArchiveDirectories
         ArchiveReader.flattenArchiveDirectories = newState
@@ -266,6 +282,12 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         DirectoryCache.shared.clear()
         SQLiteCache.shared.clear()
         windowController?.splitVC.reloadDirectoryContentsPublic()
+    }
+
+    @objc private func toggleLowMemoryModeAction(_ sender: NSMenuItem) {
+        let newState = !MemoryLRUCache.shared.isLowMemoryMode
+        MemoryLRUCache.shared.isLowMemoryMode = newState
+        sender.state = newState ? .on : .off
     }
 
     @objc private func nextImageAction() {

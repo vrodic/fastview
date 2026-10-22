@@ -150,7 +150,21 @@ public class ThumbnailGenerator {
             }
         }
 
-        return findPreferredArchiveImage(in: entries)
+        if let preferred = findPreferredArchiveImage(in: entries) {
+            return preferred
+        }
+
+        // If no direct image was found, recursively peek into subdirectories / sub-archives sorted naturally
+        let subItems = entries.filter { $0.isDirectory || $0.type == .archiveZip || $0.type == .archiveRar }
+            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+
+        for subItem in subItems {
+            if let found = peekFirstImage(in: subItem) {
+                return found
+            }
+        }
+
+        return nil
     }
 
     private func findPreferredArchiveImage(in items: [FileItem]) -> FileItem? {
