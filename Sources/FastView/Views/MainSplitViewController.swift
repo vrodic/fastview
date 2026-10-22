@@ -189,6 +189,8 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
 
             let imageItems = items.filter { $0.type == .image }
 
+            SQLiteCache.shared.preloadFolderViewStatus(locationPath: path)
+
             DispatchQueue.global(qos: .utility).async {
                 SQLiteCache.shared.registerLocationItems(items: items)
             }
@@ -392,64 +394,7 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
     }
 
     private func checkAndMarkDirectoryViewedIfComplete() {
-        guard let navMgr = navigationManager else { return }
-        let location = navMgr.currentLocation
-        let locPath = location.physicalPath
-        guard !locPath.isEmpty else { return }
-
-        if SQLiteCache.shared.isViewed(path: locPath) { return }
-
-        let currentImageItems = sidebarVC.items.filter { $0.type == .image }
-        if currentImageItems.isEmpty { return }
-
-        let anyUnviewed = currentImageItems.contains { item in
-            !SQLiteCache.shared.isViewed(item: item)
-        }
-        if anyUnviewed { return }
-
-        DispatchQueue.global(qos: .utility).async { [weak self] in
-            guard let self = self else { return }
-
-            let allFilesToVerify: [FileItem]
-            if location.isArchive {
-                let archivePath = location.physicalPath
-                let archiveType = location.archiveType
-                if archiveType == .archiveZip {
-                    allFilesToVerify = ArchiveReader.listAllZipImages(archivePath: archivePath)
-                } else if archiveType == .archiveRar {
-                    allFilesToVerify = ArchiveReader.listAllRarImages(archivePath: archivePath)
-                } else {
-                    allFilesToVerify = []
-                }
-            } else {
-                allFilesToVerify = navMgr.contents().filter { $0.type == .image }
-            }
-
-            guard !allFilesToVerify.isEmpty else { return }
-
-            let allViewed = allFilesToVerify.allSatisfy { item in
-                SQLiteCache.shared.isViewed(item: item)
-            }
-
-            if allViewed {
-                let dirItem = FileItem(
-                    id: locPath,
-                    name: (locPath as NSString).lastPathComponent,
-                    path: locPath,
-                    type: location.isArchive ? (location.archiveType ?? .directory) : .directory,
-                    archivePath: nil,
-                    isDirectory: true,
-                    fileSize: 0,
-                    entryParentDir: nil
-                )
-                SQLiteCache.shared.recordView(item: dirItem)
-                print("[MainSplitVC] All \(allFilesToVerify.count) files in location '\(locPath)' viewed! Marked location as viewed.")
-
-                DispatchQueue.main.async {
-                    self.sidebarVC.reloadSelectedRow()
-                }
-            }
-        }
+        // Parent folder/archive completion status is calculated natively in SQLiteCache.recordView via parent_id relationships
     }
 
     public func showInfoForSelectedItem() {

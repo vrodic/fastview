@@ -11,6 +11,7 @@ public class SQLiteCache {
     private var parentNodeIdCache = [String: Int64]()
     private var parentChildNodeCache = [Int64: [String: Int64]]()
     private var viewedNodeIdsSet = Set<Int64>()
+    private var currentFolderViewMap = [String: Bool]()
 
     public init() {
         setupDatabase()
@@ -99,6 +100,32 @@ public class SQLiteCache {
             while sqlite3_step(stmt) == SQLITE_ROW {
                 let id = sqlite3_column_int64(stmt, 0)
                 viewedNodeIdsSet.insert(id)
+            }
+        }
+        sqlite3_finalize(stmt)
+    }
+
+    public func preloadFolderViewStatus(locationPath: String) {
+        lock.lock()
+        defer { lock.unlock() }
+
+        currentFolderViewMap.removeAll()
+        guard db != nil, !locationPath.isEmpty else { return }
+
+        let parentComps = SQLiteCache.decomposePathString(locationPath, isLeafDirectory: true)
+        let pId = ensureNodeHierarchy(for: parentComps)
+        guard pId > 0 else { return }
+
+        let query = "SELECT name, view_count FROM view_nodes WHERE parent_id = ?;"
+        var stmt: OpaquePointer?
+        if sqlite3_prepare_v2(db, query, -1, &stmt, nil) == SQLITE_OK {
+            sqlite3_bind_int64(stmt, 1, pId)
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                if let cStr = sqlite3_column_text(stmt, 0) {
+                    let name = String(cString: cStr)
+                    let vCount = sqlite3_column_int64(stmt, 1)
+                    currentFolderViewMap[name] = (vCount > 0)
+                }
             }
         }
         sqlite3_finalize(stmt)
@@ -567,6 +594,8 @@ public class SQLiteCache {
         }
         sqlite3_finalize(stmtUpdate)
 
+        currentFolderViewMap[item.name] = (newCount > 0)
+
         if newCount > 0 {
             viewedNodeIdsSet.insert(leafId)
         }
@@ -639,6 +668,10 @@ public class SQLiteCache {
     public func isViewed(item: FileItem) -> Bool {
         lock.lock()
         defer { lock.unlock() }
+
+        if let cached = currentFolderViewMap[item.name] {
+            return cached
+        }
 
         if let nodeId = resolveChildNodeId(for: item) {
             return viewedNodeIdsSet.contains(nodeId)
