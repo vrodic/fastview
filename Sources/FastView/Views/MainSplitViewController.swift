@@ -386,28 +386,48 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
     }
 
     private func checkAndMarkDirectoryViewedIfComplete() {
-        let items = sidebarVC.items
-        let imageItems = items.filter { $0.type == .image }
-        guard !imageItems.isEmpty else { return }
+        guard let navMgr = navigationManager else { return }
+        let location = navMgr.currentLocation
 
-        let allViewed = imageItems.allSatisfy { item in
-            SQLiteCache.shared.isViewed(path: item.id) || SQLiteCache.shared.isViewed(path: item.path)
+        let allFilesToVerify: [FileItem]
+
+        if location.isArchive {
+            let archivePath = location.physicalPath
+            let archiveType = location.archiveType
+            if archiveType == .archiveZip {
+                allFilesToVerify = ArchiveReader.listAllZipImages(archivePath: archivePath)
+            } else if archiveType == .archiveRar {
+                allFilesToVerify = ArchiveReader.listAllRarImages(archivePath: archivePath)
+            } else {
+                allFilesToVerify = []
+            }
+        } else {
+            allFilesToVerify = navMgr.contents().filter { $0.type == .image }
+        }
+
+        guard !allFilesToVerify.isEmpty else { return }
+
+        let allViewed = allFilesToVerify.allSatisfy { item in
+            SQLiteCache.shared.isViewed(path: item.id) ||
+            SQLiteCache.shared.isViewed(path: item.path) ||
+            (item.archivePath != nil ? SQLiteCache.shared.isViewed(path: "\(item.archivePath!) / \(item.path)") : false)
         }
 
         if allViewed {
-            if let locPath = currentLocationPath, !locPath.isEmpty {
+            let locPath = location.physicalPath
+            if !locPath.isEmpty {
                 let dirItem = FileItem(
                     id: locPath,
                     name: (locPath as NSString).lastPathComponent,
                     path: locPath,
-                    type: .directory,
+                    type: location.isArchive ? (location.archiveType ?? .directory) : .directory,
                     archivePath: nil,
                     isDirectory: true,
                     fileSize: 0,
                     entryParentDir: nil
                 )
                 SQLiteCache.shared.recordView(item: dirItem)
-                print("[MainSplitVC] All \(imageItems.count) images in location '\(locPath)' viewed! Directory marked as viewed.")
+                print("[MainSplitVC] All \(allFilesToVerify.count) files in location '\(locPath)' viewed! Marked location as viewed.")
             }
         }
     }
