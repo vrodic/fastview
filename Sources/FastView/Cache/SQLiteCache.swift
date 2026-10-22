@@ -256,7 +256,12 @@ public class SQLiteCache {
 
         guard db != nil else { return }
 
-        let keysToUpdate = Array(Set([item.id, item.path])).filter { !$0.isEmpty }
+        var keysToUpdateSet = Set([item.id, item.path])
+        if let archivePath = item.archivePath, !archivePath.isEmpty {
+            keysToUpdateSet.insert("\(archivePath) / \(item.path)")
+            keysToUpdateSet.insert("\(archivePath)#\(item.path)")
+        }
+        let keysToUpdate = Array(keysToUpdateSet).filter { !$0.isEmpty }
         let now = Date().timeIntervalSince1970
 
         for key in keysToUpdate {

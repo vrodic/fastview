@@ -347,6 +347,7 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
 
             if let image = image {
                 SQLiteCache.shared.recordView(item: item)
+                self.checkAndMarkDirectoryViewedIfComplete()
 
                 let duration = CFAbsoluteTimeGetCurrent() - readStartTime
                 if duration > 0 && item.fileSize > 0 {
@@ -384,6 +385,33 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         }
     }
 
+    private func checkAndMarkDirectoryViewedIfComplete() {
+        let items = sidebarVC.items
+        let imageItems = items.filter { $0.type == .image }
+        guard !imageItems.isEmpty else { return }
+
+        let allViewed = imageItems.allSatisfy { item in
+            SQLiteCache.shared.isViewed(path: item.id) || SQLiteCache.shared.isViewed(path: item.path)
+        }
+
+        if allViewed {
+            if let locPath = currentLocationPath, !locPath.isEmpty {
+                let dirItem = FileItem(
+                    id: locPath,
+                    name: (locPath as NSString).lastPathComponent,
+                    path: locPath,
+                    type: .directory,
+                    archivePath: nil,
+                    isDirectory: true,
+                    fileSize: 0,
+                    entryParentDir: nil
+                )
+                SQLiteCache.shared.recordView(item: dirItem)
+                print("[MainSplitVC] All \(imageItems.count) images in location '\(locPath)' viewed! Directory marked as viewed.")
+            }
+        }
+    }
+
     public func showInfoForSelectedItem() {
         guard let item = sidebarVC.selectedItem else {
             let alert = NSAlert()
@@ -411,20 +439,86 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         }
 
         let sizeFormatted = ByteCountFormatter.string(fromByteCount: Int64(item.fileSize), countStyle: .file)
-        let fullPathStr = item.path
+
+        let fullPathStr: String
+        if let archivePath = item.archivePath, !archivePath.isEmpty {
+            fullPathStr = "\(archivePath) / \(item.path)"
+        } else {
+            fullPathStr = item.path
+        }
 
         let alert = NSAlert()
-        alert.messageText = item.name
-        alert.informativeText = """
-        Full Path:
-        \(fullPathStr)
-
-        File Size: \(sizeFormatted) (\(item.fileSize) bytes)
-        Last Viewed: \(lastViewedStr)
-        View Count: \(effectiveViewCount)
-        """
+        alert.messageText = "File Information"
         alert.alertStyle = .informational
         alert.addButton(withTitle: "OK")
+
+        let containerWidth: CGFloat = 550
+        let stackView = NSStackView()
+        stackView.orientation = .vertical
+        stackView.alignment = .leading
+        stackView.spacing = 10
+        stackView.translatesAutoresizingMaskIntoConstraints = false
+
+        // Title / Name
+        let nameLabel = NSTextField(labelWithString: item.name)
+        nameLabel.font = NSFont.systemFont(ofSize: 15, weight: .bold)
+        nameLabel.lineBreakMode = .byTruncatingMiddle
+        nameLabel.isSelectable = true
+        stackView.addArrangedSubview(nameLabel)
+
+        // Path Section Header
+        let pathHeaderLabel = NSTextField(labelWithString: "Full Filesystem Path:")
+        pathHeaderLabel.font = NSFont.systemFont(ofSize: 12, weight: .semibold)
+        pathHeaderLabel.textColor = NSColor.secondaryLabelColor
+        stackView.addArrangedSubview(pathHeaderLabel)
+
+        // Path View (selectable text field with wrapping)
+        let pathTextField = NSTextField(wrappingLabelWithString: fullPathStr)
+        pathTextField.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
+        pathTextField.isSelectable = true
+        pathTextField.textColor = NSColor.labelColor
+        pathTextField.drawsBackground = true
+        pathTextField.backgroundColor = NSColor.controlBackgroundColor
+        pathTextField.isBezeled = true
+        pathTextField.bezelStyle = .squareBezel
+        stackView.addArrangedSubview(pathTextField)
+
+        // Grid for Size, Last Viewed, View Count
+        let gridView = NSGridView(views: [
+            [NSTextField(labelWithString: "File Size:"), NSTextField(labelWithString: "\(sizeFormatted) (\(item.fileSize) bytes)")],
+            [NSTextField(labelWithString: "Last Viewed:"), NSTextField(labelWithString: lastViewedStr)],
+            [NSTextField(labelWithString: "View Count:"), NSTextField(labelWithString: "\(effectiveViewCount) \(effectiveViewCount == 1 ? "view" : "views")")]
+        ])
+        gridView.rowSpacing = 6
+        gridView.columnSpacing = 12
+
+        for rowIdx in 0..<gridView.numberOfRows {
+            let cell = gridView.cell(atColumn: 0, row: rowIdx)
+            if let label = cell.contentView as? NSTextField {
+                label.font = NSFont.systemFont(ofSize: 12, weight: .medium)
+                label.textColor = NSColor.secondaryLabelColor
+            }
+            let valCell = gridView.cell(atColumn: 1, row: rowIdx)
+            if let valLabel = valCell.contentView as? NSTextField {
+                valLabel.font = NSFont.systemFont(ofSize: 12, weight: .regular)
+                valLabel.isSelectable = true
+            }
+        }
+
+        stackView.addArrangedSubview(gridView)
+
+        let accessoryView = NSView(frame: NSRect(x: 0, y: 0, width: containerWidth, height: 200))
+        accessoryView.addSubview(stackView)
+
+        NSLayoutConstraint.activate([
+            stackView.leadingAnchor.constraint(equalTo: accessoryView.leadingAnchor),
+            stackView.trailingAnchor.constraint(equalTo: accessoryView.trailingAnchor),
+            stackView.topAnchor.constraint(equalTo: accessoryView.topAnchor),
+            stackView.bottomAnchor.constraint(lessThanOrEqualTo: accessoryView.bottomAnchor),
+            pathTextField.widthAnchor.constraint(equalTo: stackView.widthAnchor)
+        ])
+
+        alert.accessoryView = accessoryView
         alert.runModal()
     }
 
