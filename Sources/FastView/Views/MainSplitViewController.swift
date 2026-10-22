@@ -346,8 +346,10 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
             guard self.sidebarVC.selectedItem?.id == item.id else { return }
 
             if let image = image {
-                SQLiteCache.shared.recordView(item: item)
-                self.checkAndMarkDirectoryViewedIfComplete()
+                if item.type == .image {
+                    SQLiteCache.shared.recordView(item: item)
+                    self.checkAndMarkDirectoryViewedIfComplete()
+                }
 
                 let duration = CFAbsoluteTimeGetCurrent() - readStartTime
                 if duration > 0 && item.fileSize > 0 {
