@@ -119,7 +119,17 @@ public class ThumbnailGenerator {
     }
 
     public func peekFirstImage(in item: FileItem) -> FileItem? {
+        return findFirstImageRecursively(in: item, visitedPaths: Set<String>())
+    }
+
+    private func findFirstImageRecursively(in item: FileItem, visitedPaths: Set<String>) -> FileItem? {
         if item.type == .parentDirectory { return nil }
+        if item.type == .image { return item }
+
+        let itemKey = item.id.isEmpty ? item.path : item.id
+        if visitedPaths.contains(itemKey) { return nil }
+        var updatedVisited = visitedPaths
+        updatedVisited.insert(itemKey)
 
         var entries: [FileItem] = []
         if item.type == .archiveZip {
@@ -150,7 +160,26 @@ public class ThumbnailGenerator {
             }
         }
 
-        return findPreferredArchiveImage(in: entries)
+        let sortedEntries = entries.sorted { a, b in
+            return a.name.localizedStandardCompare(b.name) == .orderedAscending
+        }
+
+        let directImages = sortedEntries.filter { $0.type == .image }
+        if let preferred = findPreferredArchiveImage(in: directImages) {
+            return preferred
+        }
+
+        for subItem in sortedEntries {
+            if subItem.type == .image {
+                return subItem
+            } else if subItem.isDirectory || subItem.type == .archiveZip || subItem.type == .archiveRar {
+                if let found = findFirstImageRecursively(in: subItem, visitedPaths: updatedVisited) {
+                    return found
+                }
+            }
+        }
+
+        return nil
     }
 
     private func findPreferredArchiveImage(in items: [FileItem]) -> FileItem? {
