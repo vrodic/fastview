@@ -63,21 +63,18 @@ public class SQLiteCache {
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             parent_id INTEGER,
             name TEXT NOT NULL,
-            path TEXT UNIQUE NOT NULL,
             is_directory INTEGER NOT NULL DEFAULT 0,
             last_viewed_at INTEGER NOT NULL DEFAULT 0,
             view_count INTEGER NOT NULL DEFAULT 0
         );
         """
 
-        let createParentIndex = "CREATE INDEX IF NOT EXISTS idx_view_nodes_parent_id ON view_nodes(parent_id);"
-        let createPathIndex = "CREATE UNIQUE INDEX IF NOT EXISTS idx_view_nodes_path ON view_nodes(path);"
+        let createParentIndex = "CREATE INDEX IF NOT EXISTS idx_view_nodes_parent ON view_nodes(parent_id);"
 
         sqlite3_exec(db, createDirectoryTable, nil, nil, nil)
         sqlite3_exec(db, createFavoritesTable, nil, nil, nil)
         sqlite3_exec(db, createViewNodesTable, nil, nil, nil)
         sqlite3_exec(db, createParentIndex, nil, nil, nil)
-        sqlite3_exec(db, createPathIndex, nil, nil, nil)
 
         // Ensure missing columns exist in case of legacy schema
         sqlite3_exec(db, "ALTER TABLE favorites ADD COLUMN item_json TEXT;", nil, nil, nil)
@@ -86,74 +83,138 @@ public class SQLiteCache {
         print("[SQLiteCache] Database initialized at \(dbPath)")
     }
 
-    private func getOrInsertNode(path: String, parentId: Int64?, name: String, isDirectory: Bool) -> Int64 {
-        let selectQuery = "SELECT id FROM view_nodes WHERE path = ?;"
-        var stmtSelect: OpaquePointer?
-        if sqlite3_prepare_v2(db, selectQuery, -1, &stmtSelect, nil) == SQLITE_OK {
-            sqlite3_bind_text(stmtSelect, 1, path, -1, SQLITE_TRANSIENT)
-            if sqlite3_step(stmtSelect) == SQLITE_ROW {
-                let existingId = sqlite3_column_int64(stmtSelect, 0)
-                sqlite3_finalize(stmtSelect)
-                return existingId
-            }
-        }
-        sqlite3_finalize(stmtSelect)
-
-        let insertQuery = "INSERT INTO view_nodes (parent_id, name, path, is_directory, last_viewed_at, view_count) VALUES (?, ?, ?, ?, 0, 0);"
-        var stmtInsert: OpaquePointer?
-        var insertedId: Int64 = -1
-        if sqlite3_prepare_v2(db, insertQuery, -1, &stmtInsert, nil) == SQLITE_OK {
-            if let pId = parentId {
-                sqlite3_bind_int64(stmtInsert, 1, pId)
-            } else {
-                sqlite3_bind_null(stmtInsert, 1)
-            }
-            sqlite3_bind_text(stmtInsert, 2, name, -1, SQLITE_TRANSIENT)
-            sqlite3_bind_text(stmtInsert, 3, path, -1, SQLITE_TRANSIENT)
-            sqlite3_bind_int(stmtInsert, 4, isDirectory ? 1 : 0)
-            if sqlite3_step(stmtInsert) == SQLITE_DONE {
-                insertedId = sqlite3_last_insert_rowid(db)
-            }
-        }
-        sqlite3_finalize(stmtInsert)
-
-        return insertedId
+    public struct PathComponent {
+        public let name: String
+        public let isDirectory: Bool
     }
 
-    public func ensureHierarchyForFileItem(item: FileItem) -> Int64 {
+    public static func decomposeComponents(for item: FileItem) -> [PathComponent] {
+        var comps: [PathComponent] = []
+
         if let archivePath = item.archivePath, !archivePath.isEmpty {
-            let archiveId = ensureHierarchyForPathString(archivePath, isLeafDirectory: true)
+            let archiveComps = decomposePathString(archivePath, isLeafDirectory: true)
+            comps.append(contentsOf: archiveComps)
+
             let entryClean = item.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-            let components = entryClean.components(separatedBy: "/").filter { !$0.isEmpty }
+            let parts = entryClean.components(separatedBy: "/").filter { !$0.isEmpty }
 
-            var currentParentId = archiveId
-            var currentPath = archivePath
-
-            for (idx, comp) in components.enumerated() {
-                let isLast = (idx == components.count - 1)
-                let nodeIsDirectory = isLast ? item.isDirectory : true
-                currentPath = "\(currentPath)#\(comp)"
-                currentParentId = getOrInsertNode(path: currentPath, parentId: currentParentId, name: comp, isDirectory: nodeIsDirectory)
+            for (idx, part) in parts.enumerated() {
+                let isLast = (idx == parts.count - 1)
+                let isDir = isLast ? item.isDirectory : true
+                comps.append(PathComponent(name: part, isDirectory: isDir))
             }
-            return currentParentId
         } else {
-            return ensureHierarchyForPathString(item.path, isLeafDirectory: item.isDirectory)
+            comps = decomposePathString(item.path, isLeafDirectory: item.isDirectory)
         }
+
+        return comps
     }
 
-    private func ensureHierarchyForPathString(_ fullPath: String, isLeafDirectory: Bool) -> Int64 {
-        let normPath = URL(fileURLWithPath: fullPath).standardized.path
-        let components = normPath.components(separatedBy: "/").filter { !$0.isEmpty }
+    public static func decomposePathString(_ fullPath: String, isLeafDirectory: Bool = false) -> [PathComponent] {
+        let clean = fullPath.replacingOccurrences(of: "#", with: "/")
+            .replacingOccurrences(of: " / ", with: "/")
+        let normPath = URL(fileURLWithPath: clean).standardized.path
+        let parts = normPath.components(separatedBy: "/").filter { !$0.isEmpty }
 
+        var result: [PathComponent] = []
+        for (idx, part) in parts.enumerated() {
+            let isLast = (idx == parts.count - 1)
+            let isDir = isLast ? isLeafDirectory : true
+            result.append(PathComponent(name: part, isDirectory: isDir))
+        }
+        return result
+    }
+
+    private func findNodeId(for components: [PathComponent]) -> Int64? {
+        guard !components.isEmpty else { return nil }
         var currentParentId: Int64? = nil
-        var currentPath = ""
 
-        for (idx, comp) in components.enumerated() {
-            currentPath = currentPath.isEmpty ? "/\(comp)" : "\(currentPath)/\(comp)"
-            let isLast = (idx == components.count - 1)
-            let nodeIsDirectory = isLast ? isLeafDirectory : true
-            let nodeId = getOrInsertNode(path: currentPath, parentId: currentParentId, name: comp, isDirectory: nodeIsDirectory)
-            currentParentId = nodeId
+        for comp in components {
+            let query: String
+            if currentParentId == nil {
+                query = "SELECT id FROM view_nodes WHERE parent_id IS NULL AND name = ?;"
+            } else {
+                query = "SELECT id FROM view_nodes WHERE parent_id = ? AND name = ?;"
+            }
+
+            var stmt: OpaquePointer?
+            var foundId: Int64? = nil
+
+            if sqlite3_prepare_v2(db, query, -1, &stmt, nil) == SQLITE_OK {
+                if let pId = currentParentId {
+                    sqlite3_bind_int64(stmt, 1, pId)
+                    sqlite3_bind_text(stmt, 2, comp.name, -1, SQLITE_TRANSIENT)
+                } else {
+                    sqlite3_bind_text(stmt, 1, comp.name, -1, SQLITE_TRANSIENT)
+                }
+
+                if sqlite3_step(stmt) == SQLITE_ROW {
+                    foundId = sqlite3_column_int64(stmt, 0)
+                }
+            }
+            sqlite3_finalize(stmt)
+
+            guard let nextId = foundId else { return nil }
+            currentParentId = nextId
+        }
+
+        return currentParentId
+    }
+
+    private func ensureNodeHierarchy(for components: [PathComponent]) -> Int64 {
+        guard !components.isEmpty else { return -1 }
+        var currentParentId: Int64? = nil
+
+        for comp in components {
+            let querySelect: String
+            if currentParentId == nil {
+                querySelect = "SELECT id FROM view_nodes WHERE parent_id IS NULL AND name = ?;"
+            } else {
+                querySelect = "SELECT id FROM view_nodes WHERE parent_id = ? AND name = ?;"
+            }
+
+            var stmtSelect: OpaquePointer?
+            var existingId: Int64? = nil
+
+            if sqlite3_prepare_v2(db, querySelect, -1, &stmtSelect, nil) == SQLITE_OK {
+                if let pId = currentParentId {
+                    sqlite3_bind_int64(stmtSelect, 1, pId)
+                    sqlite3_bind_text(stmtSelect, 2, comp.name, -1, SQLITE_TRANSIENT)
+                } else {
+                    sqlite3_bind_text(stmtSelect, 1, comp.name, -1, SQLITE_TRANSIENT)
+                }
+
+                if sqlite3_step(stmtSelect) == SQLITE_ROW {
+                    existingId = sqlite3_column_int64(stmtSelect, 0)
+                }
+            }
+            sqlite3_finalize(stmtSelect)
+
+            if let found = existingId {
+                currentParentId = found
+            } else {
+                let insertQuery = "INSERT INTO view_nodes (parent_id, name, is_directory, last_viewed_at, view_count) VALUES (?, ?, ?, 0, 0);"
+                var stmtInsert: OpaquePointer?
+                var newId: Int64 = -1
+
+                if sqlite3_prepare_v2(db, insertQuery, -1, &stmtInsert, nil) == SQLITE_OK {
+                    if let pId = currentParentId {
+                        sqlite3_bind_int64(stmtInsert, 1, pId)
+                    } else {
+                        sqlite3_bind_null(stmtInsert, 1)
+                    }
+                    sqlite3_bind_text(stmtInsert, 2, comp.name, -1, SQLITE_TRANSIENT)
+                    sqlite3_bind_int(stmtInsert, 3, comp.isDirectory ? 1 : 0)
+
+                    if sqlite3_step(stmtInsert) == SQLITE_DONE {
+                        newId = sqlite3_last_insert_rowid(db)
+                    }
+                }
+                sqlite3_finalize(stmtInsert)
+
+                guard newId > 0 else { return -1 }
+                currentParentId = newId
+            }
         }
 
         return currentParentId ?? -1
@@ -167,7 +228,8 @@ public class SQLiteCache {
 
         for item in items {
             if item.type == .parentDirectory { continue }
-            _ = ensureHierarchyForFileItem(item: item)
+            let comps = SQLiteCache.decomposeComponents(for: item)
+            _ = ensureNodeHierarchy(for: comps)
         }
     }
 
@@ -353,7 +415,8 @@ public class SQLiteCache {
 
         guard db != nil else { return }
 
-        let leafId = ensureHierarchyForFileItem(item: item)
+        let comps = SQLiteCache.decomposeComponents(for: item)
+        let leafId = ensureNodeHierarchy(for: comps)
         guard leafId > 0 else { return }
 
         let nowInt = Int64(Date().timeIntervalSince1970)
@@ -381,29 +444,7 @@ public class SQLiteCache {
         }
         sqlite3_finalize(stmtUpdate)
 
-        let altKeys = [item.id, item.path, "\(item.archivePath ?? "") / \(item.path)"].filter { !$0.isEmpty && $0 != item.path }
-        for altKey in altKeys {
-            let altQuery = "UPDATE view_nodes SET last_viewed_at = ?, view_count = ? WHERE path = ?;"
-            var stmtAlt: OpaquePointer?
-            if sqlite3_prepare_v2(db, altQuery, -1, &stmtAlt, nil) == SQLITE_OK {
-                sqlite3_bind_int64(stmtAlt, 1, nowInt)
-                sqlite3_bind_int64(stmtAlt, 2, Int64(newCount))
-                sqlite3_bind_text(stmtAlt, 3, altKey, -1, SQLITE_TRANSIENT)
-                sqlite3_step(stmtAlt)
-            }
-            sqlite3_finalize(stmtAlt)
-        }
-
-        var currentParentId: Int64? = nil
-        let pQuery = "SELECT parent_id FROM view_nodes WHERE id = ?;"
-        var stmtP: OpaquePointer?
-        if sqlite3_prepare_v2(db, pQuery, -1, &stmtP, nil) == SQLITE_OK {
-            sqlite3_bind_int64(stmtP, 1, leafId)
-            if sqlite3_step(stmtP) == SQLITE_ROW && sqlite3_column_type(stmtP, 0) != SQLITE_NULL {
-                currentParentId = sqlite3_column_int64(stmtP, 0)
-            }
-        }
-        sqlite3_finalize(stmtP)
+        var currentParentId: Int64? = getParentId(for: leafId)
 
         while let pId = currentParentId, pId > 0 {
             let childQuery = "SELECT view_count, last_viewed_at FROM view_nodes WHERE parent_id = ?;"
@@ -447,60 +488,43 @@ public class SQLiteCache {
                 sqlite3_finalize(stmtReset)
             }
 
-            var nextParentId: Int64? = nil
-            let parentLookup = "SELECT parent_id FROM view_nodes WHERE id = ?;"
-            var stmtPLookup: OpaquePointer?
-            if sqlite3_prepare_v2(db, parentLookup, -1, &stmtPLookup, nil) == SQLITE_OK {
-                sqlite3_bind_int64(stmtPLookup, 1, pId)
-                if sqlite3_step(stmtPLookup) == SQLITE_ROW && sqlite3_column_type(stmtPLookup, 0) != SQLITE_NULL {
-                    nextParentId = sqlite3_column_int64(stmtPLookup, 0)
-                }
-            }
-            sqlite3_finalize(stmtPLookup)
-
-            if nextParentId == pId { break }
-            currentParentId = nextParentId
+            currentParentId = getParentId(for: pId)
         }
+    }
+
+    private func getParentId(for nodeId: Int64) -> Int64? {
+        let query = "SELECT parent_id FROM view_nodes WHERE id = ?;"
+        var stmt: OpaquePointer?
+        var result: Int64? = nil
+
+        if sqlite3_prepare_v2(db, query, -1, &stmt, nil) == SQLITE_OK {
+            sqlite3_bind_int64(stmt, 1, nodeId)
+            if sqlite3_step(stmt) == SQLITE_ROW && sqlite3_column_type(stmt, 0) != SQLITE_NULL {
+                result = sqlite3_column_int64(stmt, 0)
+            }
+        }
+        sqlite3_finalize(stmt)
+        return result
     }
 
     public func isViewed(path: String) -> Bool {
         lock.lock()
         defer { lock.unlock() }
 
-        let query = "SELECT view_count FROM view_nodes WHERE path = ? AND view_count > 0;"
-        var statement: OpaquePointer?
+        let comps = SQLiteCache.decomposePathString(path)
+        guard let nodeId = findNodeId(for: comps) else { return false }
+
+        let query = "SELECT view_count FROM view_nodes WHERE id = ? AND view_count > 0;"
+        var stmt: OpaquePointer?
         var result = false
 
-        if sqlite3_prepare_v2(db, query, -1, &statement, nil) == SQLITE_OK {
-            sqlite3_bind_text(statement, 1, path, -1, SQLITE_TRANSIENT)
-            if sqlite3_step(statement) == SQLITE_ROW {
+        if sqlite3_prepare_v2(db, query, -1, &stmt, nil) == SQLITE_OK {
+            sqlite3_bind_int64(stmt, 1, nodeId)
+            if sqlite3_step(stmt) == SQLITE_ROW {
                 result = true
             }
         }
-        sqlite3_finalize(statement)
-
-        if !result {
-            let altKey: String
-            if path.contains("#") {
-                altKey = path.replacingOccurrences(of: "#", with: " / ")
-            } else if path.contains(" / ") {
-                altKey = path.replacingOccurrences(of: " / ", with: "#")
-            } else {
-                altKey = ""
-            }
-
-            if !altKey.isEmpty {
-                var stmtAlt: OpaquePointer?
-                if sqlite3_prepare_v2(db, query, -1, &stmtAlt, nil) == SQLITE_OK {
-                    sqlite3_bind_text(stmtAlt, 1, altKey, -1, SQLITE_TRANSIENT)
-                    if sqlite3_step(stmtAlt) == SQLITE_ROW {
-                        result = true
-                    }
-                }
-                sqlite3_finalize(stmtAlt)
-            }
-        }
-
+        sqlite3_finalize(stmt)
         return result
     }
 
@@ -508,13 +532,16 @@ public class SQLiteCache {
         lock.lock()
         defer { lock.unlock() }
 
-        let query = "SELECT last_viewed_at, view_count FROM view_nodes WHERE path = ?;"
+        let comps = SQLiteCache.decomposePathString(path)
+        guard let nodeId = findNodeId(for: comps) else { return ViewInfo(lastViewedAt: nil, viewCount: 0) }
+
+        let query = "SELECT last_viewed_at, view_count FROM view_nodes WHERE id = ?;"
         var statement: OpaquePointer?
         var lastViewed: Date? = nil
         var viewCount = 0
 
         if sqlite3_prepare_v2(db, query, -1, &statement, nil) == SQLITE_OK {
-            sqlite3_bind_text(statement, 1, path, -1, SQLITE_TRANSIENT)
+            sqlite3_bind_int64(statement, 1, nodeId)
             if sqlite3_step(statement) == SQLITE_ROW {
                 let timestamp = sqlite3_column_int64(statement, 0)
                 if timestamp > 0 {
