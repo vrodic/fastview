@@ -273,6 +273,8 @@ public class SidebarTableCellView: NSTableCellView {
     private let nameLabel = NSTextField(labelWithString: "")
     private let favoriteBadge = NSImageView()
     private let checkmarkBadge = NSImageView()
+    private let typeBadge = NSImageView()
+    private let topLeftBadgeStack = NSStackView()
     private var currentItem: FileItem?
 
     override public init(frame frameRect: NSRect) {
@@ -308,6 +310,11 @@ public class SidebarTableCellView: NSTableCellView {
         favoriteBadge.contentTintColor = NSColor.systemYellow
         favoriteBadge.isHidden = true
 
+        typeBadge.translatesAutoresizingMaskIntoConstraints = false
+        typeBadge.wantsLayer = true
+        typeBadge.layer?.zPosition = 10
+        typeBadge.isHidden = true
+
         checkmarkBadge.translatesAutoresizingMaskIntoConstraints = false
         checkmarkBadge.wantsLayer = true
         checkmarkBadge.layer?.zPosition = 10
@@ -316,10 +323,20 @@ public class SidebarTableCellView: NSTableCellView {
         checkmarkBadge.contentTintColor = NSColor.systemGreen
         checkmarkBadge.isHidden = true
 
+        topLeftBadgeStack.translatesAutoresizingMaskIntoConstraints = false
+        topLeftBadgeStack.orientation = .horizontal
+        topLeftBadgeStack.spacing = 4
+        topLeftBadgeStack.alignment = .centerY
+        topLeftBadgeStack.wantsLayer = true
+        topLeftBadgeStack.layer?.zPosition = 10
+
+        topLeftBadgeStack.addArrangedSubview(typeBadge)
+        topLeftBadgeStack.addArrangedSubview(checkmarkBadge)
+
         addSubview(thumbnailImageView)
         addSubview(nameLabel)
         addSubview(favoriteBadge)
-        addSubview(checkmarkBadge)
+        addSubview(topLeftBadgeStack)
 
         NSLayoutConstraint.activate([
             thumbnailImageView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
@@ -333,13 +350,18 @@ public class SidebarTableCellView: NSTableCellView {
 
             favoriteBadge.topAnchor.constraint(equalTo: topAnchor, constant: 6),
             favoriteBadge.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
-            favoriteBadge.widthAnchor.constraint(equalToConstant: 22),
-            favoriteBadge.heightAnchor.constraint(equalToConstant: 22),
+            favoriteBadge.widthAnchor.constraint(equalToConstant: 44),
+            favoriteBadge.heightAnchor.constraint(equalToConstant: 44),
 
-            checkmarkBadge.topAnchor.constraint(equalTo: topAnchor, constant: 6),
-            checkmarkBadge.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 6),
-            checkmarkBadge.widthAnchor.constraint(equalToConstant: 22),
-            checkmarkBadge.heightAnchor.constraint(equalToConstant: 22)
+            topLeftBadgeStack.topAnchor.constraint(equalTo: topAnchor, constant: 6),
+            topLeftBadgeStack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 6),
+            topLeftBadgeStack.heightAnchor.constraint(equalToConstant: 44),
+
+            typeBadge.widthAnchor.constraint(equalToConstant: 44),
+            typeBadge.heightAnchor.constraint(equalToConstant: 44),
+
+            checkmarkBadge.widthAnchor.constraint(equalToConstant: 44),
+            checkmarkBadge.heightAnchor.constraint(equalToConstant: 44)
         ])
     }
 
@@ -349,6 +371,8 @@ public class SidebarTableCellView: NSTableCellView {
 
         let isFav = SQLiteCache.shared.isFavorite(path: item.id) || SQLiteCache.shared.isFavorite(path: item.path)
         favoriteBadge.isHidden = !isFav
+
+        updateTypeBadge(for: item)
 
         let isViewed = SQLiteCache.shared.isViewed(item: item)
         checkmarkBadge.isHidden = !isViewed
@@ -370,6 +394,21 @@ public class SidebarTableCellView: NSTableCellView {
                     self.setThumbnailLoaded(img)
                 }
             }
+        }
+    }
+
+    private func updateTypeBadge(for item: FileItem) {
+        if item.isDirectory || item.type == .directory {
+            typeBadge.image = NSImage(systemSymbolName: "folder.fill", accessibilityDescription: "Folder")
+            typeBadge.contentTintColor = NSColor.systemBlue
+            typeBadge.isHidden = false
+        } else if item.type == .archiveZip || item.type == .archiveRar {
+            typeBadge.image = NSImage(systemSymbolName: "doc.zipper", accessibilityDescription: "Archive")
+            typeBadge.contentTintColor = NSColor.systemOrange
+            typeBadge.isHidden = false
+        } else {
+            typeBadge.image = nil
+            typeBadge.isHidden = true
         }
     }
 
@@ -401,6 +440,12 @@ public class SidebarTableCellView: NSTableCellView {
 
         let isFav = currentItem.map { SQLiteCache.shared.isFavorite(path: $0.id) || SQLiteCache.shared.isFavorite(path: $0.path) } ?? false
         favoriteBadge.isHidden = !isFav
+
+        if let item = currentItem {
+            updateTypeBadge(for: item)
+        } else {
+            typeBadge.isHidden = true
+        }
 
         let isViewed = currentItem.map { SQLiteCache.shared.isViewed(item: $0) } ?? false
         checkmarkBadge.isHidden = !isViewed
