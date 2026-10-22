@@ -538,6 +538,27 @@ public class SQLiteCache {
         return result
     }
 
+    public func isViewed(item: FileItem) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+
+        let comps = SQLiteCache.decomposeComponents(for: item)
+        guard let nodeId = findNodeId(for: comps) else { return false }
+
+        let query = "SELECT view_count FROM view_nodes WHERE id = ? AND view_count > 0;"
+        var stmt: OpaquePointer?
+        var result = false
+
+        if sqlite3_prepare_v2(db, query, -1, &stmt, nil) == SQLITE_OK {
+            sqlite3_bind_int64(stmt, 1, nodeId)
+            if sqlite3_step(stmt) == SQLITE_ROW {
+                result = true
+            }
+        }
+        sqlite3_finalize(stmt)
+        return result
+    }
+
     public func isViewed(path: String) -> Bool {
         lock.lock()
         defer { lock.unlock() }
@@ -557,6 +578,33 @@ public class SQLiteCache {
         }
         sqlite3_finalize(stmt)
         return result
+    }
+
+    public func getViewInfo(item: FileItem) -> ViewInfo {
+        lock.lock()
+        defer { lock.unlock() }
+
+        let comps = SQLiteCache.decomposeComponents(for: item)
+        guard let nodeId = findNodeId(for: comps) else { return ViewInfo(lastViewedAt: nil, viewCount: 0) }
+
+        let query = "SELECT last_viewed_at, view_count FROM view_nodes WHERE id = ?;"
+        var statement: OpaquePointer?
+        var lastViewed: Date? = nil
+        var viewCount = 0
+
+        if sqlite3_prepare_v2(db, query, -1, &statement, nil) == SQLITE_OK {
+            sqlite3_bind_int64(statement, 1, nodeId)
+            if sqlite3_step(statement) == SQLITE_ROW {
+                let timestamp = sqlite3_column_int64(statement, 0)
+                if timestamp > 0 {
+                    lastViewed = Date(timeIntervalSince1970: TimeInterval(timestamp))
+                }
+                viewCount = Int(sqlite3_column_int64(statement, 1))
+            }
+        }
+        sqlite3_finalize(statement)
+
+        return ViewInfo(lastViewedAt: lastViewed, viewCount: viewCount)
     }
 
     public func getViewInfo(path: String) -> ViewInfo {

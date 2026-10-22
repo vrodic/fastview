@@ -411,9 +411,7 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         guard !allFilesToVerify.isEmpty else { return }
 
         let allViewed = allFilesToVerify.allSatisfy { item in
-            SQLiteCache.shared.isViewed(path: item.id) ||
-            SQLiteCache.shared.isViewed(path: item.path) ||
-            (item.archivePath != nil ? SQLiteCache.shared.isViewed(path: "\(item.archivePath!) / \(item.path)") : false)
+            SQLiteCache.shared.isViewed(item: item)
         }
 
         if allViewed {
@@ -446,10 +444,9 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
             return
         }
 
-        let viewInfo1 = SQLiteCache.shared.getViewInfo(path: item.id)
-        let viewInfo2 = SQLiteCache.shared.getViewInfo(path: item.path)
-        let lastViewedDate = viewInfo1.lastViewedAt ?? viewInfo2.lastViewedAt
-        let effectiveViewCount = max(viewInfo1.viewCount, viewInfo2.viewCount)
+        let viewInfo = SQLiteCache.shared.getViewInfo(item: item)
+        let lastViewedDate = viewInfo.lastViewedAt
+        let effectiveViewCount = viewInfo.viewCount
 
         let lastViewedStr: String
         if let date = lastViewedDate {

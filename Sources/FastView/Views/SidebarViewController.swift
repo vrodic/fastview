@@ -350,7 +350,7 @@ public class SidebarTableCellView: NSTableCellView {
         let isFav = SQLiteCache.shared.isFavorite(path: item.id) || SQLiteCache.shared.isFavorite(path: item.path)
         favoriteBadge.isHidden = !isFav
 
-        let isViewed = SQLiteCache.shared.isViewed(path: item.id) || SQLiteCache.shared.isViewed(path: item.path)
+        let isViewed = SQLiteCache.shared.isViewed(item: item)
         checkmarkBadge.isHidden = !isViewed
 
         print("[SidebarCell] configure item '\(item.name)' (id: \(item.id)), isFav: \(isFav), isViewed: \(isViewed)")
@@ -402,7 +402,7 @@ public class SidebarTableCellView: NSTableCellView {
         let isFav = currentItem.map { SQLiteCache.shared.isFavorite(path: $0.id) || SQLiteCache.shared.isFavorite(path: $0.path) } ?? false
         favoriteBadge.isHidden = !isFav
 
-        let isViewed = currentItem.map { SQLiteCache.shared.isViewed(path: $0.id) || SQLiteCache.shared.isViewed(path: $0.path) } ?? false
+        let isViewed = currentItem.map { SQLiteCache.shared.isViewed(item: $0) } ?? false
         checkmarkBadge.isHidden = !isViewed
 
         print("[SidebarCell] setThumbnailLoaded item '\(currentItem?.name ?? "")', isFav: \(isFav), isViewed: \(isViewed)")
