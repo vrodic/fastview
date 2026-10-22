@@ -302,23 +302,28 @@ public class SidebarTableCellView: NSTableCellView {
         nameLabel.textColor = NSColor.labelColor
         nameLabel.alignment = .center
 
+        let badgeConfig = NSImage.SymbolConfiguration(pointSize: 28, weight: .bold)
+
         favoriteBadge.translatesAutoresizingMaskIntoConstraints = false
+        favoriteBadge.imageScaling = .scaleProportionallyUpOrDown
         favoriteBadge.wantsLayer = true
         favoriteBadge.layer?.zPosition = 10
-        let starImg = NSImage(systemSymbolName: "star.fill", accessibilityDescription: "Favorite")
+        let starImg = NSImage(systemSymbolName: "star.fill", accessibilityDescription: "Favorite")?.withSymbolConfiguration(badgeConfig)
         favoriteBadge.image = starImg
         favoriteBadge.contentTintColor = NSColor.systemYellow
         favoriteBadge.isHidden = true
 
         typeBadge.translatesAutoresizingMaskIntoConstraints = false
+        typeBadge.imageScaling = .scaleProportionallyUpOrDown
         typeBadge.wantsLayer = true
         typeBadge.layer?.zPosition = 10
         typeBadge.isHidden = true
 
         checkmarkBadge.translatesAutoresizingMaskIntoConstraints = false
+        checkmarkBadge.imageScaling = .scaleProportionallyUpOrDown
         checkmarkBadge.wantsLayer = true
         checkmarkBadge.layer?.zPosition = 10
-        let checkImg = NSImage(systemSymbolName: "checkmark.circle.fill", accessibilityDescription: "Viewed")
+        let checkImg = NSImage(systemSymbolName: "checkmark.circle.fill", accessibilityDescription: "Viewed")?.withSymbolConfiguration(badgeConfig)
         checkmarkBadge.image = checkImg
         checkmarkBadge.contentTintColor = NSColor.systemGreen
         checkmarkBadge.isHidden = true
@@ -387,7 +392,9 @@ public class SidebarTableCellView: NSTableCellView {
 
         showFilenameTextOnly()
 
-        if item.type == .image || item.isDirectory || item.type == .archiveZip || item.type == .archiveRar {
+        let isTopLevelArchive = (item.type == .archiveZip || item.type == .archiveRar) && (item.archivePath == nil || item.archivePath?.isEmpty == true)
+
+        if item.type == .image || item.isDirectory || ((item.type == .archiveZip || item.type == .archiveRar) && !isTopLevelArchive) {
             ThumbnailGenerator.shared.generateThumbnail(for: item) { [weak self] image in
                 guard let self = self, self.currentItem?.id == item.id else { return }
                 if let img = image {
@@ -398,12 +405,13 @@ public class SidebarTableCellView: NSTableCellView {
     }
 
     private func updateTypeBadge(for item: FileItem) {
+        let badgeConfig = NSImage.SymbolConfiguration(pointSize: 28, weight: .bold)
         if item.isDirectory || item.type == .directory {
-            typeBadge.image = NSImage(systemSymbolName: "folder.fill", accessibilityDescription: "Folder")
+            typeBadge.image = NSImage(systemSymbolName: "folder.fill", accessibilityDescription: "Folder")?.withSymbolConfiguration(badgeConfig)
             typeBadge.contentTintColor = NSColor.systemBlue
             typeBadge.isHidden = false
         } else if item.type == .archiveZip || item.type == .archiveRar {
-            typeBadge.image = NSImage(systemSymbolName: "doc.zipper", accessibilityDescription: "Archive")
+            typeBadge.image = NSImage(systemSymbolName: "doc.zipper", accessibilityDescription: "Archive")?.withSymbolConfiguration(badgeConfig)
             typeBadge.contentTintColor = NSColor.systemOrange
             typeBadge.isHidden = false
         } else {

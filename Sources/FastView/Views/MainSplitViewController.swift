@@ -189,9 +189,12 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
 
             let imageItems = items.filter { $0.type == .image }
 
+            DispatchQueue.global(qos: .utility).async {
+                SQLiteCache.shared.registerLocationItems(items: items)
+            }
+
             DispatchQueue.main.async {
                 if workItem.isCancelled { return }
-                SQLiteCache.shared.registerLocationItems(items: items)
                 self.sidebarVC.setItems(items, selectFirst: targetSelectedItemPath == nil)
 
                 if let targetPath = targetSelectedItemPath,
