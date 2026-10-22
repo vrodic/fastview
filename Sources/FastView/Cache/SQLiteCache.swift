@@ -113,8 +113,7 @@ public class SQLiteCache {
         guard db != nil, !locationPath.isEmpty else { return }
 
         let parentComps = SQLiteCache.decomposePathString(locationPath, isLeafDirectory: true)
-        let pId = ensureNodeHierarchy(for: parentComps)
-        guard pId > 0 else { return }
+        guard let pId = findNodeId(for: parentComps) else { return }
 
         let query = "SELECT name, view_count FROM view_nodes WHERE parent_id = ?;"
         var stmt: OpaquePointer?

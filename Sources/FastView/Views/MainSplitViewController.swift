@@ -181,19 +181,20 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         workItem = DispatchWorkItem { [weak self] in
             guard let self = self, !workItem.isCancelled, let mgr = self.navigationManager else { return }
 
+            let t0 = CFAbsoluteTimeGetCurrent()
             let items = mgr.contents()
+            let tContentsMs = (CFAbsoluteTimeGetCurrent() - t0) * 1000.0
+
             if workItem.isCancelled { return }
 
+            let t1 = CFAbsoluteTimeGetCurrent()
+            SQLiteCache.shared.preloadFolderViewStatus(locationPath: path)
+            let tPreloadMs = (CFAbsoluteTimeGetCurrent() - t1) * 1000.0
+
             let elapsedTime = (CFAbsoluteTimeGetCurrent() - startTime) * 1000.0
-            FileLogger.shared.log("DIR_OPEN_END", path: path, durationMs: elapsedTime)
+            FileLogger.shared.log("DIR_OPEN_TIMING", path: path, durationMs: elapsedTime, extra: "contentsMs: \(String(format: "%.2f", tContentsMs)), preloadMs: \(String(format: "%.2f", tPreloadMs)), items: \(items.count)")
 
             let imageItems = items.filter { $0.type == .image }
-
-            SQLiteCache.shared.preloadFolderViewStatus(locationPath: path)
-
-            DispatchQueue.global(qos: .utility).async {
-                SQLiteCache.shared.registerLocationItems(items: items)
-            }
 
             DispatchQueue.main.async {
                 if workItem.isCancelled { return }
