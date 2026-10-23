@@ -78,6 +78,32 @@ public class DualCanvasViewController: NSViewController, CombiningToolbarDelegat
             toolbarView.centerXAnchor.constraint(equalTo: view.centerXAnchor),
             toolbarView.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -16)
         ])
+
+        combiningCanvasView.onRetuneDetector = { [weak self] pane, mode in
+            guard let self = self else { return }
+            let image = (pane == 1) ? self.combiningCanvasView.image1 : self.combiningCanvasView.image2
+            guard let img = image else { return }
+
+            ForegroundDetector.detectForegroundObject(in: img, mode: mode) { [weak self] fgObj in
+                guard let self = self, var fg = fgObj else { return }
+                let canvas = self.combiningCanvasView
+                if pane == 1 {
+                    if let existing = canvas.foregroundObject1 {
+                        fg.position = existing.position
+                        fg.scale = existing.scale
+                        fg.rotationDegrees = existing.rotationDegrees
+                    }
+                    canvas.foregroundObject1 = fg
+                } else {
+                    if let existing = canvas.foregroundObject2 {
+                        fg.position = existing.position
+                        fg.scale = existing.scale
+                        fg.rotationDegrees = existing.rotationDegrees
+                    }
+                    canvas.foregroundObject2 = fg
+                }
+            }
+        }
     }
 
     public func toggleToolbar() {

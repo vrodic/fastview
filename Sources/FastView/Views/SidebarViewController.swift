@@ -335,6 +335,49 @@ class CustomTableView: NSTableView {
     var onEnterPressed: (() -> Void)?
     var onPageKey: ((PageKeyType) -> Void)?
     var onToggleFavoritePressed: (() -> Void)?
+    var onContextToggleFavorite: ((Int) -> Void)?
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let point = convert(event.locationInWindow, from: nil)
+        let clickedRow = row(at: point)
+        guard clickedRow >= 0 && clickedRow < numberOfRows else { return nil }
+
+        if !isRowSelected(clickedRow) {
+            selectRowIndexes(IndexSet(integer: clickedRow), byExtendingSelection: false)
+        }
+
+        let menu = NSMenu(title: "Context Menu")
+
+        if let vc = delegate as? SidebarViewController, clickedRow < vc.items.count {
+            let item = vc.items[clickedRow]
+            let isFav = SQLiteCache.shared.isFavorite(path: item.id) || SQLiteCache.shared.isFavorite(path: item.path)
+            let favTitle = isFav ? "Remove Favorite" : "Add Favorite"
+            let favMenuItem = NSMenuItem(title: favTitle, action: #selector(contextToggleFavoriteAction(_:)), keyEquivalent: "")
+            favMenuItem.target = self
+            favMenuItem.representedObject = clickedRow
+            menu.addItem(favMenuItem)
+
+            menu.addItem(NSMenuItem.separator())
+
+            let copyItem = NSMenuItem(title: "Copy File Path", action: #selector(contextCopyPathAction(_:)), keyEquivalent: "")
+            copyItem.target = self
+            copyItem.representedObject = item.path
+            menu.addItem(copyItem)
+        }
+
+        return menu
+    }
+
+    @objc private func contextToggleFavoriteAction(_ sender: NSMenuItem) {
+        guard let row = sender.representedObject as? Int else { return }
+        onContextToggleFavorite?(row)
+    }
+
+    @objc private func contextCopyPathAction(_ sender: NSMenuItem) {
+        guard let path = sender.representedObject as? String else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(path, forType: .string)
+    }
 
     override func mouseDown(with event: NSEvent) {
         onFocusGained?()

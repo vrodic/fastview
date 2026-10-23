@@ -44,6 +44,8 @@ public class CombiningCanvasView: NSView {
 
     public var combiningMode: CanvasCombiningMode = .split { didSet { needsDisplay = true } }
 
+    public var onRetuneDetector: ((Int, VisionDetectionMode) -> Void)?
+
     // Merge Mode Parameters
     public var mergeLeftPercent: CGFloat = 50.0 { didSet { needsDisplay = true } }
     public var mergeRightPercent: CGFloat = 50.0 { didSet { needsDisplay = true } }
@@ -64,7 +66,7 @@ public class CombiningCanvasView: NSView {
         }
     }
 
-    // Cached Transformed Images for Smooth Performance
+    // Cached Transformed Images
     private var cachedTransformedImage1: NSImage?
     private var cachedTransformedImage2: NSImage?
 
@@ -340,6 +342,120 @@ public class CombiningCanvasView: NSView {
         context.clip(to: rect)
         image.draw(in: CGRect(x: x, y: y, width: w, height: h))
         context.restoreGState()
+    }
+
+    // MARK: - Context Menu for Foreground Objects
+    override public func menu(for event: NSEvent) -> NSMenu? {
+        guard combiningMode == .foregroundCombine else {
+            return super.menu(for: event)
+        }
+
+        let pt = convert(event.locationInWindow, from: nil)
+        var clickedPane: Int? = nil
+
+        for (fgOpt, pane) in [(foregroundObject1, 1), (foregroundObject2, 2)] {
+            guard let fg = fgOpt else { continue }
+            let orientation = (pane == 1) ? orientation1 : orientation2
+            let orientedImg = fg.image.transformed(with: orientation)
+            let effectiveScale = defaultFitScale(for: fg)
+            let w = orientedImg.size.width * effectiveScale
+            let h = orientedImg.size.height * effectiveScale
+
+            let dx = pt.x - fg.position.x
+            let dy = pt.y - fg.position.y
+            let rad = -fg.rotationDegrees * .pi / 180.0
+            let localPt = CGPoint(
+                x: dx * cos(rad) - dy * sin(rad),
+                y: dx * sin(rad) + dy * cos(rad)
+            )
+
+            let localRect = CGRect(x: -w/2, y: -h/2, width: w, height: h)
+            if localRect.contains(localPt) {
+                clickedPane = pane
+                selectedObjectPane = pane
+                needsDisplay = true
+                break
+            }
+        }
+
+        guard let pane = clickedPane else { return super.menu(for: event) }
+
+        let menu = NSMenu(title: "Foreground Object Menu")
+
+        let flipHItem = NSMenuItem(title: "Flip Object Horizontal", action: #selector(contextFlipHorizontalAction(_:)), keyEquivalent: "")
+        flipHItem.target = self
+        flipHItem.representedObject = pane
+        menu.addItem(flipHItem)
+
+        let flipVItem = NSMenuItem(title: "Flip Object Vertical", action: #selector(contextFlipVerticalAction(_:)), keyEquivalent: "")
+        flipVItem.target = self
+        flipVItem.representedObject = pane
+        menu.addItem(flipVItem)
+
+        menu.addItem(NSMenuItem.separator())
+
+        let zOrderTitle = (pane == 1 && fg1OnTop) || (pane == 2 && !fg1OnTop) ? "Send Object to Back" : "Bring Object to Front"
+        let zOrderItem = NSMenuItem(title: zOrderTitle, action: #selector(contextToggleZOrderAction), keyEquivalent: "")
+        zOrderItem.target = self
+        menu.addItem(zOrderItem)
+
+        menu.addItem(NSMenuItem.separator())
+
+        let tuningItem = NSMenuItem(title: "Vision Detector Tuning", action: nil, keyEquivalent: "")
+        let tuningMenu = NSMenu(title: "Vision Detector Tuning")
+
+        let currentMode = (pane == 1) ? foregroundObject1?.detectionMode : foregroundObject2?.detectionMode
+
+        for mode in VisionDetectionMode.allCases {
+            let modeItem = NSMenuItem(title: mode.rawValue, action: #selector(contextSelectDetectionModeAction(_:)), keyEquivalent: "")
+            modeItem.target = self
+            modeItem.representedObject = ["pane": pane, "mode": mode] as [String : Any]
+            if currentMode == mode {
+                modeItem.state = .on
+            }
+            tuningMenu.addItem(modeItem)
+        }
+
+        tuningItem.submenu = tuningMenu
+        menu.addItem(tuningItem)
+
+        return menu
+    }
+
+    @objc private func contextFlipHorizontalAction(_ sender: NSMenuItem) {
+        guard let pane = sender.representedObject as? Int else { return }
+        if pane == 1 {
+            foregroundObject1?.isFlippedHorizontal.toggle()
+            orientation1.toggleFlipHorizontal()
+        } else {
+            foregroundObject2?.isFlippedHorizontal.toggle()
+            orientation2.toggleFlipHorizontal()
+        }
+        needsDisplay = true
+    }
+
+    @objc private func contextFlipVerticalAction(_ sender: NSMenuItem) {
+        guard let pane = sender.representedObject as? Int else { return }
+        if pane == 1 {
+            foregroundObject1?.isFlippedVertical.toggle()
+            orientation1.toggleFlipVertical()
+        } else {
+            foregroundObject2?.isFlippedVertical.toggle()
+            orientation2.toggleFlipVertical()
+        }
+        needsDisplay = true
+    }
+
+    @objc private func contextToggleZOrderAction() {
+        fg1OnTop.toggle()
+    }
+
+    @objc private func contextSelectDetectionModeAction(_ sender: NSMenuItem) {
+        guard let dict = sender.representedObject as? [String: Any],
+              let pane = dict["pane"] as? Int,
+              let mode = dict["mode"] as? VisionDetectionMode else { return }
+
+        onRetuneDetector?(pane, mode)
     }
 
     // MARK: - Interactive Canvas Mouse Events
