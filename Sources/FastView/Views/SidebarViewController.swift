@@ -320,8 +320,6 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
         NotificationCenter.default.removeObserver(self)
         scrollDebounceTimer?.invalidate()
         scrollDebounceTimer = nil
-        tableView.dataSource = nil
-        tableView.delegate = nil
     }
 }
 

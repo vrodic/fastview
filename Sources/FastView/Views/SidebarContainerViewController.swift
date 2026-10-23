@@ -27,19 +27,18 @@ public class SidebarContainerViewController: NSSplitViewController {
         i2.minimumThickness = 80
         i2.holdingPriority = NSLayoutConstraint.Priority(250)
         self.item2 = i2
+        addSplitViewItem(i2)
 
         updateViewMode(isDual: false)
     }
 
     public func updateViewMode(isDual: Bool) {
+        FileLogger.shared.log("SIDEBAR_CONTAINER", path: "updateViewMode isDual: \(isDual)")
         self.isDualView = isDual
 
         guard let i2 = item2 else { return }
 
         if isDual {
-            if !splitViewItems.contains(i2) {
-                addSplitViewItem(i2)
-            }
             i2.isCollapsed = false
             sidebarVC1.showHeader = true
             sidebarVC2.showHeader = true
@@ -57,9 +56,7 @@ public class SidebarContainerViewController: NSSplitViewController {
                     window.makeFirstResponder(sidebarVC1.view)
                 }
             }
-            if splitViewItems.contains(i2) {
-                removeSplitViewItem(i2)
-            }
+            i2.isCollapsed = true
             sidebarVC1.showHeader = false
         }
     }

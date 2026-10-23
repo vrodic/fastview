@@ -1,20 +1,5 @@
 import AppKit
 
-private var BlockTargetKey: UInt8 = 0
-
-private final class BlockTarget: NSObject {
-    private let actionBlock: () -> Void
-
-    init(actionBlock: @escaping () -> Void) {
-        self.actionBlock = actionBlock
-        super.init()
-    }
-
-    @objc func performAction() {
-        actionBlock()
-    }
-}
-
 public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
     public let sidebarContainerVC = SidebarContainerViewController()
     public let dualCanvasVC = DualCanvasViewController()
@@ -45,7 +30,15 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
     }
 
     private var isRestoringState: Bool = false
+    private var lastSelectedInfoPath: String?
     public private(set) var lastMeasuredSpeedMBs: Double = 25.0
+
+    @objc private func copyInfoPathAction() {
+        if let path = lastSelectedInfoPath {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(path, forType: .string)
+        }
+    }
 
     public var currentLocationPath: String? {
         return navigationManager1?.currentLocation.physicalPath
@@ -248,64 +241,67 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         guard !isRestoringState else { return }
         isRestoringState = true
 
-        defer {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
-                self?.isRestoringState = false
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            guard let self = self else { return }
+            defer {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+                    self?.isRestoringState = false
+                }
             }
-        }
 
-        if let dict1 = UserDefaults.standard.dictionary(forKey: "FastViewOrientation1"),
-           let rot = dict1["rot"] as? Double,
-           let flipH = dict1["flipH"] as? Bool,
-           let flipV = dict1["flipV"] as? Bool {
-            let o1 = ImageOrientation(rotationDegrees: CGFloat(rot), isFlippedHorizontal: flipH, isFlippedVertical: flipV)
-            dualCanvasVC.imageView1.orientation = o1
-            dualCanvasVC.combiningCanvasView.orientation1 = o1
-        }
+            if let dict1 = UserDefaults.standard.dictionary(forKey: "FastViewOrientation1"),
+               let rot = dict1["rot"] as? Double,
+               let flipH = dict1["flipH"] as? Bool,
+               let flipV = dict1["flipV"] as? Bool {
+                let o1 = ImageOrientation(rotationDegrees: CGFloat(rot), isFlippedHorizontal: flipH, isFlippedVertical: flipV)
+                self.dualCanvasVC.imageView1.orientation = o1
+                self.dualCanvasVC.combiningCanvasView.orientation1 = o1
+            }
 
-        if let dict2 = UserDefaults.standard.dictionary(forKey: "FastViewOrientation2"),
-           let rot = dict2["rot"] as? Double,
-           let flipH = dict2["flipH"] as? Bool,
-           let flipV = dict2["flipV"] as? Bool {
-            let o2 = ImageOrientation(rotationDegrees: CGFloat(rot), isFlippedHorizontal: flipH, isFlippedVertical: flipV)
-            dualCanvasVC.imageView2.orientation = o2
-            dualCanvasVC.combiningCanvasView.orientation2 = o2
-        }
+            if let dict2 = UserDefaults.standard.dictionary(forKey: "FastViewOrientation2"),
+               let rot = dict2["rot"] as? Double,
+               let flipH = dict2["flipH"] as? Bool,
+               let flipV = dict2["flipV"] as? Bool {
+                let o2 = ImageOrientation(rotationDegrees: CGFloat(rot), isFlippedHorizontal: flipH, isFlippedVertical: flipV)
+                self.dualCanvasVC.imageView2.orientation = o2
+                self.dualCanvasVC.combiningCanvasView.orientation2 = o2
+            }
 
-        if let modeStr = UserDefaults.standard.string(forKey: "FastViewCombiningMode"),
-           let mode = CanvasCombiningMode(rawValue: modeStr) {
-            dualCanvasVC.combiningMode = mode
-        }
+            if let modeStr = UserDefaults.standard.string(forKey: "FastViewCombiningMode"),
+               let mode = CanvasCombiningMode(rawValue: modeStr) {
+                self.dualCanvasVC.combiningMode = mode
+            }
 
-        if UserDefaults.standard.object(forKey: "FastViewMergeLeftPercent") != nil {
-            let left = CGFloat(UserDefaults.standard.double(forKey: "FastViewMergeLeftPercent"))
-            dualCanvasVC.combiningCanvasView.mergeLeftPercent = left
-        }
-        if UserDefaults.standard.object(forKey: "FastViewMergeRightPercent") != nil {
-            let right = CGFloat(UserDefaults.standard.double(forKey: "FastViewMergeRightPercent"))
-            dualCanvasVC.combiningCanvasView.mergeRightPercent = right
-        }
-        if UserDefaults.standard.object(forKey: "FastViewAlphaGradientPercent") != nil {
-            let alpha = CGFloat(UserDefaults.standard.double(forKey: "FastViewAlphaGradientPercent"))
-            dualCanvasVC.combiningCanvasView.alphaGradientPercent = alpha
-        }
-        if UserDefaults.standard.object(forKey: "FastViewShowBackground1") != nil {
-            dualCanvasVC.combiningCanvasView.showBackground1 = UserDefaults.standard.bool(forKey: "FastViewShowBackground1")
-        }
-        if UserDefaults.standard.object(forKey: "FastViewShowBackground2") != nil {
-            dualCanvasVC.combiningCanvasView.showBackground2 = UserDefaults.standard.bool(forKey: "FastViewShowBackground2")
-        }
-        if UserDefaults.standard.object(forKey: "FastViewFG1OnTop") != nil {
-            dualCanvasVC.combiningCanvasView.fg1OnTop = UserDefaults.standard.bool(forKey: "FastViewFG1OnTop")
-        }
+            if UserDefaults.standard.object(forKey: "FastViewMergeLeftPercent") != nil {
+                let left = CGFloat(UserDefaults.standard.double(forKey: "FastViewMergeLeftPercent"))
+                self.dualCanvasVC.combiningCanvasView.mergeLeftPercent = left
+            }
+            if UserDefaults.standard.object(forKey: "FastViewMergeRightPercent") != nil {
+                let right = CGFloat(UserDefaults.standard.double(forKey: "FastViewMergeRightPercent"))
+                self.dualCanvasVC.combiningCanvasView.mergeRightPercent = right
+            }
+            if UserDefaults.standard.object(forKey: "FastViewAlphaGradientPercent") != nil {
+                let alpha = CGFloat(UserDefaults.standard.double(forKey: "FastViewAlphaGradientPercent"))
+                self.dualCanvasVC.combiningCanvasView.alphaGradientPercent = alpha
+            }
+            if UserDefaults.standard.object(forKey: "FastViewShowBackground1") != nil {
+                self.dualCanvasVC.combiningCanvasView.showBackground1 = UserDefaults.standard.bool(forKey: "FastViewShowBackground1")
+            }
+            if UserDefaults.standard.object(forKey: "FastViewShowBackground2") != nil {
+                self.dualCanvasVC.combiningCanvasView.showBackground2 = UserDefaults.standard.bool(forKey: "FastViewShowBackground2")
+            }
+            if UserDefaults.standard.object(forKey: "FastViewFG1OnTop") != nil {
+                self.dualCanvasVC.combiningCanvasView.fg1OnTop = UserDefaults.standard.bool(forKey: "FastViewFG1OnTop")
+            }
 
-        let isDual = UserDefaults.standard.bool(forKey: "FastViewIsDualViewEnabled")
-        if isDual,
-           let path2 = UserDefaults.standard.string(forKey: "FastViewLastOpenedPath2"),
-           FileManager.default.fileExists(atPath: path2) {
-            let item2 = UserDefaults.standard.string(forKey: "FastViewLastSelectedItemId2") ?? UserDefaults.standard.string(forKey: "FastViewLastSelectedItemPath2")
-            let loc2 = NavigationManager.locationForPath(path2)
-            loadLocation(loc2, pane: 2, targetSelectedItemPath: item2)
+            let isDual = UserDefaults.standard.bool(forKey: "FastViewIsDualViewEnabled")
+            if isDual,
+               let path2 = UserDefaults.standard.string(forKey: "FastViewLastOpenedPath2"),
+               FileManager.default.fileExists(atPath: path2) {
+                let item2 = UserDefaults.standard.string(forKey: "FastViewLastSelectedItemId2") ?? UserDefaults.standard.string(forKey: "FastViewLastSelectedItemPath2")
+                let loc2 = NavigationManager.locationForPath(path2)
+                self.loadLocation(loc2, pane: 2, targetSelectedItemPath: item2)
+            }
         }
     }
 
@@ -817,16 +813,9 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         let pathField = makeValueField(fullPath)
         pathContainer.addArrangedSubview(pathField)
 
-        let copyBtn = NSButton(title: "Copy Path", target: nil, action: nil)
+        let copyBtn = NSButton(title: "Copy Path", target: self, action: #selector(copyInfoPathAction))
         copyBtn.bezelStyle = .inline
         copyBtn.controlSize = .small
-        let targetHandler = BlockTarget {
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(fullPath, forType: .string)
-        }
-        objc_setAssociatedObject(copyBtn, &BlockTargetKey, targetHandler, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
-        copyBtn.target = targetHandler
-        copyBtn.action = #selector(BlockTarget.performAction)
         pathContainer.addArrangedSubview(copyBtn)
 
         gridView.addRow(with: [makeLabel("Name:", bold: true), makeValueField(item.name)])
