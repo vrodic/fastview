@@ -23,6 +23,14 @@ public struct SavedCombinationState: Codable {
     public var showBackground1: Bool
     public var showBackground2: Bool
     public var fg1OnTop: Bool
+    public var fgPos1X: Double?
+    public var fgPos1Y: Double?
+    public var fgScale1: Double?
+    public var fgRot1: Double?
+    public var fgPos2X: Double?
+    public var fgPos2Y: Double?
+    public var fgScale2: Double?
+    public var fgRot2: Double?
 
     public init(
         id: String = UUID().uuidString,
@@ -46,7 +54,15 @@ public struct SavedCombinationState: Codable {
         fgOffset2Percent: Double = 50,
         showBackground1: Bool = true,
         showBackground2: Bool = true,
-        fg1OnTop: Bool = true
+        fg1OnTop: Bool = true,
+        fgPos1X: Double? = nil,
+        fgPos1Y: Double? = nil,
+        fgScale1: Double? = nil,
+        fgRot1: Double? = nil,
+        fgPos2X: Double? = nil,
+        fgPos2Y: Double? = nil,
+        fgScale2: Double? = nil,
+        fgRot2: Double? = nil
     ) {
         self.id = id
         self.name = name
@@ -70,6 +86,14 @@ public struct SavedCombinationState: Codable {
         self.showBackground1 = showBackground1
         self.showBackground2 = showBackground2
         self.fg1OnTop = fg1OnTop
+        self.fgPos1X = fgPos1X
+        self.fgPos1Y = fgPos1Y
+        self.fgScale1 = fgScale1
+        self.fgRot1 = fgRot1
+        self.fgPos2X = fgPos2X
+        self.fgPos2Y = fgPos2Y
+        self.fgScale2 = fgScale2
+        self.fgRot2 = fgRot2
     }
 }
 
@@ -83,7 +107,6 @@ public class CombinationStateManager {
 
     public static func saveState(_ state: SavedCombinationState) {
         var states = getAllSavedStates()
-        // If an existing state has the same name or id, replace it
         if let idx = states.firstIndex(where: { $0.id == state.id || $0.name == state.name }) {
             states[idx] = state
         } else {

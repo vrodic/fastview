@@ -145,6 +145,7 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
     }
 
     @objc public func openSecondFolder() {
+        showFavoritesOnlyPane2 = false
         let panel = NSOpenPanel()
         panel.canChooseFiles = true
         panel.canChooseDirectories = true
@@ -238,6 +239,9 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
             let o2 = dualCanvasVC.imageView2.orientation
             let canvas = dualCanvasVC.combiningCanvasView
 
+            let fg1 = canvas.foregroundObject1
+            let fg2 = canvas.foregroundObject2
+
             let state = SavedCombinationState(
                 name: comboName,
                 path1: path1,
@@ -258,7 +262,15 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
                 fgOffset2Percent: Double(canvas.fgOffset2Percent),
                 showBackground1: canvas.showBackground1,
                 showBackground2: canvas.showBackground2,
-                fg1OnTop: canvas.fg1OnTop
+                fg1OnTop: canvas.fg1OnTop,
+                fgPos1X: fg1.map { Double($0.position.x) },
+                fgPos1Y: fg1.map { Double($0.position.y) },
+                fgScale1: fg1.map { Double($0.scale) },
+                fgRot1: fg1.map { Double($0.rotationDegrees) },
+                fgPos2X: fg2.map { Double($0.position.x) },
+                fgPos2Y: fg2.map { Double($0.position.y) },
+                fgScale2: fg2.map { Double($0.scale) },
+                fgRot2: fg2.map { Double($0.rotationDegrees) }
             )
 
             CombinationStateManager.saveState(state)
@@ -294,6 +306,26 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         canvas.showBackground1 = state.showBackground1
         canvas.showBackground2 = state.showBackground2
         canvas.fg1OnTop = state.fg1OnTop
+
+        if let x1 = state.fgPos1X, let y1 = state.fgPos1Y {
+            canvas.foregroundObject1?.position = CGPoint(x: x1, y: y1)
+        }
+        if let s1 = state.fgScale1 {
+            canvas.foregroundObject1?.scale = CGFloat(s1)
+        }
+        if let r1 = state.fgRot1 {
+            canvas.foregroundObject1?.rotationDegrees = CGFloat(r1)
+        }
+
+        if let x2 = state.fgPos2X, let y2 = state.fgPos2Y {
+            canvas.foregroundObject2?.position = CGPoint(x: x2, y: y2)
+        }
+        if let s2 = state.fgScale2 {
+            canvas.foregroundObject2?.scale = CGFloat(s2)
+        }
+        if let r2 = state.fgRot2 {
+            canvas.foregroundObject2?.rotationDegrees = CGFloat(r2)
+        }
 
         dualCanvasVC.setDualViewEnabled(true)
     }
@@ -600,7 +632,7 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
     }
 
     public func switchToCurrentItemLocationMode() {
-        guard let item = activeSidebar.selectedItem else {
+        guard let item = sidebarContainerVC.sidebarVC1.selectedItem else {
             showFavoritesOnly = false
             return
         }
@@ -623,7 +655,34 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         }
 
         print("[MainSplitVC] switchToCurrentItemLocationMode for item '\(item.name)', targetPath: '\(targetPath)', locPath: '\(loc.physicalPath)' (archiveSubfolder: '\(loc.archiveSubfolder ?? "")')")
-        loadLocation(loc, pane: activePane, targetSelectedItemPath: targetPath)
+        loadLocation(loc, pane: 1, targetSelectedItemPath: targetPath)
+    }
+
+    public func switchToCurrentItemLocationModePane2() {
+        guard let item = sidebarContainerVC.sidebarVC2.selectedItem else {
+            showFavoritesOnlyPane2 = false
+            return
+        }
+        showFavoritesOnlyPane2 = false
+
+        let targetPath = item.id.isEmpty ? item.path : item.id
+
+        let loc: NavigationLocation
+        if let archivePath = item.archivePath, !archivePath.isEmpty {
+            let archiveType = ArchiveReader.fileType(for: URL(fileURLWithPath: archivePath))
+            let subfolder = ArchiveReader.flattenArchiveDirectories ? "" : (item.entryParentDir ?? "")
+            loc = NavigationLocation(
+                physicalPath: archivePath,
+                archiveSubfolder: subfolder,
+                isArchive: true,
+                archiveType: archiveType
+            )
+        } else {
+            loc = NavigationManager.locationForPath(item.path)
+        }
+
+        print("[MainSplitVC] switchToCurrentItemLocationModePane2 for item '\(item.name)', targetPath: '\(targetPath)', locPath: '\(loc.physicalPath)' (archiveSubfolder: '\(loc.archiveSubfolder ?? "")')")
+        loadLocation(loc, pane: 2, targetSelectedItemPath: targetPath)
     }
 
     public func displayItem(_ item: FileItem, pane: Int = 1) {
@@ -727,8 +786,12 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
     }
 
     public func handleActivation(of item: FileItem, pane: Int = 1) {
-        if showFavoritesOnly {
+        if pane == 1 && showFavoritesOnly {
             switchToCurrentItemLocationMode()
+            return
+        }
+        if pane == 2 && showFavoritesOnlyPane2 {
+            switchToCurrentItemLocationModePane2()
             return
         }
         let navMgr = (pane == 2) ? navigationManager2 : navigationManager1
