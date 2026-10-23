@@ -62,22 +62,22 @@ public class CombiningToolbarView: NSView {
 
     private func setupUI() {
         wantsLayer = true
-        layer?.backgroundColor = NSColor.black.withAlphaComponent(0.85).cgColor
-        layer?.cornerRadius = 8
-        layer?.borderWidth = 1
-        layer?.borderColor = NSColor.white.withAlphaComponent(0.2).cgColor
+        layer?.backgroundColor = NSColor(calibratedWhite: 0.12, alpha: 0.95).cgColor
+        layer?.cornerRadius = 10
+        layer?.borderWidth = 1.5
+        layer?.borderColor = NSColor(white: 0.4, alpha: 0.8).cgColor
 
         // Header Stack
         headerStack.orientation = .horizontal
         headerStack.spacing = 12
         headerStack.alignment = .centerY
 
+        modeSegmentedControl.segmentStyle = .texturedSquare
         modeSegmentedControl.selectedSegment = 0
         modeSegmentedControl.target = self
         modeSegmentedControl.action = #selector(modeChanged(_:))
 
-        collapseButton.bezelStyle = .inline
-        collapseButton.controlSize = .small
+        styleButton(collapseButton)
         collapseButton.target = self
         collapseButton.action = #selector(toggleCollapseAction)
 
@@ -91,7 +91,7 @@ public class CombiningToolbarView: NSView {
 
         // Controls Stack
         controlsStack.orientation = .vertical
-        controlsStack.spacing = 8
+        controlsStack.spacing = 10
         controlsStack.alignment = .leading
 
         setupMergeControls()
@@ -107,18 +107,27 @@ public class CombiningToolbarView: NSView {
 
         let mainStack = NSStackView(views: [headerStack, controlsStack])
         mainStack.orientation = .vertical
-        mainStack.spacing = 10
+        mainStack.spacing = 12
         mainStack.alignment = .leading
         mainStack.translatesAutoresizingMaskIntoConstraints = false
 
         addSubview(mainStack)
 
         NSLayoutConstraint.activate([
-            mainStack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
-            mainStack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
-            mainStack.topAnchor.constraint(equalTo: topAnchor, constant: 8),
-            mainStack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8)
+            mainStack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
+            mainStack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -14),
+            mainStack.topAnchor.constraint(equalTo: topAnchor, constant: 10),
+            mainStack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -10)
         ])
+    }
+
+    private func styleButton(_ btn: NSButton) {
+        btn.bezelStyle = .inline
+        btn.contentTintColor = NSColor.white
+        btn.font = NSFont.boldSystemFont(ofSize: 11)
+        btn.wantsLayer = true
+        btn.layer?.backgroundColor = NSColor(white: 0.3, alpha: 0.8).cgColor
+        btn.layer?.cornerRadius = 4
     }
 
     private func setupMergeControls() {
@@ -134,7 +143,7 @@ public class CombiningToolbarView: NSView {
         alphaSlider.action = #selector(alphaSliderChanged(_:))
 
         for tf in [mergeLabel1, mergeLabel2, alphaLabel] {
-            tf.font = NSFont.systemFont(ofSize: 11)
+            tf.font = NSFont.boldSystemFont(ofSize: 11)
             tf.textColor = NSColor.white
         }
 
@@ -164,7 +173,7 @@ public class CombiningToolbarView: NSView {
         fgSlider2.action = #selector(fgSlider2Changed(_:))
 
         for tf in [fgLabel1, fgLabel2] {
-            tf.font = NSFont.systemFont(ofSize: 11)
+            tf.font = NSFont.boldSystemFont(ofSize: 11)
             tf.textColor = NSColor.white
         }
 
@@ -188,8 +197,7 @@ public class CombiningToolbarView: NSView {
 
         func makeBtn(_ title: String, tag: Int, action: Selector) -> NSButton {
             let btn = NSButton(title: title, target: self, action: action)
-            btn.bezelStyle = .inline
-            btn.controlSize = .small
+            styleButton(btn)
             btn.tag = tag
             return btn
         }

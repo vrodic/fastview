@@ -11,7 +11,6 @@ public class SidebarContainerViewController: NSSplitViewController {
         sidebarVC1.paneIndex = 1
         sidebarVC2.paneIndex = 2
 
-        // By default, split view orientation: isVertical = false creates a horizontal divider (top/bottom split)
         splitView.isVertical = false
         splitView.dividerStyle = .thin
 
@@ -21,22 +20,43 @@ public class SidebarContainerViewController: NSSplitViewController {
     public func updateViewMode(isDual: Bool) {
         self.isDualView = isDual
 
-        // Remove all split items
+        if let window = view.window, let responder = window.firstResponder as? NSView {
+            if responder.isDescendant(of: sidebarVC2.view) {
+                window.makeFirstResponder(sidebarVC1.view)
+            }
+        }
+
         for item in splitViewItems {
             removeSplitViewItem(item)
         }
 
-        let item1 = NSSplitViewItem(viewController: sidebarVC1)
-        item1.minimumThickness = 80
-        addSplitViewItem(item1)
-
-        sidebarVC1.showHeader = isDual
-
         if isDual {
+            let item1 = NSSplitViewItem(viewController: sidebarVC1)
+            item1.minimumThickness = 80
+            item1.holdingPriority = NSLayoutConstraint.Priority(250)
+
             let item2 = NSSplitViewItem(viewController: sidebarVC2)
             item2.minimumThickness = 80
+            item2.holdingPriority = NSLayoutConstraint.Priority(250)
+
+            addSplitViewItem(item1)
             addSplitViewItem(item2)
+
+            sidebarVC1.showHeader = true
             sidebarVC2.showHeader = true
+
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self else { return }
+                let totalHeight = self.splitView.bounds.height
+                if totalHeight > 100 {
+                    self.splitView.setPosition(totalHeight / 2.0, ofDividerAt: 0)
+                }
+            }
+        } else {
+            let item1 = NSSplitViewItem(viewController: sidebarVC1)
+            item1.minimumThickness = 80
+            addSplitViewItem(item1)
+            sidebarVC1.showHeader = false
         }
     }
 }

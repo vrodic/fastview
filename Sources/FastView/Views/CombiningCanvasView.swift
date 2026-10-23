@@ -35,8 +35,14 @@ public class CombiningCanvasView: NSView {
     // Interactivity
     public private(set) var selectedObjectPane: Int? = nil // 1 or 2
     private var isDraggingObject: Bool = false
+    private var isResizingObject: Bool = false
+    private var isRotatingObject: Bool = false
+
     private var dragStartPoint: CGPoint = .zero
     private var initialObjPosition: CGPoint = .zero
+    private var initialObjScale: CGFloat = 1.0
+    private var initialObjRotation: CGFloat = 0.0
+    private var initialDistToCenter: CGFloat = 1.0
 
     override public init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -80,6 +86,16 @@ public class CombiningCanvasView: NSView {
                 foregroundObject2?.position = CGPoint(x: defaultX - moveAmount, y: midY)
             }
         }
+    }
+
+    private func defaultFitScale(for fg: ForegroundObject) -> CGFloat {
+        guard bounds.width > 0 && bounds.height > 0 else { return fg.scale }
+        let maxW = bounds.width * 0.4
+        let maxH = bounds.height * 0.75
+        let imgW = max(1.0, fg.image.size.width)
+        let imgH = max(1.0, fg.image.size.height)
+        let fit = min(maxW / imgW, maxH / imgH)
+        return fg.scale * fit
     }
 
     override public func draw(_ dirtyRect: NSRect) {
@@ -193,8 +209,9 @@ public class CombiningCanvasView: NSView {
         let orientation = (paneIndex == 1) ? orientation1 : orientation2
         let orientedImg = obj.image.transformed(with: orientation)
 
-        let targetWidth = orientedImg.size.width * obj.scale
-        let targetHeight = orientedImg.size.height * obj.scale
+        let effectiveScale = defaultFitScale(for: obj)
+        let targetWidth = orientedImg.size.width * effectiveScale
+        let targetHeight = orientedImg.size.height * effectiveScale
         let drawRect = CGRect(
             x: -targetWidth / 2.0,
             y: -targetHeight / 2.0,
@@ -212,7 +229,7 @@ public class CombiningCanvasView: NSView {
             context.setLineWidth(2.0)
             context.stroke(drawRect)
 
-            let handleSize: CGFloat = 8.0
+            let handleSize: CGFloat = 10.0
             let corners = [
                 CGPoint(x: drawRect.minX, y: drawRect.minY),
                 CGPoint(x: drawRect.maxX, y: drawRect.minY),
@@ -224,6 +241,17 @@ public class CombiningCanvasView: NSView {
                 let hRect = CGRect(x: c.x - handleSize/2, y: c.y - handleSize/2, width: handleSize, height: handleSize)
                 context.fill(hRect)
             }
+
+            let rotateStemY = drawRect.maxY + 20.0
+            context.setStrokeColor(NSColor.controlAccentColor.cgColor)
+            context.setLineWidth(1.5)
+            context.move(to: CGPoint(x: 0, y: drawRect.maxY))
+            context.addLine(to: CGPoint(x: 0, y: rotateStemY))
+            context.strokePath()
+
+            let rotateCircleRect = CGRect(x: -6, y: rotateStemY - 6, width: 12, height: 12)
+            context.setFillColor(NSColor.systemYellow.cgColor)
+            context.fillEllipse(in: rotateCircleRect)
         }
 
         context.restoreGState()
@@ -261,6 +289,7 @@ public class CombiningCanvasView: NSView {
         context.restoreGState()
     }
 
+    // MARK: - Interactive Canvas Mouse Events
     override public func mouseDown(with event: NSEvent) {
         guard combiningMode == .foregroundCombine else {
             super.mouseDown(with: event)
@@ -270,41 +299,105 @@ public class CombiningCanvasView: NSView {
         let pt = convert(event.locationInWindow, from: nil)
         dragStartPoint = pt
 
-        if let fg1 = foregroundObject1, isPoint(pt, inside: fg1) {
-            selectedObjectPane = 1
-            isDraggingObject = true
-            initialObjPosition = fg1.position
-            needsDisplay = true
-            return
-        }
+        for (fgOpt, pane) in [(foregroundObject1, 1), (foregroundObject2, 2)] {
+            guard let fg = fgOpt else { continue }
 
-        if let fg2 = foregroundObject2, isPoint(pt, inside: fg2) {
-            selectedObjectPane = 2
-            isDraggingObject = true
-            initialObjPosition = fg2.position
-            needsDisplay = true
-            return
+            let orientation = (pane == 1) ? orientation1 : orientation2
+            let orientedImg = fg.image.transformed(with: orientation)
+            let effectiveScale = defaultFitScale(for: fg)
+            let w = orientedImg.size.width * effectiveScale
+            let h = orientedImg.size.height * effectiveScale
+
+            // Transform pt into local unrotated object coordinates centered at fg.position
+            let dx = pt.x - fg.position.x
+            let dy = pt.y - fg.position.y
+            let rad = -fg.rotationDegrees * .pi / 180.0
+            let localPt = CGPoint(
+                x: dx * cos(rad) - dy * sin(rad),
+                y: dx * sin(rad) + dy * cos(rad)
+            )
+
+            // Test Rotate handle in local space
+            let rotHandleLocal = CGPoint(x: 0, y: h/2 + 20)
+            if hypot(localPt.x - rotHandleLocal.x, localPt.y - rotHandleLocal.y) <= 12 {
+                selectedObjectPane = pane
+                isRotatingObject = true
+                initialObjRotation = fg.rotationDegrees
+                needsDisplay = true
+                return
+            }
+
+            // Test Corner Resize handles in local space
+            let localCorners = [
+                CGPoint(x: -w/2, y: -h/2),
+                CGPoint(x: w/2, y: -h/2),
+                CGPoint(x: -w/2, y: h/2),
+                CGPoint(x: w/2, y: h/2)
+            ]
+            for c in localCorners {
+                if hypot(localPt.x - c.x, localPt.y - c.y) <= 12 {
+                    selectedObjectPane = pane
+                    isResizingObject = true
+                    initialObjScale = fg.scale
+                    initialDistToCenter = max(1.0, hypot(pt.x - fg.position.x, pt.y - fg.position.y))
+                    needsDisplay = true
+                    return
+                }
+            }
+
+            // Test inside Bounding Box in local space
+            let localRect = CGRect(x: -w/2, y: -h/2, width: w, height: h)
+            if localRect.contains(localPt) {
+                selectedObjectPane = pane
+                isDraggingObject = true
+                initialObjPosition = fg.position
+                needsDisplay = true
+                return
+            }
         }
 
         selectedObjectPane = nil
         isDraggingObject = false
+        isResizingObject = false
+        isRotatingObject = false
         needsDisplay = true
     }
 
     override public func mouseDragged(with event: NSEvent) {
-        guard combiningMode == .foregroundCombine, isDraggingObject, let pane = selectedObjectPane else {
+        guard combiningMode == .foregroundCombine, let pane = selectedObjectPane else {
             super.mouseDragged(with: event)
             return
         }
 
         let currentPt = convert(event.locationInWindow, from: nil)
-        let deltaX = currentPt.x - dragStartPoint.x
-        let deltaY = currentPt.y - dragStartPoint.y
 
-        if pane == 1 {
-            foregroundObject1?.position = CGPoint(x: initialObjPosition.x + deltaX, y: initialObjPosition.y + deltaY)
-        } else if pane == 2 {
-            foregroundObject2?.position = CGPoint(x: initialObjPosition.x + deltaX, y: initialObjPosition.y + deltaY)
+        if isRotatingObject {
+            let fg = (pane == 1) ? foregroundObject1 : foregroundObject2
+            guard let fgObj = fg else { return }
+            let angle = atan2(currentPt.y - fgObj.position.y, currentPt.x - fgObj.position.x) * 180.0 / .pi - 90.0
+            if pane == 1 {
+                foregroundObject1?.rotationDegrees = angle
+            } else {
+                foregroundObject2?.rotationDegrees = angle
+            }
+        } else if isResizingObject {
+            let fg = (pane == 1) ? foregroundObject1 : foregroundObject2
+            guard let fgObj = fg else { return }
+            let currentDist = hypot(currentPt.x - fgObj.position.x, currentPt.y - fgObj.position.y)
+            let factor = max(0.1, currentDist / initialDistToCenter)
+            if pane == 1 {
+                foregroundObject1?.scale = initialObjScale * factor
+            } else {
+                foregroundObject2?.scale = initialObjScale * factor
+            }
+        } else if isDraggingObject {
+            let deltaX = currentPt.x - dragStartPoint.x
+            let deltaY = currentPt.y - dragStartPoint.y
+            if pane == 1 {
+                foregroundObject1?.position = CGPoint(x: initialObjPosition.x + deltaX, y: initialObjPosition.y + deltaY)
+            } else if pane == 2 {
+                foregroundObject2?.position = CGPoint(x: initialObjPosition.x + deltaX, y: initialObjPosition.y + deltaY)
+            }
         }
 
         needsDisplay = true
@@ -312,13 +405,8 @@ public class CombiningCanvasView: NSView {
 
     override public func mouseUp(with event: NSEvent) {
         isDraggingObject = false
+        isResizingObject = false
+        isRotatingObject = false
         super.mouseUp(with: event)
-    }
-
-    private func isPoint(_ pt: CGPoint, inside fg: ForegroundObject) -> Bool {
-        let w = fg.image.size.width * fg.scale
-        let h = fg.image.size.height * fg.scale
-        let rect = CGRect(x: fg.position.x - w/2, y: fg.position.y - h/2, width: w, height: h)
-        return rect.contains(pt)
     }
 }

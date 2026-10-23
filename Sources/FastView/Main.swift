@@ -404,4 +404,12 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func toggleCombiningControlsAction(_ sender: Any?) {
         windowController?.splitVC.toggleCombiningControls()
     }
+
+    public func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(toggleCombiningControlsAction(_:)) ||
+           menuItem.action == #selector(closeSecondViewAction(_:)) {
+            return windowController?.splitVC.sidebarContainerVC.isDualView ?? false
+        }
+        return true
+    }
 }

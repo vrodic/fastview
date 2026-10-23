@@ -150,10 +150,11 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
     }
 
     @objc public func closeSecondView() {
-        sidebarContainerVC.updateViewMode(isDual: false)
-        dualCanvasVC.setDualViewEnabled(false)
-        navigationManager2 = nil
+        cancelAllIOOperations()
         activePane = 1
+        dualCanvasVC.setDualViewEnabled(false)
+        sidebarContainerVC.updateViewMode(isDual: false)
+        navigationManager2 = nil
     }
 
     public func rotateRightForActivePane() {
@@ -177,6 +178,7 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
     }
 
     public func toggleCombiningControls() {
+        guard sidebarContainerVC.isDualView else { return }
         dualCanvasVC.toggleToolbar()
     }
 
