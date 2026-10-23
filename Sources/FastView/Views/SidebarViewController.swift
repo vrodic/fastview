@@ -104,6 +104,17 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
             (self?.parent as? MainSplitViewController)?.toggleFavoriteOnSelectedItem()
                 ?? globalAppDelegate?.toggleFavoriteActionFromSidebar()
         }
+        tableView.onContextToggleFavorite = { [weak self] row in
+            guard let self = self, row >= 0 && row < self.items.count else { return }
+            let item = self.items[row]
+            _ = SQLiteCache.shared.toggleFavorite(item: item)
+            self.reloadSelectedRow()
+            if let splitVC = (self.parent as? SidebarContainerViewController)?.parent as? MainSplitViewController {
+                if (self.paneIndex == 1 && splitVC.showFavoritesOnly) || (self.paneIndex == 2 && splitVC.showFavoritesOnlyPane2) {
+                    splitVC.reloadDirectoryContentsPublic()
+                }
+            }
+        }
 
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("MainColumn"))
         column.resizingMask = .autoresizingMask
@@ -359,6 +370,13 @@ class CustomTableView: NSTableView {
 
             menu.addItem(NSMenuItem.separator())
 
+            let infoItem = NSMenuItem(title: "Show Info", action: #selector(contextShowInfoAction(_:)), keyEquivalent: "")
+            infoItem.target = self
+            infoItem.representedObject = clickedRow
+            menu.addItem(infoItem)
+
+            menu.addItem(NSMenuItem.separator())
+
             let copyItem = NSMenuItem(title: "Copy File Path", action: #selector(contextCopyPathAction(_:)), keyEquivalent: "")
             copyItem.target = self
             copyItem.representedObject = item.path
@@ -371,6 +389,19 @@ class CustomTableView: NSTableView {
     @objc private func contextToggleFavoriteAction(_ sender: NSMenuItem) {
         guard let row = sender.representedObject as? Int else { return }
         onContextToggleFavorite?(row)
+    }
+
+    @objc private func contextShowInfoAction(_ sender: NSMenuItem) {
+        guard let row = sender.representedObject as? Int,
+              let vc = delegate as? SidebarViewController,
+              row >= 0 && row < vc.items.count else { return }
+        let item = vc.items[row]
+        if let mainSplitVC = vc.parent as? MainSplitViewController {
+            mainSplitVC.showInfo(for: item)
+        } else if let container = vc.parent as? SidebarContainerViewController,
+                  let mainSplitVC = container.parent as? MainSplitViewController {
+            mainSplitVC.showInfo(for: item)
+        }
     }
 
     @objc private func contextCopyPathAction(_ sender: NSMenuItem) {

@@ -27,8 +27,18 @@ public class CombiningCanvasView: NSView {
         }
     }
 
-    public var foregroundObject1: ForegroundObject? { didSet { needsDisplay = true } }
-    public var foregroundObject2: ForegroundObject? { didSet { needsDisplay = true } }
+    public var foregroundObject1: ForegroundObject? {
+        didSet {
+            updateCachedFgImage1()
+            needsDisplay = true
+        }
+    }
+    public var foregroundObject2: ForegroundObject? {
+        didSet {
+            updateCachedFgImage2()
+            needsDisplay = true
+        }
+    }
 
     public var pendingFg1Position: CGPoint?
     public var pendingFg1Scale: CGFloat?
@@ -45,6 +55,7 @@ public class CombiningCanvasView: NSView {
     public var combiningMode: CanvasCombiningMode = .split { didSet { needsDisplay = true } }
 
     public var onRetuneDetector: ((Int, VisionDetectionMode) -> Void)?
+    public var onSelectedObjectChanged: ((Int, ForegroundObject) -> Void)?
 
     // Merge Mode Parameters
     public var mergeLeftPercent: CGFloat = 50.0 { didSet { needsDisplay = true } }
@@ -69,13 +80,33 @@ public class CombiningCanvasView: NSView {
     // Cached Transformed Images
     private var cachedTransformedImage1: NSImage?
     private var cachedTransformedImage2: NSImage?
+    private var cachedFgImage1: NSImage?
+    private var cachedFgImage2: NSImage?
 
     private func updateCachedTransformedImage1() {
         cachedTransformedImage1 = image1?.transformed(with: orientation1)
+        updateCachedFgImage1()
     }
 
     private func updateCachedTransformedImage2() {
         cachedTransformedImage2 = image2?.transformed(with: orientation2)
+        updateCachedFgImage2()
+    }
+
+    private func updateCachedFgImage1() {
+        if let fg = foregroundObject1 {
+            cachedFgImage1 = fg.image.transformed(with: orientation1)
+        } else {
+            cachedFgImage1 = nil
+        }
+    }
+
+    private func updateCachedFgImage2() {
+        if let fg = foregroundObject2 {
+            cachedFgImage2 = fg.image.transformed(with: orientation2)
+        } else {
+            cachedFgImage2 = nil
+        }
     }
 
     // Interactivity
@@ -262,7 +293,8 @@ public class CombiningCanvasView: NSView {
         context.saveGState()
 
         let orientation = (paneIndex == 1) ? orientation1 : orientation2
-        let orientedImg = obj.image.transformed(with: orientation)
+        let cached = (paneIndex == 1) ? cachedFgImage1 : cachedFgImage2
+        let orientedImg = cached ?? obj.image.transformed(with: orientation)
 
         let effectiveScale = defaultFitScale(for: obj)
         let targetWidth = orientedImg.size.width * effectiveScale
@@ -517,6 +549,7 @@ public class CombiningCanvasView: NSView {
                 isDraggingObject = true
                 initialObjPosition = fg.position
                 needsDisplay = true
+                notifySelectedObjectChanged()
                 return
             }
         }
@@ -545,6 +578,7 @@ public class CombiningCanvasView: NSView {
             } else {
                 foregroundObject2?.rotationDegrees = angle
             }
+            notifySelectedObjectChanged()
         } else if isResizingObject {
             let fg = (pane == 1) ? foregroundObject1 : foregroundObject2
             guard let fgObj = fg else { return }
@@ -555,6 +589,7 @@ public class CombiningCanvasView: NSView {
             } else {
                 foregroundObject2?.scale = initialObjScale * factor
             }
+            notifySelectedObjectChanged()
         } else if isDraggingObject {
             let deltaX = currentPt.x - dragStartPoint.x
             let deltaY = currentPt.y - dragStartPoint.y
@@ -563,9 +598,19 @@ public class CombiningCanvasView: NSView {
             } else if pane == 2 {
                 foregroundObject2?.position = CGPoint(x: initialObjPosition.x + deltaX, y: initialObjPosition.y + deltaY)
             }
+            notifySelectedObjectChanged()
         }
 
         needsDisplay = true
+    }
+
+    private func notifySelectedObjectChanged() {
+        guard let pane = selectedObjectPane else { return }
+        if pane == 1, let fg1 = foregroundObject1 {
+            onSelectedObjectChanged?(1, fg1)
+        } else if pane == 2, let fg2 = foregroundObject2 {
+            onSelectedObjectChanged?(2, fg2)
+        }
     }
 
     override public func mouseUp(with event: NSEvent) {

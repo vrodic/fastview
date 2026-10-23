@@ -105,6 +105,10 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         sidebarContainerVC.sidebarVC2.delegate = self
         activePane = 1
 
+        dualCanvasVC.combiningCanvasView.onSelectedObjectChanged = { [weak self] pane, fgObj in
+            self?.statusBarView.updateForegroundObjectInfo(pane: pane, object: fgObj)
+        }
+
         let mainStackView = NSStackView()
         mainStackView.orientation = .vertical
         mainStackView.spacing = 0
@@ -952,20 +956,26 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
     }
 
     public func showInfoForSelectedItem() {
-        guard let item = sidebarVC.selectedItem else { return }
+        if let item = activeSidebar.selectedItem {
+            showInfo(for: item)
+        }
+    }
 
+    public func showInfo(for item: FileItem) {
         let alert = NSAlert()
         alert.messageText = "File Information"
         alert.alertStyle = .informational
         alert.addButton(withTitle: "Close")
 
         let fullPath = item.archivePath != nil ? "\(item.archivePath!) / \(item.path)" : item.path
+        self.lastSelectedInfoPath = fullPath
         let fsPath = item.archivePath ?? item.path
         let fileManager = FileManager.default
 
         var createdStr = "N/A"
         var modifiedStr = "N/A"
         var sizeStr = ByteCountFormatter.string(fromByteCount: Int64(item.fileSize), countStyle: .file)
+        var dimensionsStr = "N/A"
 
         if let attrs = try? fileManager.attributesOfItem(atPath: fsPath) {
             let dateFormatter = DateFormatter()
@@ -983,7 +993,15 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
             }
         }
 
-        let container = NSView(frame: NSRect(x: 0, y: 0, width: 550, height: 160))
+        if let imageSource = CGImageSourceCreateWithURL(URL(fileURLWithPath: fsPath) as CFURL, nil),
+           let properties = CGImageSourceCopyPropertiesAtIndex(imageSource, 0, nil) as? [CFString: Any] {
+            if let w = properties[kCGImagePropertyPixelWidth] as? Int,
+               let h = properties[kCGImagePropertyPixelHeight] as? Int {
+                dimensionsStr = "\(w) × \(h) pixels"
+            }
+        }
+
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 550, height: 180))
 
         let gridView = NSGridView(numberOfColumns: 2, rows: 0)
         gridView.translatesAutoresizingMaskIntoConstraints = false
@@ -1024,6 +1042,7 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
 
         gridView.addRow(with: [makeLabel("Name:", bold: true), makeValueField(item.name)])
         gridView.addRow(with: [makeLabel("Path:", bold: true), pathContainer])
+        gridView.addRow(with: [makeLabel("Resolution:", bold: true), makeValueField(dimensionsStr)])
         gridView.addRow(with: [makeLabel("Size:", bold: true), makeValueField(sizeStr)])
         gridView.addRow(with: [makeLabel("Created:", bold: true), makeValueField(createdStr)])
         gridView.addRow(with: [makeLabel("Modified:", bold: true), makeValueField(modifiedStr)])
