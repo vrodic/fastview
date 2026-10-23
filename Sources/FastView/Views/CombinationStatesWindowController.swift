@@ -169,8 +169,10 @@ public class CombinationStatesWindowController: NSWindowController, NSTableViewD
         } else if tableColumn?.identifier.rawValue == "DateCol" {
             textField?.stringValue = dateFormatter.string(from: state.savedAt)
         } else if tableColumn?.identifier.rawValue == "PathsCol" {
-            let n1 = (state.itemPath1 ?? state.path1 as NSString).lastPathComponent
-            let n2 = (state.itemPath2 ?? state.path2 as NSString).lastPathComponent
+            let path1 = state.itemPath1 ?? state.path1
+            let path2 = state.itemPath2 ?? state.path2
+            let n1 = (path1 as NSString).lastPathComponent
+            let n2 = (path2 as NSString).lastPathComponent
             textField?.stringValue = "\(n1) + \(n2)"
         }
 
