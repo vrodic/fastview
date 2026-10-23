@@ -32,6 +32,7 @@ public class CombiningCanvasView: NSView {
 
     public var showBackground1: Bool = true { didSet { needsDisplay = true } }
     public var showBackground2: Bool = true { didSet { needsDisplay = true } }
+    public var fg1OnTop: Bool = true { didSet { needsDisplay = true } }
 
     public var combiningMode: CanvasCombiningMode = .split { didSet { needsDisplay = true } }
 
@@ -230,12 +231,20 @@ public class CombiningCanvasView: NSView {
         }
         context.restoreGState()
 
-        if let fg1 = foregroundObject1 {
-            drawForegroundObject(fg1, paneIndex: 1, in: rect, context: context)
-        }
-
-        if let fg2 = foregroundObject2 {
-            drawForegroundObject(fg2, paneIndex: 2, in: rect, context: context)
+        if fg1OnTop {
+            if let fg2 = foregroundObject2 {
+                drawForegroundObject(fg2, paneIndex: 2, in: rect, context: context)
+            }
+            if let fg1 = foregroundObject1 {
+                drawForegroundObject(fg1, paneIndex: 1, in: rect, context: context)
+            }
+        } else {
+            if let fg1 = foregroundObject1 {
+                drawForegroundObject(fg1, paneIndex: 1, in: rect, context: context)
+            }
+            if let fg2 = foregroundObject2 {
+                drawForegroundObject(fg2, paneIndex: 2, in: rect, context: context)
+            }
         }
     }
 

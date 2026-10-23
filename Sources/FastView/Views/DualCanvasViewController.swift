@@ -241,6 +241,10 @@ public class DualCanvasViewController: NSViewController, CombiningToolbarDelegat
         combiningCanvasView.showBackground2 = visible
     }
 
+    public func combiningToolbar(_ toolbar: CombiningToolbarView, didToggleFG1OnTop fg1OnTop: Bool) {
+        combiningCanvasView.fg1OnTop = fg1OnTop
+    }
+
     public func combiningToolbar(_ toolbar: CombiningToolbarView, didTriggerRotateRight pane: Int) {
         rotateRight(pane: pane)
     }

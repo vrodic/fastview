@@ -55,6 +55,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
             DispatchQueue.main.async {
                 windowController.splitVC.showFavoritesOnly = false
                 windowController.splitVC.loadLocation(loc, targetSelectedItemPath: targetPath)
+                windowController.splitVC.restoreSelectionAndDualState()
             }
         } else if isFavoritesMode {
             DispatchQueue.main.async {
@@ -63,12 +64,14 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
                     windowController.splitVC.loadLocation(loc, targetSelectedItemPath: targetItem)
                 }
                 windowController.splitVC.showFavoritesOnly = true
+                windowController.splitVC.restoreSelectionAndDualState()
             }
         } else if let path = initialPath {
             saveLastOpenedPath(path)
             let loc = NavigationManager.locationForPath(path)
             DispatchQueue.main.async {
                 windowController.splitVC.loadLocation(loc, targetSelectedItemPath: targetItem)
+                windowController.splitVC.restoreSelectionAndDualState()
             }
         }
     }
@@ -79,15 +82,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func saveCurrentSelectionState() {
         if let splitVC = windowController?.splitVC {
-            if let locPath = splitVC.currentLocationPath {
-                UserDefaults.standard.set(locPath, forKey: AppDelegate.lastPathKey)
-            }
-            if let selectedPath = splitVC.selectedItemPath {
-                UserDefaults.standard.set(selectedPath, forKey: AppDelegate.lastSelectedItemKey)
-            }
-            if let selectedId = splitVC.selectedItemId {
-                UserDefaults.standard.set(selectedId, forKey: AppDelegate.lastSelectedItemIdKey)
-            }
+            splitVC.saveSelectionAndDualState()
         }
     }
 
