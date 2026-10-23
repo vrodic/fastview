@@ -478,9 +478,11 @@ public class SidebarTableCellView: NSTableCellView {
 
         if item.type == .image {
             ThumbnailGenerator.shared.generateThumbnail(for: item) { [weak self] image in
-                guard let self = self, self.currentItem?.id == item.id else { return }
-                if let img = image {
-                    self.setThumbnailLoaded(img)
+                DispatchQueue.main.async {
+                    guard let self = self, self.currentItem?.id == item.id else { return }
+                    if let img = image {
+                        self.setThumbnailLoaded(img)
+                    }
                 }
             }
         }
@@ -489,9 +491,11 @@ public class SidebarTableCellView: NSTableCellView {
     public func loadThumbnailIfIdle(for item: FileItem) {
         guard currentItem?.id == item.id else { return }
         ThumbnailGenerator.shared.generateThumbnail(for: item) { [weak self] image in
-            guard let self = self, self.currentItem?.id == item.id else { return }
-            if let img = image {
-                self.setThumbnailLoaded(img)
+            DispatchQueue.main.async {
+                guard let self = self, self.currentItem?.id == item.id else { return }
+                if let img = image {
+                    self.setThumbnailLoaded(img)
+                }
             }
         }
     }
@@ -500,9 +504,11 @@ public class SidebarTableCellView: NSTableCellView {
         guard currentItem?.id == item.id else { return }
 
         ThumbnailGenerator.shared.generateThumbnail(for: item) { [weak self] image in
-            guard let self = self, self.currentItem?.id == item.id else { return }
-            if let img = image {
-                self.setThumbnailLoaded(img)
+            DispatchQueue.main.async {
+                guard let self = self, self.currentItem?.id == item.id else { return }
+                if let img = image {
+                    self.setThumbnailLoaded(img)
+                }
             }
         }
     }
