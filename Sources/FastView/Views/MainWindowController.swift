@@ -54,6 +54,10 @@ public class MainWindowController: NSWindowController, NSWindowDelegate {
         NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event -> NSEvent? in
             guard let self = self else { return event }
 
+            if let keyWindow = NSApp.keyWindow, keyWindow != self.window {
+                return event
+            }
+
             let isCmdPressed = event.modifierFlags.contains(.command)
 
             let isControlPressed = event.modifierFlags.contains(.control)

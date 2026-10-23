@@ -18,6 +18,7 @@ public class CombinationStatesWindowController: NSWindowController, NSTableViewD
             defer: false
         )
         panel.title = "Saved Combination States"
+        panel.level = .floating
         panel.isReleasedWhenClosed = false
         panel.center()
 
@@ -144,6 +145,10 @@ public class CombinationStatesWindowController: NSWindowController, NSTableViewD
     }
 
     // NSTableViewDelegate
+    public func tableViewSelectionDidChange(_ notification: Notification) {
+        loadAction()
+    }
+
     public func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         guard row < states.count else { return nil }
         let state = states[row]
