@@ -59,7 +59,7 @@ public class SidebarContainerViewController: NSSplitViewController {
             sidebarVC2.showHeader = true
 
             DispatchQueue.main.async { [weak self] in
-                self?.adjustSubSplitRatio()
+                self?.makeEvenSplit()
             }
         } else {
             if let window = view.window, let responder = window.firstResponder as? NSView {
