@@ -3,12 +3,31 @@ import AppKit
 public protocol SidebarDelegate: AnyObject {
     func sidebar(_ sidebar: SidebarViewController, didSelectItem item: FileItem)
     func sidebar(_ sidebar: SidebarViewController, didActivateItem item: FileItem)
+    func sidebarDidBecomeActive(_ sidebar: SidebarViewController)
 }
 
 public class SidebarViewController: NSViewController, NSTableViewDataSource, NSTableViewDelegate {
     public weak var delegate: SidebarDelegate?
 
+    public var paneIndex: Int = 1
+    public var isActivePane: Bool = false {
+        didSet {
+            updateHeaderFocusStyle()
+        }
+    }
+    public var showHeader: Bool = false {
+        didSet {
+            headerContainerView.isHidden = !showHeader
+            headerHeightConstraint?.constant = showHeader ? 28 : 0
+        }
+    }
+
     public private(set) var items: [FileItem] = []
+    private let headerContainerView = NSView()
+    private let headerTitleLabel = NSTextField(labelWithString: "")
+    private let headerAccentIndicator = NSView()
+    private var headerHeightConstraint: NSLayoutConstraint?
+
     private let scrollView = NSScrollView()
     private let tableView = CustomTableView()
     private var scrollDebounceTimer: Timer?
@@ -24,7 +43,44 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
         setupUI()
     }
 
+    public func setHeaderTitle(_ title: String) {
+        headerTitleLabel.stringValue = "Pane \(paneIndex): \(title)"
+    }
+
+    private func updateHeaderFocusStyle() {
+        view.wantsLayer = true
+        if isActivePane {
+            headerContainerView.wantsLayer = true
+            headerContainerView.layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.25).cgColor
+            headerAccentIndicator.wantsLayer = true
+            headerAccentIndicator.layer?.backgroundColor = NSColor.controlAccentColor.cgColor
+            headerTitleLabel.font = NSFont.boldSystemFont(ofSize: 11)
+            headerTitleLabel.textColor = NSColor.labelColor
+        } else {
+            headerContainerView.wantsLayer = true
+            headerContainerView.layer?.backgroundColor = NSColor.windowBackgroundColor.withAlphaComponent(0.5).cgColor
+            headerAccentIndicator.wantsLayer = true
+            headerAccentIndicator.layer?.backgroundColor = NSColor.clear.cgColor
+            headerTitleLabel.font = NSFont.systemFont(ofSize: 11, weight: .medium)
+            headerTitleLabel.textColor = NSColor.secondaryLabelColor
+        }
+    }
+
     private func setupUI() {
+        headerContainerView.translatesAutoresizingMaskIntoConstraints = false
+        headerContainerView.wantsLayer = true
+        headerContainerView.isHidden = true
+
+        headerTitleLabel.translatesAutoresizingMaskIntoConstraints = false
+        headerTitleLabel.font = NSFont.systemFont(ofSize: 11, weight: .semibold)
+        headerTitleLabel.textColor = NSColor.secondaryLabelColor
+        headerTitleLabel.lineBreakMode = .byTruncatingMiddle
+
+        headerAccentIndicator.translatesAutoresizingMaskIntoConstraints = false
+
+        headerContainerView.addSubview(headerAccentIndicator)
+        headerContainerView.addSubview(headerTitleLabel)
+
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         scrollView.hasVerticalScroller = true
         scrollView.autoresizesSubviews = true
@@ -34,6 +90,10 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
         tableView.selectionHighlightStyle = .regular
         tableView.dataSource = self
         tableView.delegate = self
+        tableView.onFocusGained = { [weak self] in
+            guard let self = self else { return }
+            self.delegate?.sidebarDidBecomeActive(self)
+        }
         tableView.onEnterPressed = { [weak self] in
             self?.activateCurrentSelection()
         }
@@ -50,6 +110,8 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
         tableView.addTableColumn(column)
 
         scrollView.documentView = tableView
+
+        view.addSubview(headerContainerView)
         view.addSubview(scrollView)
 
         scrollView.contentView.postsBoundsChangedNotifications = true
@@ -60,12 +122,31 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
             object: scrollView.contentView
         )
 
+        let hHeight = headerContainerView.heightAnchor.constraint(equalToConstant: 0)
+        self.headerHeightConstraint = hHeight
+
         NSLayoutConstraint.activate([
+            headerContainerView.topAnchor.constraint(equalTo: view.topAnchor),
+            headerContainerView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            headerContainerView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            hHeight,
+
+            headerAccentIndicator.leadingAnchor.constraint(equalTo: headerContainerView.leadingAnchor),
+            headerAccentIndicator.topAnchor.constraint(equalTo: headerContainerView.topAnchor),
+            headerAccentIndicator.bottomAnchor.constraint(equalTo: headerContainerView.bottomAnchor),
+            headerAccentIndicator.widthAnchor.constraint(equalToConstant: 4),
+
+            headerTitleLabel.leadingAnchor.constraint(equalTo: headerAccentIndicator.trailingAnchor, constant: 6),
+            headerTitleLabel.trailingAnchor.constraint(equalTo: headerContainerView.trailingAnchor, constant: -6),
+            headerTitleLabel.centerYAnchor.constraint(equalTo: headerContainerView.centerYAnchor),
+
             scrollView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            scrollView.topAnchor.constraint(equalTo: view.topAnchor),
+            scrollView.topAnchor.constraint(equalTo: headerContainerView.bottomAnchor),
             scrollView.bottomAnchor.constraint(equalTo: view.bottomAnchor)
         ])
+
+        updateHeaderFocusStyle()
     }
 
     @objc private func scrollViewDidScroll(_ notification: Notification) {
@@ -240,9 +321,23 @@ public enum PageKeyType {
 }
 
 class CustomTableView: NSTableView {
+    var onFocusGained: (() -> Void)?
     var onEnterPressed: (() -> Void)?
     var onPageKey: ((PageKeyType) -> Void)?
     var onToggleFavoritePressed: (() -> Void)?
+
+    override func mouseDown(with event: NSEvent) {
+        onFocusGained?()
+        super.mouseDown(with: event)
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        let result = super.becomeFirstResponder()
+        if result {
+            onFocusGained?()
+        }
+        return result
+    }
 
     override func keyDown(with event: NSEvent) {
         switch event.keyCode {

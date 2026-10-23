@@ -16,29 +16,46 @@ private final class BlockTarget: NSObject {
 }
 
 public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
-    private let sidebarVC = SidebarViewController()
+    public let sidebarContainerVC = SidebarContainerViewController()
+    public let dualCanvasVC = DualCanvasViewController()
     private let mainContentVC = NSViewController()
-    private let mainImageView = MainImageView()
     private let statusBarView = StatusBarView()
 
-    private var navigationManager: NavigationManager?
+    private var navigationManager1: NavigationManager?
+    private var navigationManager2: NavigationManager?
     private let loadQueue = DispatchQueue(label: "com.fastview.directoryload", qos: .userInitiated)
-    private var currentDirectoryLoadItem: DispatchWorkItem?
+    private var currentDirectoryLoadItem1: DispatchWorkItem?
+    private var currentDirectoryLoadItem2: DispatchWorkItem?
     private let lock = NSLock()
     private static let sidebarWidthKey = "FastViewSidebarWidth"
+
+    public var activePane: Int = 1 {
+        didSet {
+            sidebarContainerVC.sidebarVC1.isActivePane = (activePane == 1)
+            sidebarContainerVC.sidebarVC2.isActivePane = (activePane == 2)
+        }
+    }
+
+    public var activeSidebar: SidebarViewController {
+        return (sidebarContainerVC.isDualView && activePane == 2) ? sidebarContainerVC.sidebarVC2 : sidebarContainerVC.sidebarVC1
+    }
+
+    public var sidebarVC: SidebarViewController {
+        return activeSidebar
+    }
 
     public private(set) var lastMeasuredSpeedMBs: Double = 25.0
 
     public var currentLocationPath: String? {
-        return navigationManager?.currentLocation.physicalPath
+        return navigationManager1?.currentLocation.physicalPath
     }
 
     public var selectedItemPath: String? {
-        return sidebarVC.selectedItem?.path
+        return activeSidebar.selectedItem?.path
     }
 
     public var selectedItemId: String? {
-        return sidebarVC.selectedItem?.id
+        return activeSidebar.selectedItem?.id
     }
 
     public var showFavoritesOnly: Bool = false {
@@ -74,22 +91,24 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
     }
 
     private func setupUI() {
-        sidebarVC.delegate = self
+        sidebarContainerVC.sidebarVC1.delegate = self
+        sidebarContainerVC.sidebarVC2.delegate = self
+        activePane = 1
 
         let mainStackView = NSStackView()
         mainStackView.orientation = .vertical
         mainStackView.spacing = 0
         mainStackView.distribution = .fill
 
-        mainImageView.translatesAutoresizingMaskIntoConstraints = false
+        dualCanvasVC.view.translatesAutoresizingMaskIntoConstraints = false
         statusBarView.translatesAutoresizingMaskIntoConstraints = false
 
-        mainStackView.addArrangedSubview(mainImageView)
+        mainStackView.addArrangedSubview(dualCanvasVC.view)
         mainStackView.addArrangedSubview(statusBarView)
 
         mainContentVC.view = mainStackView
 
-        let sidebarItem = NSSplitViewItem(sidebarWithViewController: sidebarVC)
+        let sidebarItem = NSSplitViewItem(sidebarWithViewController: sidebarContainerVC)
         sidebarItem.minimumThickness = 120
         sidebarItem.maximumThickness = 1200
         sidebarItem.preferredThicknessFraction = 0.25
@@ -101,32 +120,92 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         addSplitViewItem(mainItem)
     }
 
-    public func loadLocation(_ location: NavigationLocation, targetSelectedItemPath: String? = nil) {
+    public func loadLocation(_ location: NavigationLocation, pane: Int = 1, targetSelectedItemPath: String? = nil) {
         cancelAllIOOperations()
-        navigationManager = NavigationManager(initialLocation: location)
-        reloadDirectoryContentsAsync(targetSelectedItemPath: targetSelectedItemPath)
+        if pane == 1 {
+            navigationManager1 = NavigationManager(initialLocation: location)
+            reloadDirectoryContentsAsync(pane: 1, targetSelectedItemPath: targetSelectedItemPath)
+        } else {
+            navigationManager2 = NavigationManager(initialLocation: location)
+            sidebarContainerVC.updateViewMode(isDual: true)
+            dualCanvasVC.setDualViewEnabled(true)
+            activePane = 2
+            reloadDirectoryContentsAsync(pane: 2, targetSelectedItemPath: targetSelectedItemPath)
+        }
+    }
+
+    @objc public func openSecondFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.title = "Select Folder or Archive for 2nd View"
+
+        panel.begin { [weak self] response in
+            guard let self = self, response == .OK, let url = panel.url else { return }
+            let path = url.path
+            let loc = NavigationManager.locationForPath(path)
+            self.loadLocation(loc, pane: 2)
+        }
+    }
+
+    @objc public func closeSecondView() {
+        sidebarContainerVC.updateViewMode(isDual: false)
+        dualCanvasVC.setDualViewEnabled(false)
+        navigationManager2 = nil
+        activePane = 1
+    }
+
+    public func rotateRightForActivePane() {
+        dualCanvasVC.rotateRight(pane: activePane)
+    }
+
+    public func rotateLeftForActivePane() {
+        dualCanvasVC.rotateLeft(pane: activePane)
+    }
+
+    public func flipHorizontalForActivePane() {
+        dualCanvasVC.flipHorizontal(pane: activePane)
+    }
+
+    public func flipVerticalForActivePane() {
+        dualCanvasVC.flipVertical(pane: activePane)
+    }
+
+    public func resetOrientationForActivePane() {
+        dualCanvasVC.resetOrientation(pane: activePane)
+    }
+
+    public func toggleCombiningControls() {
+        dualCanvasVC.toggleToolbar()
     }
 
     public func cancelAllIOOperations() {
         lock.lock()
-        currentDirectoryLoadItem?.cancel()
-        currentDirectoryLoadItem = nil
+        currentDirectoryLoadItem1?.cancel()
+        currentDirectoryLoadItem1 = nil
+        currentDirectoryLoadItem2?.cancel()
+        currentDirectoryLoadItem2 = nil
         lock.unlock()
         ThumbnailGenerator.shared.cancelAllPendingTasks()
     }
 
     public func reloadDirectoryContentsPublic() {
-        reloadDirectoryContentsAsync()
+        reloadDirectoryContentsAsync(pane: activePane)
     }
 
-    private func reloadDirectoryContentsAsync(targetSelectedItemPath: String? = nil, isNavigatingUp: Bool = false) {
+    private func reloadDirectoryContentsAsync(pane: Int = 1, targetSelectedItemPath: String? = nil, isNavigatingUp: Bool = false) {
         cancelAllIOOperations()
+
+        let targetSidebar = (pane == 2) ? sidebarContainerVC.sidebarVC2 : sidebarContainerVC.sidebarVC1
+        let navMgr = (pane == 2) ? navigationManager2 : navigationManager1
 
         let startTime = CFAbsoluteTimeGetCurrent()
 
-        if showFavoritesOnly {
+        if showFavoritesOnly && pane == 1 {
             let favorites = SQLiteCache.shared.getAllFavorites()
-            sidebarVC.setItems(favorites, selectFirst: targetSelectedItemPath == nil)
+            targetSidebar.setHeaderTitle("Favorites")
+            targetSidebar.setItems(favorites, selectFirst: targetSelectedItemPath == nil)
             statusBarView.updateDirectoryStats(imageCount: favorites.count, totalSizeBytes: 0, locationName: "Favorites")
 
             if let targetPath = targetSelectedItemPath,
@@ -138,15 +217,15 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
                    $0.path.hasSuffix(targetPath) ||
                    targetPath.hasSuffix($0.path)
                }) {
-                sidebarVC.selectRow(idx)
-                displayItem(favorites[idx])
+                targetSidebar.selectRow(idx)
+                displayItem(favorites[idx], pane: pane)
             } else if targetSelectedItemPath == nil, let first = favorites.first {
-                displayItem(first)
+                displayItem(first, pane: pane)
             }
             return
         }
 
-        guard let navMgr = navigationManager else { return }
+        guard let navMgr = navMgr else { return }
 
         let path = navMgr.currentLocation.physicalPath
         let isArchive = navMgr.currentLocation.isArchive
@@ -181,22 +260,25 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
             locationTitle = (path as NSString).lastPathComponent
         }
 
-        // Draw status bar information immediately before starting LIST_(ZIP/RAR)_START operations
-        statusBarView.updateDirectoryStats(imageCount: 0, totalSizeBytes: archiveSize, locationName: locationTitle)
+        targetSidebar.setHeaderTitle(locationTitle)
 
-        // Show progress bar immediately for archive opening operations
-        if isArchive {
+        // Draw status bar information immediately
+        if pane == 1 {
+            statusBarView.updateDirectoryStats(imageCount: 0, totalSizeBytes: archiveSize, locationName: locationTitle)
+        }
+
+        if isArchive && pane == 1 {
             let loadingMessage = String(format: "Opening archive %@...", archiveName)
-            mainImageView.showLoading(fileSizeBytes: archiveSize, pastSpeedMBs: lastMeasuredSpeedMBs, statusText: loadingMessage)
+            dualCanvasVC.imageView1.showLoading(fileSizeBytes: archiveSize, pastSpeedMBs: lastMeasuredSpeedMBs, statusText: loadingMessage)
         }
 
         FileLogger.shared.log("DIR_OPEN_START", path: path)
 
         var workItem: DispatchWorkItem!
         workItem = DispatchWorkItem { [weak self] in
-            guard let self = self, !workItem.isCancelled, let mgr = self.navigationManager else { return }
+            guard let self = self, !workItem.isCancelled else { return }
 
-            let items = mgr.contents()
+            let items = navMgr.contents()
             if workItem.isCancelled { return }
 
             let elapsedTime = (CFAbsoluteTimeGetCurrent() - startTime) * 1000.0
@@ -206,7 +288,7 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
 
             DispatchQueue.main.async {
                 if workItem.isCancelled { return }
-                self.sidebarVC.setItems(items, selectFirst: targetSelectedItemPath == nil)
+                targetSidebar.setItems(items, selectFirst: targetSelectedItemPath == nil)
 
                 if let targetPath = targetSelectedItemPath,
                    let idx = items.firstIndex(where: {
@@ -218,33 +300,39 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
                        targetPath.hasSuffix($0.path) ||
                        (targetPath.contains("#") && targetPath.hasSuffix("#" + $0.id))
                    }) {
-                    print("[MainSplitVC] Selected target item '\(items[idx].name)' at index \(idx)")
-                    self.sidebarVC.selectRow(idx)
-                    self.displayItem(items[idx])
+                    print("[MainSplitVC] Pane \(pane) selected target item '\(items[idx].name)' at index \(idx)")
+                    targetSidebar.selectRow(idx)
+                    self.displayItem(items[idx], pane: pane)
                 } else if targetSelectedItemPath == nil,
                           let firstItem = items.first(where: { $0.type == .image || $0.type == .archiveZip || $0.type == .archiveRar }) {
-                    self.displayItem(firstItem)
+                    self.displayItem(firstItem, pane: pane)
                 } else {
-                    self.statusBarView.updateDirectoryStats(imageCount: imageItems.count, totalSizeBytes: archiveSize, locationName: locationTitle)
-                    if imageItems.isEmpty {
-                        self.mainImageView.hideLoading()
-                        self.mainImageView.setImage(nil, keepZoom: false)
+                    if pane == 1 {
+                        self.statusBarView.updateDirectoryStats(imageCount: imageItems.count, totalSizeBytes: archiveSize, locationName: locationTitle)
+                        if imageItems.isEmpty {
+                            self.dualCanvasVC.imageView1.hideLoading()
+                            self.dualCanvasVC.setImage(nil, pane: 1)
+                        }
                     }
                 }
 
-                self.sidebarVC.loadVisibleThumbnailsIfIdle()
+                targetSidebar.loadVisibleThumbnailsIfIdle()
             }
         }
 
         lock.lock()
-        currentDirectoryLoadItem = workItem
+        if pane == 1 {
+            currentDirectoryLoadItem1 = workItem
+        } else {
+            currentDirectoryLoadItem2 = workItem
+        }
         lock.unlock()
 
         loadQueue.async(execute: workItem)
     }
 
     public func switchToCurrentItemLocationMode() {
-        guard let item = sidebarVC.selectedItem else {
+        guard let item = activeSidebar.selectedItem else {
             showFavoritesOnly = false
             return
         }
@@ -267,98 +355,61 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         }
 
         print("[MainSplitVC] switchToCurrentItemLocationMode for item '\(item.name)', targetPath: '\(targetPath)', locPath: '\(loc.physicalPath)' (archiveSubfolder: '\(loc.archiveSubfolder ?? "")')")
-        loadLocation(loc, targetSelectedItemPath: targetPath)
+        loadLocation(loc, pane: activePane, targetSelectedItemPath: targetPath)
     }
 
-    public func displayItem(_ item: FileItem) {
-        // Ensure progress bar and main image loading only run for the currently selected item
-        if let currentSelected = sidebarVC.selectedItem, currentSelected.id != item.id {
+    public func displayItem(_ item: FileItem, pane: Int = 1) {
+        let targetSidebar = (pane == 2) ? sidebarContainerVC.sidebarVC2 : sidebarContainerVC.sidebarVC1
+        if let currentSelected = targetSidebar.selectedItem, currentSelected.id != item.id {
             return
         }
 
-        // Automatically persist current selection state whenever item is displayed
-        if let locPath = currentLocationPath {
-            UserDefaults.standard.set(locPath, forKey: "FastViewLastOpenedPath")
+        if pane == 1 {
+            if let locPath = currentLocationPath {
+                UserDefaults.standard.set(locPath, forKey: "FastViewLastOpenedPath")
+            }
+            UserDefaults.standard.set(item.path, forKey: "FastViewLastSelectedItemPath")
+            UserDefaults.standard.set(item.id, forKey: "FastViewLastSelectedItemId")
         }
-        UserDefaults.standard.set(item.path, forKey: "FastViewLastSelectedItemPath")
-        UserDefaults.standard.set(item.id, forKey: "FastViewLastSelectedItemId")
 
+        let nav = (pane == 2) ? navigationManager2 : navigationManager1
         let parentName: String
-        if showFavoritesOnly {
+        if showFavoritesOnly && pane == 1 {
             parentName = "Favorites"
-        } else if let nav = navigationManager {
+        } else if let nav = nav {
             parentName = (nav.currentLocation.physicalPath as NSString).lastPathComponent
         } else {
             parentName = ""
         }
 
-        let imageItems = sidebarVC.items.filter { $0.type == .image }
+        let imageItems = targetSidebar.items.filter { $0.type == .image }
         let currentIndex = imageItems.firstIndex(where: { $0.id == item.id }).map { $0 + 1 }
         let totalImages = imageItems.count
 
-        if item.type == .image {
-            statusBarView.updateImageInfo(item: item, image: nil, currentIndex: currentIndex, totalImages: totalImages, parentName: parentName)
-            if MemoryLRUCache.shared.object(forKey: "full_\(item.id)") == nil {
-                mainImageView.showLoading(fileSizeBytes: item.fileSize, pastSpeedMBs: lastMeasuredSpeedMBs)
-            }
-        } else if item.type == .archiveZip || item.type == .archiveRar {
-            statusBarView.updateSelectedItemStats(item: item, containedImagesCount: nil, parentName: parentName)
-
-            let thumbKey = "thumb_\(item.id)_256.0x256.0"
-            let fullKey = "full_\(item.id)"
-
-            if let cachedFull = MemoryLRUCache.shared.object(forKey: fullKey) {
-                mainImageView.setImage(cachedFull, keepZoom: true)
-            } else if let cachedThumb = MemoryLRUCache.shared.object(forKey: thumbKey) {
-                mainImageView.setImage(cachedThumb, keepZoom: true)
-            } else {
-                mainImageView.showLoading(fileSizeBytes: item.fileSize, pastSpeedMBs: lastMeasuredSpeedMBs)
-            }
-
-            // Count images in the archive for the status bar.  This runs on a
-            // plain background queue (not the priority IO queue) because it only
-            // reads the central directory, which is already cached after the
-            // first open.  It must not race with currentDirectoryLoadItem, so
-            // store it in the same slot for cancellation purposes.
-            var workItem: DispatchWorkItem!
-            workItem = DispatchWorkItem { [weak self] in
-                guard let self = self, !workItem.isCancelled else { return }
-
-                let archiveItems: [FileItem]
-                if item.type == .archiveZip {
-                    archiveItems = ArchiveReader.listAllZipImages(archivePath: item.path, isCancelled: { workItem.isCancelled })
-                } else {
-                    archiveItems = ArchiveReader.listAllRarImages(archivePath: item.path, isCancelled: { workItem.isCancelled })
+        if pane == 1 {
+            if item.type == .image {
+                statusBarView.updateImageInfo(item: item, image: nil, currentIndex: currentIndex, totalImages: totalImages, parentName: parentName)
+                if MemoryLRUCache.shared.object(forKey: "full_\(item.id)") == nil {
+                    dualCanvasVC.imageView1.showLoading(fileSizeBytes: item.fileSize, pastSpeedMBs: lastMeasuredSpeedMBs)
                 }
-
-                if workItem.isCancelled { return }
-
-                DispatchQueue.main.async {
-                    if !workItem.isCancelled {
-                        self.statusBarView.updateSelectedItemStats(item: item, containedImagesCount: archiveItems.count, parentName: parentName)
-                    }
-                }
+            } else if item.type == .archiveZip || item.type == .archiveRar {
+                statusBarView.updateSelectedItemStats(item: item, containedImagesCount: nil, parentName: parentName)
             }
+        }
 
-            lock.lock()
-            currentDirectoryLoadItem = workItem
-            lock.unlock()
-
-            loadQueue.async(execute: workItem)
-        } else if item.isDirectory || item.type == .parentDirectory {
-            statusBarView.updateSelectedItemStats(item: item, containedImagesCount: nil, parentName: parentName)
-            mainImageView.setImage(nil, keepZoom: false)
+        if item.isDirectory || item.type == .parentDirectory {
+            if pane == 1 {
+                statusBarView.updateSelectedItemStats(item: item, containedImagesCount: nil, parentName: parentName)
+                dualCanvasVC.setImage(nil, pane: 1)
+            }
             return
         }
 
         let readStartTime = CFAbsoluteTimeGetCurrent()
 
-        // loadFullImage internally cancels all queued thumbnail work before
-        // dispatching onto the priority queue, ensuring the selected image is
-        // never blocked behind background thumbnails.
         ThumbnailGenerator.shared.loadFullImage(for: item) { [weak self] image in
             guard let self = self else { return }
-            guard self.sidebarVC.selectedItem?.id == item.id else { return }
+            guard targetSidebar.selectedItem?.id == item.id else { return }
 
             if let image = image {
                 let duration = CFAbsoluteTimeGetCurrent() - readStartTime
@@ -367,73 +418,99 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
                     self.lastMeasuredSpeedMBs = (self.lastMeasuredSpeedMBs * 0.7) + (speedMBs * 0.3)
                 }
 
-                self.mainImageView.setImage(image, keepZoom: true)
-                self.statusBarView.updateImageInfo(item: item, image: image, currentIndex: currentIndex, totalImages: totalImages, parentName: parentName)
+                self.dualCanvasVC.setImage(image, pane: pane)
+                if pane == 1 {
+                    self.statusBarView.updateImageInfo(item: item, image: image, currentIndex: currentIndex, totalImages: totalImages, parentName: parentName)
+                }
 
                 let cacheKey = "thumb_\(item.id)_256.0x256.0"
                 let cost = Int(image.size.width * image.size.height * 4)
                 MemoryLRUCache.shared.setObject(image, forKey: cacheKey, cost: cost)
-                self.sidebarVC.updateThumbnailForSelectedItem(image: image)
+                targetSidebar.updateThumbnailForSelectedItem(image: image)
             } else {
-                self.mainImageView.hideLoading()
-                self.mainImageView.setImage(nil, keepZoom: false)
+                self.dualCanvasVC.setImage(nil, pane: pane)
+                if pane == 1 {
+                    self.dualCanvasVC.imageView1.hideLoading()
+                }
             }
 
-            self.sidebarVC.loadVisibleThumbnailsIfIdle()
+            targetSidebar.loadVisibleThumbnailsIfIdle()
         }
     }
 
     public func toggleFavoriteOnSelectedItem() {
-        if let item = sidebarVC.selectedItem {
+        if let item = activeSidebar.selectedItem {
             let newState = SQLiteCache.shared.toggleFavorite(item: item)
             print("[MainSplitVC] Toggled favorite for item: \(item.name) (id: \(item.id), path: \(item.path)), newState isFavorite: \(newState)")
-            sidebarVC.reloadSelectedRow()
+            activeSidebar.reloadSelectedRow()
             if showFavoritesOnly {
-                reloadDirectoryContentsAsync()
+                reloadDirectoryContentsAsync(pane: activePane)
             }
         } else {
-            print("[MainSplitVC] toggleFavoriteOnSelectedItem called but no item selected in sidebar")
+            print("[MainSplitVC] toggleFavoriteOnSelectedItem called but no item selected in active sidebar")
         }
     }
 
     // SidebarDelegate
     public func sidebar(_ sidebar: SidebarViewController, didSelectItem item: FileItem) {
-        displayItem(item)
+        displayItem(item, pane: sidebar.paneIndex)
     }
 
     public func sidebar(_ sidebar: SidebarViewController, didActivateItem item: FileItem) {
-        handleActivation(of: item)
+        handleActivation(of: item, pane: sidebar.paneIndex)
     }
 
-    public func handleActivation(of item: FileItem) {
+    public func sidebarDidBecomeActive(_ sidebar: SidebarViewController) {
+        self.activePane = sidebar.paneIndex
+    }
+
+    public func handleActivation(of item: FileItem, pane: Int = 1) {
         if showFavoritesOnly {
             switchToCurrentItemLocationMode()
             return
         }
-        guard let navMgr = navigationManager else { return }
+        let navMgr = (pane == 2) ? navigationManager2 : navigationManager1
+        guard let navMgr = navMgr else { return }
         if item.type == .image {
-            selectNextImage()
+            if pane == 2 {
+                selectNextImagePane2()
+            } else {
+                selectNextImage()
+            }
         } else if item.type == .parentDirectory {
-            navigateUp()
+            navigateUp(pane: pane)
         } else if item.isDirectory || item.type == .archiveZip || item.type == .archiveRar {
             cancelAllIOOperations()
             if let _ = navMgr.navigateTo(item) {
-                reloadDirectoryContentsAsync()
+                reloadDirectoryContentsAsync(pane: pane)
             }
         }
     }
 
     public func selectNextImage() {
-        sidebarVC.selectNext()
+        activeSidebar.selectNext()
     }
 
     public func selectPreviousImage() {
-        sidebarVC.selectPrevious()
+        activeSidebar.selectPrevious()
+    }
+
+    public func selectNextImagePane2() {
+        if sidebarContainerVC.isDualView {
+            sidebarContainerVC.sidebarVC2.selectNext()
+        }
+    }
+
+    public func selectPreviousImagePane2() {
+        if sidebarContainerVC.isDualView {
+            sidebarContainerVC.sidebarVC2.selectPrevious()
+        }
     }
 
     public func selectNextArchiveOrFolderFirstImage() {
-        let items = sidebarVC.items
-        guard let current = sidebarVC.selectedItem,
+        let currentSidebar = activeSidebar
+        let items = currentSidebar.items
+        guard let current = currentSidebar.selectedItem,
               let currentIdx = items.firstIndex(where: { $0.id == current.id }) else { return }
 
         let currentGroup = current.entryParentDir ?? ""
@@ -441,15 +518,16 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
             let item = items[i]
             let group = item.entryParentDir ?? ""
             if group != currentGroup && (item.type == .image || item.isDirectory || item.type == .archiveZip || item.type == .archiveRar) {
-                sidebarVC.selectRow(i)
+                currentSidebar.selectRow(i)
                 return
             }
         }
     }
 
     public func selectPreviousArchiveOrFolderFirstImage() {
-        let items = sidebarVC.items
-        guard let current = sidebarVC.selectedItem,
+        let currentSidebar = activeSidebar
+        let items = currentSidebar.items
+        guard let current = currentSidebar.selectedItem,
               let currentIdx = items.firstIndex(where: { $0.id == current.id }) else { return }
 
         let currentGroup = current.entryParentDir ?? ""
@@ -467,15 +545,17 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
             for i in 0..<currentIdx {
                 let item = items[i]
                 if (item.entryParentDir ?? "") == prevGroup && (item.type == .image || item.isDirectory || item.type == .archiveZip || item.type == .archiveRar) {
-                    sidebarVC.selectRow(i)
+                    currentSidebar.selectRow(i)
                     return
                 }
             }
         }
     }
 
-    public func selectPreviousHierarchyItem() {
-        guard let navMgr = navigationManager else { return }
+    public func selectPreviousHierarchyItem(pane: Int? = nil) {
+        let p = pane ?? activePane
+        let navMgr = (p == 2) ? navigationManager2 : navigationManager1
+        guard let navMgr = navMgr else { return }
         cancelAllIOOperations()
 
         let result = navMgr.navigateUp()
@@ -488,17 +568,19 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
             let prevSibling = parentItems[exitedIdx - 1]
             if prevSibling.isDirectory || prevSibling.type == .archiveZip || prevSibling.type == .archiveRar {
                 _ = navMgr.navigateTo(prevSibling)
-                reloadDirectoryContentsAsync()
+                reloadDirectoryContentsAsync(pane: p)
             } else {
-                reloadDirectoryContentsAsync(targetSelectedItemPath: prevSibling.path)
+                reloadDirectoryContentsAsync(pane: p, targetSelectedItemPath: prevSibling.path)
             }
         } else {
-            reloadDirectoryContentsAsync(targetSelectedItemPath: result.exitedItemPath, isNavigatingUp: true)
+            reloadDirectoryContentsAsync(pane: p, targetSelectedItemPath: result.exitedItemPath, isNavigatingUp: true)
         }
     }
 
-    public func selectNextHierarchyItem() {
-        guard let navMgr = navigationManager else { return }
+    public func selectNextHierarchyItem(pane: Int? = nil) {
+        let p = pane ?? activePane
+        let navMgr = (p == 2) ? navigationManager2 : navigationManager1
+        guard let navMgr = navMgr else { return }
         cancelAllIOOperations()
         let result = navMgr.navigateUp()
         let parentLocation = navMgr.currentLocation
@@ -510,30 +592,32 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
             let nextSibling = parentItems[exitedIdx + 1]
             if nextSibling.isDirectory || nextSibling.type == .archiveZip || nextSibling.type == .archiveRar {
                 _ = navMgr.navigateTo(nextSibling)
-                reloadDirectoryContentsAsync()
+                reloadDirectoryContentsAsync(pane: p)
             } else {
-                reloadDirectoryContentsAsync(targetSelectedItemPath: nextSibling.path)
+                reloadDirectoryContentsAsync(pane: p, targetSelectedItemPath: nextSibling.path)
             }
         } else {
-            reloadDirectoryContentsAsync(targetSelectedItemPath: result.exitedItemPath, isNavigatingUp: true)
+            reloadDirectoryContentsAsync(pane: p, targetSelectedItemPath: result.exitedItemPath, isNavigatingUp: true)
         }
     }
 
     public func activateSelectedItem() {
-        if let item = sidebarVC.selectedItem {
-            handleActivation(of: item)
+        if let item = activeSidebar.selectedItem {
+            handleActivation(of: item, pane: activePane)
         }
     }
 
-    public func navigateUp() {
-        guard let navMgr = navigationManager else { return }
+    public func navigateUp(pane: Int? = nil) {
+        let p = pane ?? activePane
+        let navMgr = (p == 2) ? navigationManager2 : navigationManager1
+        guard let navMgr = navMgr else { return }
         cancelAllIOOperations()
         let result = navMgr.navigateUp()
-        reloadDirectoryContentsAsync(targetSelectedItemPath: result.exitedItemPath, isNavigatingUp: true)
+        reloadDirectoryContentsAsync(pane: p, targetSelectedItemPath: result.exitedItemPath, isNavigatingUp: true)
     }
 
     public var imageView: MainImageView {
-        return mainImageView
+        return dualCanvasVC.imageView1
     }
 
     public func showInfoForSelectedItem() {

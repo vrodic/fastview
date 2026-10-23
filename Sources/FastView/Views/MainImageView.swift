@@ -9,6 +9,13 @@ public enum ImageZoomMode {
 
 public class MainImageView: NSView {
     public private(set) var currentImage: NSImage?
+    public private(set) var rawImage: NSImage?
+    public var orientation = ImageOrientation() {
+        didSet {
+            updateTransformedImage(keepZoom: true)
+        }
+    }
+
     public var zoomMode: ImageZoomMode = .fitToScreen {
         didSet {
             updateLayout()
@@ -168,8 +175,21 @@ public class MainImageView: NSView {
 
     public func setImage(_ image: NSImage?, keepZoom: Bool = true) {
         hideLoading()
-        self.currentImage = image
-        imageView.image = image
+        self.rawImage = image
+        updateTransformedImage(keepZoom: keepZoom)
+    }
+
+    private func updateTransformedImage(keepZoom: Bool = true) {
+        guard let raw = rawImage else {
+            self.currentImage = nil
+            imageView.image = nil
+            updateLayout()
+            return
+        }
+
+        let transformed = raw.transformed(with: orientation)
+        self.currentImage = transformed
+        imageView.image = transformed
 
         if !keepZoom {
             scrollView.magnification = 1.0
@@ -177,6 +197,26 @@ public class MainImageView: NSView {
         }
 
         updateLayout()
+    }
+
+    public func rotateRight() {
+        orientation.rotateRight()
+    }
+
+    public func rotateLeft() {
+        orientation.rotateLeft()
+    }
+
+    public func flipHorizontal() {
+        orientation.toggleFlipHorizontal()
+    }
+
+    public func flipVertical() {
+        orientation.toggleFlipVertical()
+    }
+
+    public func resetOrientation() {
+        orientation.reset()
     }
 
     public func zoomIn() {

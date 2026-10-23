@@ -134,6 +134,9 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         let fileMenu = NSMenu(title: "File")
         fileMenuItem.submenu = fileMenu
         fileMenu.addItem(withTitle: "Open…", action: #selector(openDocument(_:)), keyEquivalent: "o")
+        fileMenu.addItem(withTitle: "Pick Folder for 2nd View…", action: #selector(openSecondFolderAction(_:)), keyEquivalent: "")
+        fileMenu.addItem(withTitle: "Close 2nd View", action: #selector(closeSecondViewAction(_:)), keyEquivalent: "")
+        fileMenu.addItem(NSMenuItem.separator())
         fileMenu.addItem(withTitle: "Show Info", action: #selector(showInfoAction(_:)), keyEquivalent: "i")
         fileMenu.addItem(withTitle: "Toggle Favorite", action: #selector(toggleFavoriteAction(_:)), keyEquivalent: "f")
         fileMenu.addItem(withTitle: "Switch to All Mode", action: #selector(switchToAllModeAction(_:)), keyEquivalent: "l")
@@ -149,6 +152,9 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         viewMenu.addItem(withTitle: "Show All Items", action: #selector(showAllItemsAction(_:)), keyEquivalent: "")
         viewMenu.addItem(withTitle: "Show Favorites Only", action: #selector(showFavoritesOnlyAction(_:)), keyEquivalent: "")
         viewMenu.addItem(NSMenuItem.separator())
+        viewMenu.addItem(withTitle: "Pick Folder for 2nd View…", action: #selector(openSecondFolderAction(_:)), keyEquivalent: "")
+        viewMenu.addItem(withTitle: "Close 2nd View", action: #selector(closeSecondViewAction(_:)), keyEquivalent: "")
+        viewMenu.addItem(NSMenuItem.separator())
 
         let flattenItem = NSMenuItem(title: "Flatten Archive Directories", action: #selector(toggleFlattenArchivesAction(_:)), keyEquivalent: "")
         flattenItem.state = ArchiveReader.flattenArchiveDirectories ? .on : .off
@@ -157,6 +163,19 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         let lowMemItem = NSMenuItem(title: "Low Memory Mode", action: #selector(toggleLowMemoryModeAction(_:)), keyEquivalent: "")
         lowMemItem.state = MemoryLRUCache.shared.isLowMemoryMode ? .on : .off
         viewMenu.addItem(lowMemItem)
+
+        let combiningControlsItem = NSMenuItem(title: "Image Combining Controls", action: #selector(toggleCombiningControlsAction(_:)), keyEquivalent: "c")
+        combiningControlsItem.keyEquivalentModifierMask = [.command, .option]
+        viewMenu.addItem(combiningControlsItem)
+
+        viewMenu.addItem(NSMenuItem.separator())
+        viewMenu.addItem(withTitle: "Rotate Right 90°", action: #selector(rotateRightAction), keyEquivalent: "r")
+        let rotLeftItem = NSMenuItem(title: "Rotate Left 90°", action: #selector(rotateLeftAction), keyEquivalent: "r")
+        rotLeftItem.keyEquivalentModifierMask = [.command, .option]
+        viewMenu.addItem(rotLeftItem)
+        viewMenu.addItem(withTitle: "Flip Horizontal", action: #selector(flipHorizontalAction), keyEquivalent: "")
+        viewMenu.addItem(withTitle: "Flip Vertical", action: #selector(flipVerticalAction), keyEquivalent: "")
+        viewMenu.addItem(withTitle: "Reset Orientation", action: #selector(resetOrientationAction), keyEquivalent: "")
 
         viewMenu.addItem(NSMenuItem.separator())
         viewMenu.addItem(withTitle: "Zoom In", action: #selector(zoomInAction), keyEquivalent: "+")
@@ -180,6 +199,14 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         let prevGroupItem = NSMenuItem(title: "Previous Folder / Archive First Image", action: #selector(prevGroupAction), keyEquivalent: "\u{F700}")
         prevGroupItem.keyEquivalentModifierMask = [.command]
         controlsMenu.addItem(prevGroupItem)
+
+        let nextPane2Item = NSMenuItem(title: "Next Image in 2nd View", action: #selector(nextImagePane2Action), keyEquivalent: "\u{F701}")
+        nextPane2Item.keyEquivalentModifierMask = [.control]
+        controlsMenu.addItem(nextPane2Item)
+
+        let prevPane2Item = NSMenuItem(title: "Previous Image in 2nd View", action: #selector(prevImagePane2Action), keyEquivalent: "\u{F700}")
+        prevPane2Item.keyEquivalentModifierMask = [.control]
+        controlsMenu.addItem(prevPane2Item)
 
         controlsMenu.addItem(NSMenuItem.separator())
 
@@ -336,5 +363,45 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func zoomToFitAction() {
         windowController?.splitVC.imageView.resetZoomToFit()
+    }
+
+    @objc private func openSecondFolderAction(_ sender: Any?) {
+        windowController?.splitVC.openSecondFolder()
+    }
+
+    @objc private func closeSecondViewAction(_ sender: Any?) {
+        windowController?.splitVC.closeSecondView()
+    }
+
+    @objc private func nextImagePane2Action() {
+        windowController?.splitVC.selectNextImagePane2()
+    }
+
+    @objc private func prevImagePane2Action() {
+        windowController?.splitVC.selectPreviousImagePane2()
+    }
+
+    @objc private func rotateRightAction() {
+        windowController?.splitVC.rotateRightForActivePane()
+    }
+
+    @objc private func rotateLeftAction() {
+        windowController?.splitVC.rotateLeftForActivePane()
+    }
+
+    @objc private func flipHorizontalAction() {
+        windowController?.splitVC.flipHorizontalForActivePane()
+    }
+
+    @objc private func flipVerticalAction() {
+        windowController?.splitVC.flipVerticalForActivePane()
+    }
+
+    @objc private func resetOrientationAction() {
+        windowController?.splitVC.resetOrientationForActivePane()
+    }
+
+    @objc private func toggleCombiningControlsAction(_ sender: Any?) {
+        windowController?.splitVC.toggleCombiningControls()
     }
 }
