@@ -130,8 +130,33 @@ public class DualCanvasViewController: NSViewController, CombiningToolbarDelegat
 
             if let img = image {
                 ForegroundDetector.detectForegroundObject(in: img) { [weak self] fgObj in
-                    self?.combiningCanvasView.foregroundObject1 = fgObj
-                    self?.combiningCanvasView.updateFGPositionsFromSliders()
+                    guard let self = self, var fg = fgObj else { return }
+                    let canvas = self.combiningCanvasView
+                    if let pos = canvas.pendingFg1Position {
+                        fg.position = pos
+                        canvas.pendingFg1Position = nil
+                    } else if let existing = canvas.foregroundObject1, existing.position != .zero {
+                        fg.position = existing.position
+                    }
+
+                    if let scale = canvas.pendingFg1Scale {
+                        fg.scale = scale
+                        canvas.pendingFg1Scale = nil
+                    } else if let existing = canvas.foregroundObject1 {
+                        fg.scale = existing.scale
+                    }
+
+                    if let rot = canvas.pendingFg1Rotation {
+                        fg.rotationDegrees = rot
+                        canvas.pendingFg1Rotation = nil
+                    } else if let existing = canvas.foregroundObject1 {
+                        fg.rotationDegrees = existing.rotationDegrees
+                    }
+
+                    canvas.foregroundObject1 = fg
+                    if fg.position == .zero {
+                        canvas.updateFGPositionsFromSliders()
+                    }
                 }
             } else {
                 combiningCanvasView.foregroundObject1 = nil
@@ -142,8 +167,33 @@ public class DualCanvasViewController: NSViewController, CombiningToolbarDelegat
 
             if let img = image {
                 ForegroundDetector.detectForegroundObject(in: img) { [weak self] fgObj in
-                    self?.combiningCanvasView.foregroundObject2 = fgObj
-                    self?.combiningCanvasView.updateFGPositionsFromSliders()
+                    guard let self = self, var fg = fgObj else { return }
+                    let canvas = self.combiningCanvasView
+                    if let pos = canvas.pendingFg2Position {
+                        fg.position = pos
+                        canvas.pendingFg2Position = nil
+                    } else if let existing = canvas.foregroundObject2, existing.position != .zero {
+                        fg.position = existing.position
+                    }
+
+                    if let scale = canvas.pendingFg2Scale {
+                        fg.scale = scale
+                        canvas.pendingFg2Scale = nil
+                    } else if let existing = canvas.foregroundObject2 {
+                        fg.scale = existing.scale
+                    }
+
+                    if let rot = canvas.pendingFg2Rotation {
+                        fg.rotationDegrees = rot
+                        canvas.pendingFg2Rotation = nil
+                    } else if let existing = canvas.foregroundObject2 {
+                        fg.rotationDegrees = existing.rotationDegrees
+                    }
+
+                    canvas.foregroundObject2 = fg
+                    if fg.position == .zero {
+                        canvas.updateFGPositionsFromSliders()
+                    }
                 }
             } else {
                 combiningCanvasView.foregroundObject2 = nil

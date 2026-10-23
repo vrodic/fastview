@@ -308,22 +308,28 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         canvas.fg1OnTop = state.fg1OnTop
 
         if let x1 = state.fgPos1X, let y1 = state.fgPos1Y {
+            canvas.pendingFg1Position = CGPoint(x: x1, y: y1)
             canvas.foregroundObject1?.position = CGPoint(x: x1, y: y1)
         }
         if let s1 = state.fgScale1 {
+            canvas.pendingFg1Scale = CGFloat(s1)
             canvas.foregroundObject1?.scale = CGFloat(s1)
         }
         if let r1 = state.fgRot1 {
+            canvas.pendingFg1Rotation = CGFloat(r1)
             canvas.foregroundObject1?.rotationDegrees = CGFloat(r1)
         }
 
         if let x2 = state.fgPos2X, let y2 = state.fgPos2Y {
+            canvas.pendingFg2Position = CGPoint(x: x2, y: y2)
             canvas.foregroundObject2?.position = CGPoint(x: x2, y: y2)
         }
         if let s2 = state.fgScale2 {
+            canvas.pendingFg2Scale = CGFloat(s2)
             canvas.foregroundObject2?.scale = CGFloat(s2)
         }
         if let r2 = state.fgRot2 {
+            canvas.pendingFg2Rotation = CGFloat(r2)
             canvas.foregroundObject2?.rotationDegrees = CGFloat(r2)
         }
 

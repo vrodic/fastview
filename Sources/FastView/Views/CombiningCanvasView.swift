@@ -30,6 +30,14 @@ public class CombiningCanvasView: NSView {
     public var foregroundObject1: ForegroundObject? { didSet { needsDisplay = true } }
     public var foregroundObject2: ForegroundObject? { didSet { needsDisplay = true } }
 
+    public var pendingFg1Position: CGPoint?
+    public var pendingFg1Scale: CGFloat?
+    public var pendingFg1Rotation: CGFloat?
+
+    public var pendingFg2Position: CGPoint?
+    public var pendingFg2Scale: CGFloat?
+    public var pendingFg2Rotation: CGFloat?
+
     public var showBackground1: Bool = true { didSet { needsDisplay = true } }
     public var showBackground2: Bool = true { didSet { needsDisplay = true } }
     public var fg1OnTop: Bool = true { didSet { needsDisplay = true } }
