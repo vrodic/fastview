@@ -311,6 +311,18 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
         tableView.doubleAction = #selector(tableRowDoubleClicked)
         tableView.target = self
     }
+
+    deinit {
+        cleanup()
+    }
+
+    public func cleanup() {
+        NotificationCenter.default.removeObserver(self)
+        scrollDebounceTimer?.invalidate()
+        scrollDebounceTimer = nil
+        tableView.dataSource = nil
+        tableView.delegate = nil
+    }
 }
 
 public enum PageKeyType {

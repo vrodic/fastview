@@ -44,6 +44,7 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         return activeSidebar
     }
 
+    private var isRestoringState: Bool = false
     public private(set) var lastMeasuredSpeedMBs: Double = 25.0
 
     public var currentLocationPath: String? {
@@ -121,7 +122,7 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
     }
 
     public func loadLocation(_ location: NavigationLocation, pane: Int = 1, targetSelectedItemPath: String? = nil) {
-        cancelAllIOOperations()
+        cancelIOOperations(forPane: pane)
         if pane == 1 {
             navigationManager1 = NavigationManager(initialLocation: location)
             reloadDirectoryContentsAsync(pane: 1, targetSelectedItemPath: targetSelectedItemPath)
@@ -163,6 +164,7 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         dualCanvasVC.setDualViewEnabled(false)
         sidebarContainerVC.updateViewMode(isDual: false)
         navigationManager2 = nil
+        UserDefaults.standard.set(false, forKey: "FastViewIsDualViewEnabled")
     }
 
     public func rotateRightForActivePane() {
@@ -191,6 +193,8 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
     }
 
     public func saveSelectionAndDualState() {
+        guard !isRestoringState else { return }
+
         if let locPath1 = currentLocationPath {
             UserDefaults.standard.set(locPath1, forKey: "FastViewLastOpenedPath")
         }
@@ -241,6 +245,15 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
     }
 
     public func restoreSelectionAndDualState() {
+        guard !isRestoringState else { return }
+        isRestoringState = true
+
+        defer {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+                self?.isRestoringState = false
+            }
+        }
+
         if let dict1 = UserDefaults.standard.dictionary(forKey: "FastViewOrientation1"),
            let rot = dict1["rot"] as? Double,
            let flipH = dict1["flipH"] as? Bool,
@@ -296,13 +309,21 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         }
     }
 
-    public func cancelAllIOOperations() {
+    public func cancelIOOperations(forPane pane: Int) {
         lock.lock()
-        currentDirectoryLoadItem1?.cancel()
-        currentDirectoryLoadItem1 = nil
-        currentDirectoryLoadItem2?.cancel()
-        currentDirectoryLoadItem2 = nil
+        if pane == 1 {
+            currentDirectoryLoadItem1?.cancel()
+            currentDirectoryLoadItem1 = nil
+        } else {
+            currentDirectoryLoadItem2?.cancel()
+            currentDirectoryLoadItem2 = nil
+        }
         lock.unlock()
+    }
+
+    public func cancelAllIOOperations() {
+        cancelIOOperations(forPane: 1)
+        cancelIOOperations(forPane: 2)
         ThumbnailGenerator.shared.cancelAllPendingTasks()
     }
 
@@ -311,7 +332,7 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
     }
 
     private func reloadDirectoryContentsAsync(pane: Int = 1, targetSelectedItemPath: String? = nil, isNavigatingUp: Bool = false) {
-        cancelAllIOOperations()
+        cancelIOOperations(forPane: pane)
 
         let targetSidebar = (pane == 2) ? sidebarContainerVC.sidebarVC2 : sidebarContainerVC.sidebarVC1
         let navMgr = (pane == 2) ? navigationManager2 : navigationManager1
