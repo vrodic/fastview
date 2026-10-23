@@ -4,7 +4,7 @@ var globalAppDelegate: AppDelegate?
 
 @main
 public class AppDelegate: NSObject, NSApplicationDelegate {
-    private var windowController: MainWindowController?
+    public var windowController: MainWindowController?
     private var restoreCombinationSubmenu: NSMenu?
     private var recentDirsSubmenu: NSMenu?
     private static let lastPathKey = "FastViewLastOpenedPath"
