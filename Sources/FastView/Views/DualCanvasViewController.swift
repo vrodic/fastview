@@ -179,6 +179,20 @@ public class DualCanvasViewController: NSViewController, CombiningToolbarDelegat
                         fg.rotationDegrees = existing.rotationDegrees
                     }
 
+                    if let fh = canvas.pendingFg1FlipH {
+                        fg.isFlippedHorizontal = fh
+                        canvas.pendingFg1FlipH = nil
+                    } else if let existing = canvas.foregroundObject1 {
+                        fg.isFlippedHorizontal = existing.isFlippedHorizontal
+                    }
+
+                    if let fv = canvas.pendingFg1FlipV {
+                        fg.isFlippedVertical = fv
+                        canvas.pendingFg1FlipV = nil
+                    } else if let existing = canvas.foregroundObject1 {
+                        fg.isFlippedVertical = existing.isFlippedVertical
+                    }
+
                     canvas.foregroundObject1 = fg
                     if fg.position == .zero {
                         canvas.updateFGPositionsFromSliders()
@@ -214,6 +228,20 @@ public class DualCanvasViewController: NSViewController, CombiningToolbarDelegat
                         canvas.pendingFg2Rotation = nil
                     } else if let existing = canvas.foregroundObject2 {
                         fg.rotationDegrees = existing.rotationDegrees
+                    }
+
+                    if let fh = canvas.pendingFg2FlipH {
+                        fg.isFlippedHorizontal = fh
+                        canvas.pendingFg2FlipH = nil
+                    } else if let existing = canvas.foregroundObject2 {
+                        fg.isFlippedHorizontal = existing.isFlippedHorizontal
+                    }
+
+                    if let fv = canvas.pendingFg2FlipV {
+                        fg.isFlippedVertical = fv
+                        canvas.pendingFg2FlipV = nil
+                    } else if let existing = canvas.foregroundObject2 {
+                        fg.isFlippedVertical = existing.isFlippedVertical
                     }
 
                     canvas.foregroundObject2 = fg

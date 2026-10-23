@@ -42,6 +42,14 @@ public class MainWindowController: NSWindowController, NSWindowDelegate {
         setupKeyboardMonitors()
     }
 
+    public func windowWillEnterFullScreen(_ notification: Notification) {
+        splitVC.setFullScreenMode(true)
+    }
+
+    public func windowWillExitFullScreen(_ notification: Notification) {
+        splitVC.setFullScreenMode(false)
+    }
+
     private func setupKeyboardMonitors() {
         NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event -> NSEvent? in
             guard let self = self else { return event }

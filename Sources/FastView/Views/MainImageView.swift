@@ -259,14 +259,21 @@ public class MainImageView: NSView {
 
         switch zoomMode {
         case .fitToScreen:
+            scrollView.autohidesScrollers = true
+            scrollView.hasHorizontalScroller = false
+            scrollView.hasVerticalScroller = false
             imageView.frame = NSRect(origin: .zero, size: containerSize)
         case .actualSize:
+            scrollView.hasHorizontalScroller = true
+            scrollView.hasVerticalScroller = true
             let originX = max(0, (containerSize.width - img.size.width) / 2)
             let originY = max(0, (containerSize.height - img.size.height) / 2)
             let width = max(containerSize.width, img.size.width)
             let height = max(containerSize.height, img.size.height)
             imageView.frame = NSRect(x: originX, y: originY, width: width, height: height)
         case .custom:
+            scrollView.hasHorizontalScroller = true
+            scrollView.hasVerticalScroller = true
             imageView.frame = NSRect(origin: .zero, size: containerSize)
         }
     }

@@ -50,10 +50,14 @@ public class CombiningCanvasView: NSView {
     public var pendingFg1Position: CGPoint?
     public var pendingFg1Scale: CGFloat?
     public var pendingFg1Rotation: CGFloat?
+    public var pendingFg1FlipH: Bool?
+    public var pendingFg1FlipV: Bool?
 
     public var pendingFg2Position: CGPoint?
     public var pendingFg2Scale: CGFloat?
     public var pendingFg2Rotation: CGFloat?
+    public var pendingFg2FlipH: Bool?
+    public var pendingFg2FlipV: Bool?
 
     public var showBackground1: Bool = true { didSet { needsDisplay = true } }
     public var showBackground2: Bool = true { didSet { needsDisplay = true } }

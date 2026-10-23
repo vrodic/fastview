@@ -178,6 +178,15 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         viewMenu.addItem(withTitle: "Show Favorites Only", action: #selector(showFavoritesOnlyAction(_:)), keyEquivalent: "")
         viewMenu.addItem(NSMenuItem.separator())
         viewMenu.addItem(withTitle: "Toggle Preview Pane", action: #selector(togglePreviewPaneAction(_:)), keyEquivalent: "b")
+
+        let ratioItem = NSMenuItem(title: "Preview Area Size", action: nil, keyEquivalent: "")
+        let ratioSubmenu = NSMenu(title: "Preview Area Size")
+        ratioSubmenu.addItem(withTitle: "25% Window Width (1/4)", action: #selector(setRatio25Action), keyEquivalent: "")
+        ratioSubmenu.addItem(withTitle: "33% Window Width (1/3)", action: #selector(setRatio33Action), keyEquivalent: "")
+        ratioSubmenu.addItem(withTitle: "50% Window Width (1/2)", action: #selector(setRatio50Action), keyEquivalent: "")
+        ratioItem.submenu = ratioSubmenu
+        viewMenu.addItem(ratioItem)
+
         viewMenu.addItem(withTitle: "Split 2nd View Horizontally", action: #selector(setSubSplitHorizontalAction(_:)), keyEquivalent: "")
         viewMenu.addItem(withTitle: "Split 2nd View Vertically", action: #selector(setSubSplitVerticalAction(_:)), keyEquivalent: "")
         viewMenu.addItem(NSMenuItem.separator())
@@ -433,6 +442,18 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func togglePreviewPaneAction(_ sender: Any?) {
         windowController?.splitVC.togglePreviewPane()
+    }
+
+    @objc private func setRatio25Action() {
+        windowController?.splitVC.setSidebarWidthRatio(0.25)
+    }
+
+    @objc private func setRatio33Action() {
+        windowController?.splitVC.setSidebarWidthRatio(0.33)
+    }
+
+    @objc private func setRatio50Action() {
+        windowController?.splitVC.setSidebarWidthRatio(0.50)
     }
 
     @objc private func setSubSplitHorizontalAction(_ sender: Any?) {

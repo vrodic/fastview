@@ -33,6 +33,21 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
     private var lastSelectedInfoPath: String?
     public private(set) var lastMeasuredSpeedMBs: Double = 25.0
 
+    private var wasPreviewHiddenBeforeFullScreen: Bool = false
+    private var wasStatusBarHiddenBeforeFullScreen: Bool = false
+
+    public func setFullScreenMode(_ fullScreen: Bool) {
+        if fullScreen {
+            wasPreviewHiddenBeforeFullScreen = isPreviewPaneHidden
+            wasStatusBarHiddenBeforeFullScreen = statusBarView.isHidden
+            isPreviewPaneHidden = true
+            statusBarView.isHidden = true
+        } else {
+            isPreviewPaneHidden = wasPreviewHiddenBeforeFullScreen
+            statusBarView.isHidden = wasStatusBarHiddenBeforeFullScreen
+        }
+    }
+
     @objc private func copyInfoPathAction() {
         if let path = lastSelectedInfoPath {
             NSPasteboard.general.clearContents()
@@ -65,6 +80,14 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
 
     @objc public func togglePreviewPane() {
         isPreviewPaneHidden = !isPreviewPaneHidden
+    }
+
+    public func setSidebarWidthRatio(_ ratio: CGFloat) {
+        let windowWidth = view.window?.frame.width ?? view.bounds.width
+        let targetWidth = max(120, windowWidth * ratio)
+        splitViewItems[0].preferredThicknessFraction = ratio
+        splitView.setPosition(targetWidth, ofDividerAt: 0)
+        UserDefaults.standard.set(Double(targetWidth), forKey: MainSplitViewController.sidebarWidthKey)
     }
 
     public var showFavoritesOnly: Bool = false {
@@ -352,9 +375,11 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
             canvas.foregroundObject1?.rotationDegrees = CGFloat(r1)
         }
         if let fh1 = state.fgFlipH1 {
+            canvas.pendingFg1FlipH = fh1
             canvas.foregroundObject1?.isFlippedHorizontal = fh1
         }
         if let fv1 = state.fgFlipV1 {
+            canvas.pendingFg1FlipV = fv1
             canvas.foregroundObject1?.isFlippedVertical = fv1
         }
 
@@ -371,9 +396,11 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
             canvas.foregroundObject2?.rotationDegrees = CGFloat(r2)
         }
         if let fh2 = state.fgFlipH2 {
+            canvas.pendingFg2FlipH = fh2
             canvas.foregroundObject2?.isFlippedHorizontal = fh2
         }
         if let fv2 = state.fgFlipV2 {
+            canvas.pendingFg2FlipV = fv2
             canvas.foregroundObject2?.isFlippedVertical = fv2
         }
 
