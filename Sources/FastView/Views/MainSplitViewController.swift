@@ -100,17 +100,30 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
     override public func viewDidAppear() {
         super.viewDidAppear()
         splitView.delegate = self
+        applySavedSidebarWidth()
+    }
+
+    override public func viewDidLayout() {
+        super.viewDidLayout()
+        applySavedSidebarWidth()
+    }
+
+    private func applySavedSidebarWidth() {
         let savedWidth = UserDefaults.standard.double(forKey: MainSplitViewController.sidebarWidthKey)
-        if savedWidth > 120 && splitView.subviews.count > 0 {
-            splitView.setPosition(CGFloat(savedWidth), ofDividerAt: 0)
+        if savedWidth >= 120 && splitView.subviews.count > 0 {
+            let currentWidth = splitView.subviews[0].frame.width
+            if abs(currentWidth - CGFloat(savedWidth)) > 2 {
+                splitView.setPosition(CGFloat(savedWidth), ofDividerAt: 0)
+            }
         }
     }
 
     override public func splitViewDidResizeSubviews(_ notification: Notification) {
+        super.splitViewDidResizeSubviews(notification)
         if splitView.subviews.count > 0 {
             let currentWidth = splitView.subviews[0].frame.width
-            if currentWidth > 120 {
-                UserDefaults.standard.set(currentWidth, forKey: MainSplitViewController.sidebarWidthKey)
+            if currentWidth >= 120 {
+                UserDefaults.standard.set(Double(currentWidth), forKey: MainSplitViewController.sidebarWidthKey)
             }
         }
     }
@@ -119,6 +132,8 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         sidebarContainerVC.sidebarVC1.delegate = self
         sidebarContainerVC.sidebarVC2.delegate = self
         activePane = 1
+
+        splitView.autosaveName = NSSplitView.AutosaveName("FastMainSplitView")
 
         dualCanvasVC.combiningCanvasView.onSelectedObjectChanged = { [weak self] pane, fgObj in
             self?.statusBarView.updateForegroundObjectInfo(pane: pane, object: fgObj)
@@ -141,9 +156,11 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         sidebarItem.minimumThickness = 120
         sidebarItem.maximumThickness = 1200
         sidebarItem.preferredThicknessFraction = 0.25
+        sidebarItem.holdingPriority = NSLayoutConstraint.Priority(260)
 
         let mainItem = NSSplitViewItem(viewController: mainContentVC)
         mainItem.minimumThickness = 300
+        mainItem.holdingPriority = NSLayoutConstraint.Priority(200)
 
         addSplitViewItem(sidebarItem)
         addSplitViewItem(mainItem)
