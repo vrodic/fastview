@@ -149,6 +149,17 @@ public class StatusBarView: NSView {
         rightLabel.stringValue = infoParts.joined(separator: "  |  ")
     }
 
+    public func updateForegroundObjectInfo(pane: Int, object: ForegroundObject) {
+        let w = Int(object.image.size.width * object.scale)
+        let h = Int(object.image.size.height * object.scale)
+        let x = Int(object.position.x)
+        let y = Int(object.position.y)
+        let rot = Int(object.rotationDegrees)
+        let scale = Int(object.scale * 100)
+
+        rightLabel.stringValue = "FG Object \(pane): \(w)×\(h) px  |  Pos: (\(x), \(y))  |  Scale: \(scale)%  |  Rot: \(rot)°"
+    }
+
     public func clearImageInfo() {
         rightLabel.stringValue = ""
     }

@@ -9,6 +9,13 @@ public enum ImageZoomMode {
 
 public class MainImageView: NSView {
     public private(set) var currentImage: NSImage?
+    public private(set) var rawImage: NSImage?
+    public var orientation = ImageOrientation() {
+        didSet {
+            updateTransformedImage(keepZoom: true)
+        }
+    }
+
     public var zoomMode: ImageZoomMode = .fitToScreen {
         didSet {
             updateLayout()
@@ -168,8 +175,21 @@ public class MainImageView: NSView {
 
     public func setImage(_ image: NSImage?, keepZoom: Bool = true) {
         hideLoading()
-        self.currentImage = image
-        imageView.image = image
+        self.rawImage = image
+        updateTransformedImage(keepZoom: keepZoom)
+    }
+
+    private func updateTransformedImage(keepZoom: Bool = true) {
+        guard let raw = rawImage else {
+            self.currentImage = nil
+            imageView.image = nil
+            updateLayout()
+            return
+        }
+
+        let transformed = raw.transformed(with: orientation)
+        self.currentImage = transformed
+        imageView.image = transformed
 
         if !keepZoom {
             scrollView.magnification = 1.0
@@ -177,6 +197,26 @@ public class MainImageView: NSView {
         }
 
         updateLayout()
+    }
+
+    public func rotateRight() {
+        orientation.rotateRight()
+    }
+
+    public func rotateLeft() {
+        orientation.rotateLeft()
+    }
+
+    public func flipHorizontal() {
+        orientation.toggleFlipHorizontal()
+    }
+
+    public func flipVertical() {
+        orientation.toggleFlipVertical()
+    }
+
+    public func resetOrientation() {
+        orientation.reset()
     }
 
     public func zoomIn() {
@@ -219,14 +259,21 @@ public class MainImageView: NSView {
 
         switch zoomMode {
         case .fitToScreen:
+            scrollView.autohidesScrollers = true
+            scrollView.hasHorizontalScroller = false
+            scrollView.hasVerticalScroller = false
             imageView.frame = NSRect(origin: .zero, size: containerSize)
         case .actualSize:
+            scrollView.hasHorizontalScroller = true
+            scrollView.hasVerticalScroller = true
             let originX = max(0, (containerSize.width - img.size.width) / 2)
             let originY = max(0, (containerSize.height - img.size.height) / 2)
             let width = max(containerSize.width, img.size.width)
             let height = max(containerSize.height, img.size.height)
             imageView.frame = NSRect(x: originX, y: originY, width: width, height: height)
         case .custom:
+            scrollView.hasHorizontalScroller = true
+            scrollView.hasVerticalScroller = true
             imageView.frame = NSRect(origin: .zero, size: containerSize)
         }
     }

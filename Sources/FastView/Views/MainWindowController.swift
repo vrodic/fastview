@@ -42,22 +42,40 @@ public class MainWindowController: NSWindowController, NSWindowDelegate {
         setupKeyboardMonitors()
     }
 
+    public func windowWillEnterFullScreen(_ notification: Notification) {
+        splitVC.setFullScreenMode(true)
+    }
+
+    public func windowWillExitFullScreen(_ notification: Notification) {
+        splitVC.setFullScreenMode(false)
+    }
+
     private func setupKeyboardMonitors() {
         NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event -> NSEvent? in
             guard let self = self else { return event }
 
+            if let keyWindow = NSApp.keyWindow, keyWindow != self.window {
+                return event
+            }
+
             let isCmdPressed = event.modifierFlags.contains(.command)
+
+            let isControlPressed = event.modifierFlags.contains(.control)
 
             switch event.keyCode {
             case 125: // Down arrow
-                if isCmdPressed {
+                if isControlPressed {
+                    self.splitVC.selectNextImagePane2()
+                } else if isCmdPressed {
                     self.splitVC.selectNextArchiveOrFolderFirstImage()
                 } else {
                     self.splitVC.selectNextImage()
                 }
                 return nil
             case 126: // Up arrow
-                if isCmdPressed {
+                if isControlPressed {
+                    self.splitVC.selectPreviousImagePane2()
+                } else if isCmdPressed {
                     self.splitVC.selectPreviousArchiveOrFolderFirstImage()
                 } else {
                     self.splitVC.selectPreviousImage()

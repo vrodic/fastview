@@ -4,10 +4,13 @@ var globalAppDelegate: AppDelegate?
 
 @main
 public class AppDelegate: NSObject, NSApplicationDelegate {
-    private var windowController: MainWindowController?
+    public var windowController: MainWindowController?
+    private var restoreCombinationSubmenu: NSMenu?
+    private var recentDirsSubmenu: NSMenu?
     private static let lastPathKey = "FastViewLastOpenedPath"
     private static let lastSelectedItemKey = "FastViewLastSelectedItemPath"
     private static let lastSelectedItemIdKey = "FastViewLastSelectedItemId"
+    private static let recentDirsKey = "FastViewRecentCmdLineDirs"
 
     public static func main() {
         let app = NSApplication.shared
@@ -55,6 +58,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
             DispatchQueue.main.async {
                 windowController.splitVC.showFavoritesOnly = false
                 windowController.splitVC.loadLocation(loc, targetSelectedItemPath: targetPath)
+                windowController.splitVC.restoreSelectionAndDualState()
             }
         } else if isFavoritesMode {
             DispatchQueue.main.async {
@@ -63,12 +67,14 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
                     windowController.splitVC.loadLocation(loc, targetSelectedItemPath: targetItem)
                 }
                 windowController.splitVC.showFavoritesOnly = true
+                windowController.splitVC.restoreSelectionAndDualState()
             }
         } else if let path = initialPath {
             saveLastOpenedPath(path)
             let loc = NavigationManager.locationForPath(path)
             DispatchQueue.main.async {
                 windowController.splitVC.loadLocation(loc, targetSelectedItemPath: targetItem)
+                windowController.splitVC.restoreSelectionAndDualState()
             }
         }
     }
@@ -79,15 +85,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func saveCurrentSelectionState() {
         if let splitVC = windowController?.splitVC {
-            if let locPath = splitVC.currentLocationPath {
-                UserDefaults.standard.set(locPath, forKey: AppDelegate.lastPathKey)
-            }
-            if let selectedPath = splitVC.selectedItemPath {
-                UserDefaults.standard.set(selectedPath, forKey: AppDelegate.lastSelectedItemKey)
-            }
-            if let selectedId = splitVC.selectedItemId {
-                UserDefaults.standard.set(selectedId, forKey: AppDelegate.lastSelectedItemIdKey)
-            }
+            splitVC.saveSelectionAndDualState()
         }
     }
 
@@ -110,6 +108,15 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func saveLastOpenedPath(_ path: String) {
         UserDefaults.standard.set(path, forKey: AppDelegate.lastPathKey)
+
+        var recents = UserDefaults.standard.stringArray(forKey: AppDelegate.recentDirsKey) ?? []
+        recents.removeAll { $0 == path }
+        recents.insert(path, at: 0)
+        if recents.count > 20 {
+            recents = Array(recents.prefix(20))
+        }
+        UserDefaults.standard.set(recents, forKey: AppDelegate.recentDirsKey)
+        updateRecentDirsMenu()
     }
 
     private func setupMenuBar() {
@@ -134,9 +141,34 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         let fileMenu = NSMenu(title: "File")
         fileMenuItem.submenu = fileMenu
         fileMenu.addItem(withTitle: "Open…", action: #selector(openDocument(_:)), keyEquivalent: "o")
+
+        let recentItem = NSMenuItem(title: "Recent Directories & Archives", action: nil, keyEquivalent: "")
+        let recentSubmenu = NSMenu(title: "Recent Directories & Archives")
+        recentItem.submenu = recentSubmenu
+        self.recentDirsSubmenu = recentSubmenu
+        fileMenu.addItem(recentItem)
+        updateRecentDirsMenu()
+
+        fileMenu.addItem(NSMenuItem.separator())
+        fileMenu.addItem(withTitle: "Pick Folder for 2nd View…", action: #selector(openSecondFolderAction(_:)), keyEquivalent: "")
+        fileMenu.addItem(withTitle: "Show Favorites in 2nd View", action: #selector(toggleFavoritesPane2Action), keyEquivalent: "")
+        fileMenu.addItem(withTitle: "Close 2nd View", action: #selector(closeSecondViewAction(_:)), keyEquivalent: "")
+        fileMenu.addItem(NSMenuItem.separator())
+        fileMenu.addItem(withTitle: "Save Combination State…", action: #selector(saveCombinationStateAction(_:)), keyEquivalent: "s")
+
+        let restoreItem = NSMenuItem(title: "Restore Combination State", action: nil, keyEquivalent: "")
+        let restoreSubmenu = NSMenu(title: "Restore Combination State")
+        restoreItem.submenu = restoreSubmenu
+        self.restoreCombinationSubmenu = restoreSubmenu
+        fileMenu.addItem(restoreItem)
+        updateRestoreCombinationMenu()
+
+        let switcherItem = NSMenuItem(title: "Saved Combination States Manager…", action: #selector(openCombinationSwitcherAction), keyEquivalent: "k")
+        switcherItem.keyEquivalentModifierMask = [.command, .option]
+        fileMenu.addItem(switcherItem)
+
+        fileMenu.addItem(NSMenuItem.separator())
         fileMenu.addItem(withTitle: "Show Info", action: #selector(showInfoAction(_:)), keyEquivalent: "i")
-        fileMenu.addItem(withTitle: "Toggle Favorite", action: #selector(toggleFavoriteAction(_:)), keyEquivalent: "f")
-        fileMenu.addItem(withTitle: "Switch to All Mode", action: #selector(switchToAllModeAction(_:)), keyEquivalent: "l")
         fileMenu.addItem(NSMenuItem.separator())
         fileMenu.addItem(withTitle: "Close Window", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
 
@@ -149,6 +181,23 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         viewMenu.addItem(withTitle: "Show All Items", action: #selector(showAllItemsAction(_:)), keyEquivalent: "")
         viewMenu.addItem(withTitle: "Show Favorites Only", action: #selector(showFavoritesOnlyAction(_:)), keyEquivalent: "")
         viewMenu.addItem(NSMenuItem.separator())
+        viewMenu.addItem(withTitle: "Toggle Preview Pane", action: #selector(togglePreviewPaneAction(_:)), keyEquivalent: "b")
+
+        let ratioItem = NSMenuItem(title: "Preview Area Size", action: nil, keyEquivalent: "")
+        let ratioSubmenu = NSMenu(title: "Preview Area Size")
+        ratioSubmenu.addItem(withTitle: "25% Window Width (1/4)", action: #selector(setRatio25Action), keyEquivalent: "")
+        ratioSubmenu.addItem(withTitle: "33% Window Width (1/3)", action: #selector(setRatio33Action), keyEquivalent: "")
+        ratioSubmenu.addItem(withTitle: "50% Window Width (1/2)", action: #selector(setRatio50Action), keyEquivalent: "")
+        ratioItem.submenu = ratioSubmenu
+        viewMenu.addItem(ratioItem)
+
+        viewMenu.addItem(withTitle: "Split 2nd View Horizontally", action: #selector(setSubSplitHorizontalAction(_:)), keyEquivalent: "")
+        viewMenu.addItem(withTitle: "Split 2nd View Vertically", action: #selector(setSubSplitVerticalAction(_:)), keyEquivalent: "")
+        viewMenu.addItem(NSMenuItem.separator())
+        viewMenu.addItem(withTitle: "Pick Folder for 2nd View…", action: #selector(openSecondFolderAction(_:)), keyEquivalent: "")
+        viewMenu.addItem(withTitle: "Show Favorites in 2nd View", action: #selector(toggleFavoritesPane2Action), keyEquivalent: "")
+        viewMenu.addItem(withTitle: "Close 2nd View", action: #selector(closeSecondViewAction(_:)), keyEquivalent: "")
+        viewMenu.addItem(NSMenuItem.separator())
 
         let flattenItem = NSMenuItem(title: "Flatten Archive Directories", action: #selector(toggleFlattenArchivesAction(_:)), keyEquivalent: "")
         flattenItem.state = ArchiveReader.flattenArchiveDirectories ? .on : .off
@@ -157,6 +206,19 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         let lowMemItem = NSMenuItem(title: "Low Memory Mode", action: #selector(toggleLowMemoryModeAction(_:)), keyEquivalent: "")
         lowMemItem.state = MemoryLRUCache.shared.isLowMemoryMode ? .on : .off
         viewMenu.addItem(lowMemItem)
+
+        let combiningControlsItem = NSMenuItem(title: "Image Combining Controls", action: #selector(toggleCombiningControlsAction(_:)), keyEquivalent: "c")
+        combiningControlsItem.keyEquivalentModifierMask = [.command, .option]
+        viewMenu.addItem(combiningControlsItem)
+
+        viewMenu.addItem(NSMenuItem.separator())
+        viewMenu.addItem(withTitle: "Rotate Right 90°", action: #selector(rotateRightAction), keyEquivalent: "r")
+        let rotLeftItem = NSMenuItem(title: "Rotate Left 90°", action: #selector(rotateLeftAction), keyEquivalent: "r")
+        rotLeftItem.keyEquivalentModifierMask = [.command, .option]
+        viewMenu.addItem(rotLeftItem)
+        viewMenu.addItem(withTitle: "Flip Horizontal", action: #selector(flipHorizontalAction), keyEquivalent: "")
+        viewMenu.addItem(withTitle: "Flip Vertical", action: #selector(flipVerticalAction), keyEquivalent: "")
+        viewMenu.addItem(withTitle: "Reset Orientation", action: #selector(resetOrientationAction), keyEquivalent: "")
 
         viewMenu.addItem(NSMenuItem.separator())
         viewMenu.addItem(withTitle: "Zoom In", action: #selector(zoomInAction), keyEquivalent: "+")
@@ -180,6 +242,14 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         let prevGroupItem = NSMenuItem(title: "Previous Folder / Archive First Image", action: #selector(prevGroupAction), keyEquivalent: "\u{F700}")
         prevGroupItem.keyEquivalentModifierMask = [.command]
         controlsMenu.addItem(prevGroupItem)
+
+        let nextPane2Item = NSMenuItem(title: "Next Image in 2nd View", action: #selector(nextImagePane2Action), keyEquivalent: "\u{F701}")
+        nextPane2Item.keyEquivalentModifierMask = [.control]
+        controlsMenu.addItem(nextPane2Item)
+
+        let prevPane2Item = NSMenuItem(title: "Previous Image in 2nd View", action: #selector(prevImagePane2Action), keyEquivalent: "\u{F700}")
+        prevPane2Item.keyEquivalentModifierMask = [.control]
+        controlsMenu.addItem(prevPane2Item)
 
         controlsMenu.addItem(NSMenuItem.separator())
 
@@ -336,5 +406,161 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func zoomToFitAction() {
         windowController?.splitVC.imageView.resetZoomToFit()
+    }
+
+    @objc private func openSecondFolderAction(_ sender: Any?) {
+        windowController?.splitVC.openSecondFolder()
+    }
+
+    @objc private func closeSecondViewAction(_ sender: Any?) {
+        windowController?.splitVC.closeSecondView()
+    }
+
+    @objc private func nextImagePane2Action() {
+        windowController?.splitVC.selectNextImagePane2()
+    }
+
+    @objc private func prevImagePane2Action() {
+        windowController?.splitVC.selectPreviousImagePane2()
+    }
+
+    @objc private func rotateRightAction() {
+        windowController?.splitVC.rotateRightForActivePane()
+    }
+
+    @objc private func rotateLeftAction() {
+        windowController?.splitVC.rotateLeftForActivePane()
+    }
+
+    @objc private func flipHorizontalAction() {
+        windowController?.splitVC.flipHorizontalForActivePane()
+    }
+
+    @objc private func flipVerticalAction() {
+        windowController?.splitVC.flipVerticalForActivePane()
+    }
+
+    @objc private func resetOrientationAction() {
+        windowController?.splitVC.resetOrientationForActivePane()
+    }
+
+    @objc private func togglePreviewPaneAction(_ sender: Any?) {
+        windowController?.splitVC.togglePreviewPane()
+    }
+
+    @objc private func setRatio25Action() {
+        windowController?.splitVC.setSidebarWidthRatio(0.25)
+    }
+
+    @objc private func setRatio33Action() {
+        windowController?.splitVC.setSidebarWidthRatio(0.33)
+    }
+
+    @objc private func setRatio50Action() {
+        windowController?.splitVC.setSidebarWidthRatio(0.50)
+    }
+
+    @objc private func setSubSplitHorizontalAction(_ sender: Any?) {
+        windowController?.splitVC.sidebarContainerVC.isSubSplitVertical = false
+    }
+
+    @objc private func setSubSplitVerticalAction(_ sender: Any?) {
+        windowController?.splitVC.sidebarContainerVC.isSubSplitVertical = true
+    }
+
+    @objc private func toggleCombiningControlsAction(_ sender: Any?) {
+        windowController?.splitVC.toggleCombiningControls()
+    }
+
+    @objc private func toggleFavoritesPane2Action() {
+        windowController?.splitVC.toggleFavoritesOnlyPane2()
+    }
+
+    @objc private func saveCombinationStateAction(_ sender: Any?) {
+        windowController?.splitVC.saveCombinationStatePrompt()
+    }
+
+    public func updateRecentDirsMenu() {
+        guard let submenu = recentDirsSubmenu else { return }
+        submenu.removeAllItems()
+
+        let recents = UserDefaults.standard.stringArray(forKey: AppDelegate.recentDirsKey) ?? []
+        if recents.isEmpty {
+            let emptyItem = NSMenuItem(title: "No Recent Items", action: nil, keyEquivalent: "")
+            emptyItem.isEnabled = false
+            submenu.addItem(emptyItem)
+        } else {
+            for path in recents {
+                let name = (path as NSString).lastPathComponent
+                let item = NSMenuItem(title: name, action: #selector(openRecentDirAction(_:)), keyEquivalent: "")
+                item.representedObject = path
+                submenu.addItem(item)
+            }
+            submenu.addItem(NSMenuItem.separator())
+            let clearItem = NSMenuItem(title: "Clear Recent Menu", action: #selector(clearRecentDirsAction), keyEquivalent: "")
+            submenu.addItem(clearItem)
+        }
+    }
+
+    @objc private func openRecentDirAction(_ sender: NSMenuItem) {
+        guard let path = sender.representedObject as? String,
+              FileManager.default.fileExists(atPath: path) else { return }
+        saveLastOpenedPath(path)
+        let loc = NavigationManager.locationForPath(path)
+        windowController?.splitVC.loadLocation(loc)
+    }
+
+    @objc private func clearRecentDirsAction() {
+        UserDefaults.standard.removeObject(forKey: AppDelegate.recentDirsKey)
+        updateRecentDirsMenu()
+    }
+
+    @objc private func openCombinationSwitcherAction() {
+        CombinationStatesWindowController.shared.showWindowAndRefresh()
+    }
+
+    public func updateRestoreCombinationMenu() {
+        guard let restoreSubmenu = restoreCombinationSubmenu else { return }
+        restoreSubmenu.removeAllItems()
+
+        let savedStates = CombinationStateManager.getAllSavedStates()
+        let managerItem = NSMenuItem(title: "Open Combination Switcher…", action: #selector(openCombinationSwitcherAction), keyEquivalent: "")
+        restoreSubmenu.addItem(managerItem)
+        restoreSubmenu.addItem(NSMenuItem.separator())
+
+        if savedStates.isEmpty {
+            let emptyItem = NSMenuItem(title: "No Saved Combinations", action: nil, keyEquivalent: "")
+            emptyItem.isEnabled = false
+            restoreSubmenu.addItem(emptyItem)
+        } else {
+            for state in savedStates {
+                let item = NSMenuItem(title: state.name, action: #selector(restoreComboStateItemAction(_:)), keyEquivalent: "")
+                item.representedObject = state.id
+                restoreSubmenu.addItem(item)
+            }
+            restoreSubmenu.addItem(NSMenuItem.separator())
+            let clearItem = NSMenuItem(title: "Clear All Saved Combinations", action: #selector(clearAllComboStatesAction), keyEquivalent: "")
+            restoreSubmenu.addItem(clearItem)
+        }
+    }
+
+    @objc private func restoreComboStateItemAction(_ sender: NSMenuItem) {
+        guard let stateId = sender.representedObject as? String,
+              let state = CombinationStateManager.getAllSavedStates().first(where: { $0.id == stateId }) else { return }
+        windowController?.splitVC.restoreCombinationState(state)
+    }
+
+    @objc private func clearAllComboStatesAction() {
+        CombinationStateManager.clearAll()
+        updateRestoreCombinationMenu()
+    }
+
+    public func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(toggleCombiningControlsAction(_:)) ||
+           menuItem.action == #selector(closeSecondViewAction(_:)) ||
+           menuItem.action == #selector(saveCombinationStateAction(_:)) {
+            return windowController?.splitVC.sidebarContainerVC.isDualView ?? false
+        }
+        return true
     }
 }

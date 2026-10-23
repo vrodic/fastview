@@ -3,12 +3,31 @@ import AppKit
 public protocol SidebarDelegate: AnyObject {
     func sidebar(_ sidebar: SidebarViewController, didSelectItem item: FileItem)
     func sidebar(_ sidebar: SidebarViewController, didActivateItem item: FileItem)
+    func sidebarDidBecomeActive(_ sidebar: SidebarViewController)
 }
 
 public class SidebarViewController: NSViewController, NSTableViewDataSource, NSTableViewDelegate {
     public weak var delegate: SidebarDelegate?
 
+    public var paneIndex: Int = 1
+    public var isActivePane: Bool = false {
+        didSet {
+            updateHeaderFocusStyle()
+        }
+    }
+    public var showHeader: Bool = false {
+        didSet {
+            headerContainerView.isHidden = !showHeader
+            headerHeightConstraint?.constant = showHeader ? 28 : 0
+        }
+    }
+
     public private(set) var items: [FileItem] = []
+    private let headerContainerView = NSView()
+    private let headerTitleLabel = NSTextField(labelWithString: "")
+    private let headerAccentIndicator = NSView()
+    private var headerHeightConstraint: NSLayoutConstraint?
+
     private let scrollView = NSScrollView()
     private let tableView = CustomTableView()
     private var scrollDebounceTimer: Timer?
@@ -24,7 +43,44 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
         setupUI()
     }
 
+    public func setHeaderTitle(_ title: String) {
+        headerTitleLabel.stringValue = "Pane \(paneIndex): \(title)"
+    }
+
+    private func updateHeaderFocusStyle() {
+        view.wantsLayer = true
+        if isActivePane {
+            headerContainerView.wantsLayer = true
+            headerContainerView.layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.25).cgColor
+            headerAccentIndicator.wantsLayer = true
+            headerAccentIndicator.layer?.backgroundColor = NSColor.controlAccentColor.cgColor
+            headerTitleLabel.font = NSFont.boldSystemFont(ofSize: 11)
+            headerTitleLabel.textColor = NSColor.labelColor
+        } else {
+            headerContainerView.wantsLayer = true
+            headerContainerView.layer?.backgroundColor = NSColor.windowBackgroundColor.withAlphaComponent(0.5).cgColor
+            headerAccentIndicator.wantsLayer = true
+            headerAccentIndicator.layer?.backgroundColor = NSColor.clear.cgColor
+            headerTitleLabel.font = NSFont.systemFont(ofSize: 11, weight: .medium)
+            headerTitleLabel.textColor = NSColor.secondaryLabelColor
+        }
+    }
+
     private func setupUI() {
+        headerContainerView.translatesAutoresizingMaskIntoConstraints = false
+        headerContainerView.wantsLayer = true
+        headerContainerView.isHidden = true
+
+        headerTitleLabel.translatesAutoresizingMaskIntoConstraints = false
+        headerTitleLabel.font = NSFont.systemFont(ofSize: 11, weight: .semibold)
+        headerTitleLabel.textColor = NSColor.secondaryLabelColor
+        headerTitleLabel.lineBreakMode = .byTruncatingMiddle
+
+        headerAccentIndicator.translatesAutoresizingMaskIntoConstraints = false
+
+        headerContainerView.addSubview(headerAccentIndicator)
+        headerContainerView.addSubview(headerTitleLabel)
+
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         scrollView.hasVerticalScroller = true
         scrollView.autoresizesSubviews = true
@@ -34,6 +90,10 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
         tableView.selectionHighlightStyle = .regular
         tableView.dataSource = self
         tableView.delegate = self
+        tableView.onFocusGained = { [weak self] in
+            guard let self = self else { return }
+            self.delegate?.sidebarDidBecomeActive(self)
+        }
         tableView.onEnterPressed = { [weak self] in
             self?.activateCurrentSelection()
         }
@@ -44,12 +104,25 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
             (self?.parent as? MainSplitViewController)?.toggleFavoriteOnSelectedItem()
                 ?? globalAppDelegate?.toggleFavoriteActionFromSidebar()
         }
+        tableView.onContextToggleFavorite = { [weak self] row in
+            guard let self = self, row >= 0 && row < self.items.count else { return }
+            let item = self.items[row]
+            _ = SQLiteCache.shared.toggleFavorite(item: item)
+            self.reloadSelectedRow()
+            if let splitVC = (self.parent as? SidebarContainerViewController)?.parent as? MainSplitViewController {
+                if (self.paneIndex == 1 && splitVC.showFavoritesOnly) || (self.paneIndex == 2 && splitVC.showFavoritesOnlyPane2) {
+                    splitVC.reloadDirectoryContentsPublic()
+                }
+            }
+        }
 
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("MainColumn"))
         column.resizingMask = .autoresizingMask
         tableView.addTableColumn(column)
 
         scrollView.documentView = tableView
+
+        view.addSubview(headerContainerView)
         view.addSubview(scrollView)
 
         scrollView.contentView.postsBoundsChangedNotifications = true
@@ -60,12 +133,31 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
             object: scrollView.contentView
         )
 
+        let hHeight = headerContainerView.heightAnchor.constraint(equalToConstant: 0)
+        self.headerHeightConstraint = hHeight
+
         NSLayoutConstraint.activate([
+            headerContainerView.topAnchor.constraint(equalTo: view.topAnchor),
+            headerContainerView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            headerContainerView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            hHeight,
+
+            headerAccentIndicator.leadingAnchor.constraint(equalTo: headerContainerView.leadingAnchor),
+            headerAccentIndicator.topAnchor.constraint(equalTo: headerContainerView.topAnchor),
+            headerAccentIndicator.bottomAnchor.constraint(equalTo: headerContainerView.bottomAnchor),
+            headerAccentIndicator.widthAnchor.constraint(equalToConstant: 4),
+
+            headerTitleLabel.leadingAnchor.constraint(equalTo: headerAccentIndicator.trailingAnchor, constant: 6),
+            headerTitleLabel.trailingAnchor.constraint(equalTo: headerContainerView.trailingAnchor, constant: -6),
+            headerTitleLabel.centerYAnchor.constraint(equalTo: headerContainerView.centerYAnchor),
+
             scrollView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            scrollView.topAnchor.constraint(equalTo: view.topAnchor),
+            scrollView.topAnchor.constraint(equalTo: headerContainerView.bottomAnchor),
             scrollView.bottomAnchor.constraint(equalTo: view.bottomAnchor)
         ])
+
+        updateHeaderFocusStyle()
     }
 
     @objc private func scrollViewDidScroll(_ notification: Notification) {
@@ -230,6 +322,16 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
         tableView.doubleAction = #selector(tableRowDoubleClicked)
         tableView.target = self
     }
+
+    deinit {
+        cleanup()
+    }
+
+    public func cleanup() {
+        NotificationCenter.default.removeObserver(self)
+        scrollDebounceTimer?.invalidate()
+        scrollDebounceTimer = nil
+    }
 }
 
 public enum PageKeyType {
@@ -240,9 +342,86 @@ public enum PageKeyType {
 }
 
 class CustomTableView: NSTableView {
+    var onFocusGained: (() -> Void)?
     var onEnterPressed: (() -> Void)?
     var onPageKey: ((PageKeyType) -> Void)?
     var onToggleFavoritePressed: (() -> Void)?
+    var onContextToggleFavorite: ((Int) -> Void)?
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let point = convert(event.locationInWindow, from: nil)
+        let clickedRow = row(at: point)
+        guard clickedRow >= 0 && clickedRow < numberOfRows else { return nil }
+
+        if !isRowSelected(clickedRow) {
+            selectRowIndexes(IndexSet(integer: clickedRow), byExtendingSelection: false)
+        }
+
+        let menu = NSMenu(title: "Context Menu")
+
+        if let vc = delegate as? SidebarViewController, clickedRow < vc.items.count {
+            let item = vc.items[clickedRow]
+            let isFav = SQLiteCache.shared.isFavorite(path: item.id) || SQLiteCache.shared.isFavorite(path: item.path)
+            let favTitle = isFav ? "Remove Favorite" : "Add Favorite"
+            let favMenuItem = NSMenuItem(title: favTitle, action: #selector(contextToggleFavoriteAction(_:)), keyEquivalent: "")
+            favMenuItem.target = self
+            favMenuItem.representedObject = clickedRow
+            menu.addItem(favMenuItem)
+
+            menu.addItem(NSMenuItem.separator())
+
+            let infoItem = NSMenuItem(title: "Show Info", action: #selector(contextShowInfoAction(_:)), keyEquivalent: "")
+            infoItem.target = self
+            infoItem.representedObject = clickedRow
+            menu.addItem(infoItem)
+
+            menu.addItem(NSMenuItem.separator())
+
+            let copyItem = NSMenuItem(title: "Copy File Path", action: #selector(contextCopyPathAction(_:)), keyEquivalent: "")
+            copyItem.target = self
+            copyItem.representedObject = item.path
+            menu.addItem(copyItem)
+        }
+
+        return menu
+    }
+
+    @objc private func contextToggleFavoriteAction(_ sender: NSMenuItem) {
+        guard let row = sender.representedObject as? Int else { return }
+        onContextToggleFavorite?(row)
+    }
+
+    @objc private func contextShowInfoAction(_ sender: NSMenuItem) {
+        guard let row = sender.representedObject as? Int,
+              let vc = delegate as? SidebarViewController,
+              row >= 0 && row < vc.items.count else { return }
+        let item = vc.items[row]
+        if let mainSplitVC = vc.parent as? MainSplitViewController {
+            mainSplitVC.showInfo(for: item)
+        } else if let container = vc.parent as? SidebarContainerViewController,
+                  let mainSplitVC = container.parent as? MainSplitViewController {
+            mainSplitVC.showInfo(for: item)
+        }
+    }
+
+    @objc private func contextCopyPathAction(_ sender: NSMenuItem) {
+        guard let path = sender.representedObject as? String else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(path, forType: .string)
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        onFocusGained?()
+        super.mouseDown(with: event)
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        let result = super.becomeFirstResponder()
+        if result {
+            onFocusGained?()
+        }
+        return result
+    }
 
     override func keyDown(with event: NSEvent) {
         switch event.keyCode {
@@ -373,9 +552,11 @@ public class SidebarTableCellView: NSTableCellView {
 
         if item.type == .image {
             ThumbnailGenerator.shared.generateThumbnail(for: item) { [weak self] image in
-                guard let self = self, self.currentItem?.id == item.id else { return }
-                if let img = image {
-                    self.setThumbnailLoaded(img)
+                DispatchQueue.main.async {
+                    guard let self = self, self.currentItem?.id == item.id else { return }
+                    if let img = image {
+                        self.setThumbnailLoaded(img)
+                    }
                 }
             }
         }
@@ -384,9 +565,11 @@ public class SidebarTableCellView: NSTableCellView {
     public func loadThumbnailIfIdle(for item: FileItem) {
         guard currentItem?.id == item.id else { return }
         ThumbnailGenerator.shared.generateThumbnail(for: item) { [weak self] image in
-            guard let self = self, self.currentItem?.id == item.id else { return }
-            if let img = image {
-                self.setThumbnailLoaded(img)
+            DispatchQueue.main.async {
+                guard let self = self, self.currentItem?.id == item.id else { return }
+                if let img = image {
+                    self.setThumbnailLoaded(img)
+                }
             }
         }
     }
@@ -395,9 +578,11 @@ public class SidebarTableCellView: NSTableCellView {
         guard currentItem?.id == item.id else { return }
 
         ThumbnailGenerator.shared.generateThumbnail(for: item) { [weak self] image in
-            guard let self = self, self.currentItem?.id == item.id else { return }
-            if let img = image {
-                self.setThumbnailLoaded(img)
+            DispatchQueue.main.async {
+                guard let self = self, self.currentItem?.id == item.id else { return }
+                if let img = image {
+                    self.setThumbnailLoaded(img)
+                }
             }
         }
     }
