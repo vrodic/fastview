@@ -1,14 +1,37 @@
 import AppKit
 
 public class CombiningCanvasView: NSView {
-    public var image1: NSImage? { didSet { needsDisplay = true } }
-    public var image2: NSImage? { didSet { needsDisplay = true } }
+    public var image1: NSImage? {
+        didSet {
+            updateCachedTransformedImage1()
+            needsDisplay = true
+        }
+    }
+    public var image2: NSImage? {
+        didSet {
+            updateCachedTransformedImage2()
+            needsDisplay = true
+        }
+    }
 
-    public var orientation1 = ImageOrientation() { didSet { needsDisplay = true } }
-    public var orientation2 = ImageOrientation() { didSet { needsDisplay = true } }
+    public var orientation1 = ImageOrientation() {
+        didSet {
+            updateCachedTransformedImage1()
+            needsDisplay = true
+        }
+    }
+    public var orientation2 = ImageOrientation() {
+        didSet {
+            updateCachedTransformedImage2()
+            needsDisplay = true
+        }
+    }
 
     public var foregroundObject1: ForegroundObject? { didSet { needsDisplay = true } }
     public var foregroundObject2: ForegroundObject? { didSet { needsDisplay = true } }
+
+    public var showBackground1: Bool = true { didSet { needsDisplay = true } }
+    public var showBackground2: Bool = true { didSet { needsDisplay = true } }
 
     public var combiningMode: CanvasCombiningMode = .split { didSet { needsDisplay = true } }
 
@@ -30,6 +53,18 @@ public class CombiningCanvasView: NSView {
             updateFGPositionsFromSliders()
             needsDisplay = true
         }
+    }
+
+    // Cached Transformed Images for Smooth Performance
+    private var cachedTransformedImage1: NSImage?
+    private var cachedTransformedImage2: NSImage?
+
+    private func updateCachedTransformedImage1() {
+        cachedTransformedImage1 = image1?.transformed(with: orientation1)
+    }
+
+    private func updateCachedTransformedImage2() {
+        cachedTransformedImage2 = image2?.transformed(with: orientation2)
     }
 
     // Interactivity
@@ -119,12 +154,12 @@ public class CombiningCanvasView: NSView {
     private func drawSplitView(in rect: CGRect, context: CGContext) {
         let halfWidth = rect.width / 2.0
 
-        if let img1 = image1?.transformed(with: orientation1) {
+        if let img1 = cachedTransformedImage1 ?? image1?.transformed(with: orientation1) {
             let rect1 = CGRect(x: 0, y: 0, width: halfWidth, height: rect.height)
             drawAspectFit(image: img1, in: rect1, context: context)
         }
 
-        if let img2 = image2?.transformed(with: orientation2) {
+        if let img2 = cachedTransformedImage2 ?? image2?.transformed(with: orientation2) {
             let rect2 = CGRect(x: halfWidth, y: 0, width: halfWidth, height: rect.height)
             drawAspectFit(image: img2, in: rect2, context: context)
         }
@@ -138,8 +173,8 @@ public class CombiningCanvasView: NSView {
 
     // MARK: - Merge View with Alpha Gradient
     private func drawMergeView(in rect: CGRect, context: CGContext) {
-        let transformed1 = image1?.transformed(with: orientation1)
-        let transformed2 = image2?.transformed(with: orientation2)
+        let transformed1 = cachedTransformedImage1 ?? image1?.transformed(with: orientation1)
+        let transformed2 = cachedTransformedImage2 ?? image2?.transformed(with: orientation2)
 
         if let img1 = transformed1 {
             let leftWidth = rect.width * (mergeLeftPercent / 100.0)
@@ -186,10 +221,11 @@ public class CombiningCanvasView: NSView {
         context.saveGState()
         context.setAlpha(0.35)
         let halfWidth = rect.width / 2.0
-        if let img1 = image1?.transformed(with: orientation1) {
+
+        if showBackground1, let img1 = cachedTransformedImage1 ?? image1?.transformed(with: orientation1) {
             drawAspectFit(image: img1, in: CGRect(x: 0, y: 0, width: halfWidth, height: rect.height), context: context)
         }
-        if let img2 = image2?.transformed(with: orientation2) {
+        if showBackground2, let img2 = cachedTransformedImage2 ?? image2?.transformed(with: orientation2) {
             drawAspectFit(image: img2, in: CGRect(x: halfWidth, y: 0, width: halfWidth, height: rect.height), context: context)
         }
         context.restoreGState()
@@ -308,7 +344,6 @@ public class CombiningCanvasView: NSView {
             let w = orientedImg.size.width * effectiveScale
             let h = orientedImg.size.height * effectiveScale
 
-            // Transform pt into local unrotated object coordinates centered at fg.position
             let dx = pt.x - fg.position.x
             let dy = pt.y - fg.position.y
             let rad = -fg.rotationDegrees * .pi / 180.0
@@ -317,7 +352,6 @@ public class CombiningCanvasView: NSView {
                 y: dx * sin(rad) + dy * cos(rad)
             )
 
-            // Test Rotate handle in local space
             let rotHandleLocal = CGPoint(x: 0, y: h/2 + 20)
             if hypot(localPt.x - rotHandleLocal.x, localPt.y - rotHandleLocal.y) <= 12 {
                 selectedObjectPane = pane
@@ -327,7 +361,6 @@ public class CombiningCanvasView: NSView {
                 return
             }
 
-            // Test Corner Resize handles in local space
             let localCorners = [
                 CGPoint(x: -w/2, y: -h/2),
                 CGPoint(x: w/2, y: -h/2),
@@ -345,7 +378,6 @@ public class CombiningCanvasView: NSView {
                 }
             }
 
-            // Test inside Bounding Box in local space
             let localRect = CGRect(x: -w/2, y: -h/2, width: w, height: h)
             if localRect.contains(localPt) {
                 selectedObjectPane = pane

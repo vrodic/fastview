@@ -233,6 +233,14 @@ public class DualCanvasViewController: NSViewController, CombiningToolbarDelegat
         combiningCanvasView.fgOffset2Percent = percent
     }
 
+    public func combiningToolbar(_ toolbar: CombiningToolbarView, didToggleBackground1 visible: Bool) {
+        combiningCanvasView.showBackground1 = visible
+    }
+
+    public func combiningToolbar(_ toolbar: CombiningToolbarView, didToggleBackground2 visible: Bool) {
+        combiningCanvasView.showBackground2 = visible
+    }
+
     public func combiningToolbar(_ toolbar: CombiningToolbarView, didTriggerRotateRight pane: Int) {
         rotateRight(pane: pane)
     }

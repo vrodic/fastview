@@ -7,6 +7,8 @@ public protocol CombiningToolbarDelegate: AnyObject {
     func combiningToolbar(_ toolbar: CombiningToolbarView, didUpdateAlphaGradient percent: CGFloat)
     func combiningToolbar(_ toolbar: CombiningToolbarView, didUpdateFGOffset1 percent: CGFloat)
     func combiningToolbar(_ toolbar: CombiningToolbarView, didUpdateFGOffset2 percent: CGFloat)
+    func combiningToolbar(_ toolbar: CombiningToolbarView, didToggleBackground1 visible: Bool)
+    func combiningToolbar(_ toolbar: CombiningToolbarView, didToggleBackground2 visible: Bool)
     func combiningToolbar(_ toolbar: CombiningToolbarView, didTriggerRotateRight pane: Int)
     func combiningToolbar(_ toolbar: CombiningToolbarView, didTriggerRotateLeft pane: Int)
     func combiningToolbar(_ toolbar: CombiningToolbarView, didTriggerFlipHorizontal pane: Int)
@@ -20,7 +22,7 @@ public class CombiningToolbarView: NSView {
     public var isCollapsed: Bool = false {
         didSet {
             controlsStack.isHidden = isCollapsed
-            collapseButton.title = isCollapsed ? "▲ Controls" : "▼ Hide Sliders"
+            setButtonTitle(collapseButton, title: isCollapsed ? "▲ Controls" : "▼ Hide Sliders")
             delegate?.combiningToolbarDidToggleCollapse(self)
         }
     }
@@ -36,16 +38,18 @@ public class CombiningToolbarView: NSView {
     private let mergeSlider1 = NSSlider(value: 50, minValue: 0, maxValue: 100, target: nil, action: nil)
     private let mergeSlider2 = NSSlider(value: 50, minValue: 0, maxValue: 100, target: nil, action: nil)
     private let alphaSlider = NSSlider(value: 20, minValue: 0, maxValue: 50, target: nil, action: nil)
-    private let mergeLabel1 = NSTextField(labelWithString: "Left: 50%")
-    private let mergeLabel2 = NSTextField(labelWithString: "Right: 50%")
+    private let mergeLabel1 = NSTextField(labelWithString: "Left Image: 50%")
+    private let mergeLabel2 = NSTextField(labelWithString: "Right Image: 50%")
     private let alphaLabel = NSTextField(labelWithString: "Alpha Blend: 20%")
 
-    // FG sliders
+    // FG sliders & checkboxes
     private let fgGroup = NSStackView()
     private let fgSlider1 = NSSlider(value: 50, minValue: 0, maxValue: 100, target: nil, action: nil)
     private let fgSlider2 = NSSlider(value: 50, minValue: 0, maxValue: 100, target: nil, action: nil)
     private let fgLabel1 = NSTextField(labelWithString: "FG 1 Pos: 50%")
     private let fgLabel2 = NSTextField(labelWithString: "FG 2 Pos: 50%")
+    private let bg1Checkbox = NSButton(checkboxWithTitle: "Show BG 1", target: nil, action: nil)
+    private let bg2Checkbox = NSButton(checkboxWithTitle: "Show BG 2", target: nil, action: nil)
 
     // Orientation Group
     private let orientationGroup = NSStackView()
@@ -62,14 +66,14 @@ public class CombiningToolbarView: NSView {
 
     private func setupUI() {
         wantsLayer = true
-        layer?.backgroundColor = NSColor(calibratedWhite: 0.12, alpha: 0.95).cgColor
+        layer?.backgroundColor = NSColor(calibratedWhite: 0.1, alpha: 0.95).cgColor
         layer?.cornerRadius = 10
         layer?.borderWidth = 1.5
-        layer?.borderColor = NSColor(white: 0.4, alpha: 0.8).cgColor
+        layer?.borderColor = NSColor.white.withAlphaComponent(0.4).cgColor
 
         // Header Stack
         headerStack.orientation = .horizontal
-        headerStack.spacing = 12
+        headerStack.spacing = 14
         headerStack.alignment = .centerY
 
         modeSegmentedControl.segmentStyle = .texturedSquare
@@ -123,17 +127,29 @@ public class CombiningToolbarView: NSView {
 
     private func styleButton(_ btn: NSButton) {
         btn.bezelStyle = .inline
-        btn.contentTintColor = NSColor.white
-        btn.font = NSFont.boldSystemFont(ofSize: 11)
         btn.wantsLayer = true
-        btn.layer?.backgroundColor = NSColor(white: 0.3, alpha: 0.8).cgColor
-        btn.layer?.cornerRadius = 4
+        btn.layer?.backgroundColor = NSColor(calibratedWhite: 0.28, alpha: 1.0).cgColor
+        btn.layer?.cornerRadius = 5
+        btn.layer?.borderWidth = 1
+        btn.layer?.borderColor = NSColor.white.withAlphaComponent(0.4).cgColor
+        setButtonTitle(btn, title: btn.title)
+    }
+
+    private func setButtonTitle(_ btn: NSButton, title: String) {
+        let attrString = NSAttributedString(
+            string: title,
+            attributes: [
+                .foregroundColor: NSColor.white,
+                .font: NSFont.boldSystemFont(ofSize: 11)
+            ]
+        )
+        btn.attributedTitle = attrString
     }
 
     private func setupMergeControls() {
-        mergeGroup.orientation = .horizontal
-        mergeGroup.spacing = 16
-        mergeGroup.alignment = .centerY
+        mergeGroup.orientation = .vertical
+        mergeGroup.spacing = 8
+        mergeGroup.alignment = .leading
 
         mergeSlider1.target = self
         mergeSlider1.action = #selector(mergeSlider1Changed(_:))
@@ -142,58 +158,87 @@ public class CombiningToolbarView: NSView {
         alphaSlider.target = self
         alphaSlider.action = #selector(alphaSliderChanged(_:))
 
+        for s in [mergeSlider1, mergeSlider2, alphaSlider] {
+            s.translatesAutoresizingMaskIntoConstraints = false
+            s.widthAnchor.constraint(equalToConstant: 160).isActive = true
+        }
+
         for tf in [mergeLabel1, mergeLabel2, alphaLabel] {
             tf.font = NSFont.boldSystemFont(ofSize: 11)
             tf.textColor = NSColor.white
+            tf.translatesAutoresizingMaskIntoConstraints = false
+            tf.widthAnchor.constraint(equalToConstant: 120).isActive = true
         }
 
-        let s1Stack = NSStackView(views: [mergeLabel1, mergeSlider1])
-        let s2Stack = NSStackView(views: [mergeLabel2, mergeSlider2])
-        let aStack = NSStackView(views: [alphaLabel, alphaSlider])
+        let row1 = NSStackView(views: [mergeLabel1, mergeSlider1, mergeLabel2, mergeSlider2])
+        row1.orientation = .horizontal
+        row1.spacing = 12
+        row1.alignment = .centerY
 
-        for st in [s1Stack, s2Stack, aStack] {
-            st.orientation = .horizontal
-            st.spacing = 6
-            st.alignment = .centerY
-        }
+        let row2 = NSStackView(views: [alphaLabel, alphaSlider])
+        row2.orientation = .horizontal
+        row2.spacing = 12
+        row2.alignment = .centerY
 
-        mergeGroup.addArrangedSubview(s1Stack)
-        mergeGroup.addArrangedSubview(s2Stack)
-        mergeGroup.addArrangedSubview(aStack)
+        mergeGroup.addArrangedSubview(row1)
+        mergeGroup.addArrangedSubview(row2)
     }
 
     private func setupFGControls() {
-        fgGroup.orientation = .horizontal
-        fgGroup.spacing = 16
-        fgGroup.alignment = .centerY
+        fgGroup.orientation = .vertical
+        fgGroup.spacing = 8
+        fgGroup.alignment = .leading
 
         fgSlider1.target = self
         fgSlider1.action = #selector(fgSlider1Changed(_:))
         fgSlider2.target = self
         fgSlider2.action = #selector(fgSlider2Changed(_:))
 
+        for s in [fgSlider1, fgSlider2] {
+            s.translatesAutoresizingMaskIntoConstraints = false
+            s.widthAnchor.constraint(equalToConstant: 160).isActive = true
+        }
+
         for tf in [fgLabel1, fgLabel2] {
             tf.font = NSFont.boldSystemFont(ofSize: 11)
             tf.textColor = NSColor.white
+            tf.translatesAutoresizingMaskIntoConstraints = false
+            tf.widthAnchor.constraint(equalToConstant: 100).isActive = true
         }
 
-        let f1Stack = NSStackView(views: [fgLabel1, fgSlider1])
-        let f2Stack = NSStackView(views: [fgLabel2, fgSlider2])
-
-        for st in [f1Stack, f2Stack] {
-            st.orientation = .horizontal
-            st.spacing = 6
-            st.alignment = .centerY
+        for cb in [bg1Checkbox, bg2Checkbox] {
+            cb.state = .on
+            cb.contentTintColor = NSColor.white
+            let attrStr = NSAttributedString(
+                string: cb.title,
+                attributes: [.foregroundColor: NSColor.white, .font: NSFont.boldSystemFont(ofSize: 11)]
+            )
+            cb.attributedTitle = attrStr
         }
 
-        fgGroup.addArrangedSubview(f1Stack)
-        fgGroup.addArrangedSubview(f2Stack)
+        bg1Checkbox.target = self
+        bg1Checkbox.action = #selector(bg1Toggled(_:))
+        bg2Checkbox.target = self
+        bg2Checkbox.action = #selector(bg2Toggled(_:))
+
+        let slidersRow = NSStackView(views: [fgLabel1, fgSlider1, fgLabel2, fgSlider2])
+        slidersRow.orientation = .horizontal
+        slidersRow.spacing = 12
+        slidersRow.alignment = .centerY
+
+        let bgRow = NSStackView(views: [bg1Checkbox, bg2Checkbox])
+        bgRow.orientation = .horizontal
+        bgRow.spacing = 16
+        bgRow.alignment = .centerY
+
+        fgGroup.addArrangedSubview(slidersRow)
+        fgGroup.addArrangedSubview(bgRow)
     }
 
     private func setupOrientationControls() {
-        orientationGroup.orientation = .horizontal
-        orientationGroup.spacing = 16
-        orientationGroup.alignment = .centerY
+        orientationGroup.orientation = .vertical
+        orientationGroup.spacing = 6
+        orientationGroup.alignment = .leading
 
         func makeBtn(_ title: String, tag: Int, action: Selector) -> NSButton {
             let btn = NSButton(title: title, target: self, action: action)
@@ -211,9 +256,10 @@ public class CombiningToolbarView: NSView {
         let flipH1 = makeBtn("⇄ Flip H", tag: 1, action: #selector(flipHAction(_:)))
         let flipV1 = makeBtn("⇅ Flip V", tag: 1, action: #selector(flipVAction(_:)))
 
-        let p1Stack = NSStackView(views: [p1Label, rotL1, rotR1, flipH1, flipV1])
-        p1Stack.orientation = .horizontal
-        p1Stack.spacing = 4
+        let p1Row = NSStackView(views: [p1Label, rotL1, rotR1, flipH1, flipV1])
+        p1Row.orientation = .horizontal
+        p1Row.spacing = 6
+        p1Row.alignment = .centerY
 
         let p2Label = NSTextField(labelWithString: "Image 2:")
         p2Label.font = NSFont.boldSystemFont(ofSize: 11)
@@ -224,12 +270,13 @@ public class CombiningToolbarView: NSView {
         let flipH2 = makeBtn("⇄ Flip H", tag: 2, action: #selector(flipHAction(_:)))
         let flipV2 = makeBtn("⇅ Flip V", tag: 2, action: #selector(flipVAction(_:)))
 
-        let p2Stack = NSStackView(views: [p2Label, rotL2, rotR2, flipH2, flipV2])
-        p2Stack.orientation = .horizontal
-        p2Stack.spacing = 4
+        let p2Row = NSStackView(views: [p2Label, rotL2, rotR2, flipH2, flipV2])
+        p2Row.orientation = .horizontal
+        p2Row.spacing = 6
+        p2Row.alignment = .centerY
 
-        orientationGroup.addArrangedSubview(p1Stack)
-        orientationGroup.addArrangedSubview(p2Stack)
+        orientationGroup.addArrangedSubview(p1Row)
+        orientationGroup.addArrangedSubview(p2Row)
     }
 
     public func setMode(_ mode: CanvasCombiningMode) {
@@ -266,13 +313,13 @@ public class CombiningToolbarView: NSView {
 
     @objc private func mergeSlider1Changed(_ sender: NSSlider) {
         let val = CGFloat(sender.doubleValue)
-        mergeLabel1.stringValue = String(format: "Left: %.0f%%", val)
+        mergeLabel1.stringValue = String(format: "Left Image: %.0f%%", val)
         delegate?.combiningToolbar(self, didUpdateMergeLeft: val)
     }
 
     @objc private func mergeSlider2Changed(_ sender: NSSlider) {
         let val = CGFloat(sender.doubleValue)
-        mergeLabel2.stringValue = String(format: "Right: %.0f%%", val)
+        mergeLabel2.stringValue = String(format: "Right Image: %.0f%%", val)
         delegate?.combiningToolbar(self, didUpdateMergeRight: val)
     }
 
@@ -292,6 +339,16 @@ public class CombiningToolbarView: NSView {
         let val = CGFloat(sender.doubleValue)
         fgLabel2.stringValue = String(format: "FG 2 Pos: %.0f%%", val)
         delegate?.combiningToolbar(self, didUpdateFGOffset2: val)
+    }
+
+    @objc private func bg1Toggled(_ sender: NSButton) {
+        let visible = (sender.state == .on)
+        delegate?.combiningToolbar(self, didToggleBackground1: visible)
+    }
+
+    @objc private func bg2Toggled(_ sender: NSButton) {
+        let visible = (sender.state == .on)
+        delegate?.combiningToolbar(self, didToggleBackground2: visible)
     }
 
     @objc private func rotLAction(_ sender: NSButton) {

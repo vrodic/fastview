@@ -139,13 +139,21 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         panel.canChooseFiles = true
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
-        panel.title = "Select Folder or Archive for 2nd View"
+        panel.title = "Select Folder, Archive, or Image for 2nd View"
 
         panel.begin { [weak self] response in
             guard let self = self, response == .OK, let url = panel.url else { return }
             let path = url.path
-            let loc = NavigationManager.locationForPath(path)
-            self.loadLocation(loc, pane: 2)
+            let fileType = ArchiveReader.fileType(for: url)
+
+            if fileType == .image {
+                let parentPath = url.deletingLastPathComponent().path
+                let loc = NavigationManager.locationForPath(parentPath)
+                self.loadLocation(loc, pane: 2, targetSelectedItemPath: path)
+            } else {
+                let loc = NavigationManager.locationForPath(path)
+                self.loadLocation(loc, pane: 2)
+            }
         }
     }
 
