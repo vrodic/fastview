@@ -8,13 +8,28 @@ public class SidebarContainerViewController: NSSplitViewController {
     private var item2: NSSplitViewItem?
 
     public private(set) var isDualView: Bool = false
+    private static let previewSubSplitPositionKey = "FastViewPreviewSubSplitPosition"
+    private static let previewSubSplitIsVerticalKey = "FastViewPreviewSubSplitIsVertical"
+
+    public var isSubSplitVertical: Bool {
+        get { return splitView.isVertical }
+        set {
+            guard splitView.isVertical != newValue else { return }
+            splitView.isVertical = newValue
+            UserDefaults.standard.set(newValue, forKey: SidebarContainerViewController.previewSubSplitIsVerticalKey)
+            if isDualView {
+                adjustSubSplitRatio()
+            }
+        }
+    }
 
     override public func viewDidLoad() {
         super.viewDidLoad()
         sidebarVC1.paneIndex = 1
         sidebarVC2.paneIndex = 2
 
-        splitView.isVertical = false
+        let savedVertical = UserDefaults.standard.bool(forKey: SidebarContainerViewController.previewSubSplitIsVerticalKey)
+        splitView.isVertical = savedVertical
         splitView.dividerStyle = .thin
 
         let i1 = NSSplitViewItem(viewController: sidebarVC1)
@@ -44,11 +59,7 @@ public class SidebarContainerViewController: NSSplitViewController {
             sidebarVC2.showHeader = true
 
             DispatchQueue.main.async { [weak self] in
-                guard let self = self else { return }
-                let totalHeight = self.splitView.bounds.height
-                if totalHeight > 100 {
-                    self.splitView.setPosition(totalHeight / 2.0, ofDividerAt: 0)
-                }
+                self?.adjustSubSplitRatio()
             }
         } else {
             if let window = view.window, let responder = window.firstResponder as? NSView {
@@ -58,6 +69,27 @@ public class SidebarContainerViewController: NSSplitViewController {
             }
             i2.isCollapsed = true
             sidebarVC1.showHeader = false
+        }
+    }
+
+    private func adjustSubSplitRatio() {
+        guard isDualView else { return }
+        let totalSpan = splitView.isVertical ? splitView.bounds.width : splitView.bounds.height
+        let savedPos = UserDefaults.standard.double(forKey: SidebarContainerViewController.previewSubSplitPositionKey)
+        if savedPos > 50 && savedPos < Double(totalSpan - 50) {
+            splitView.setPosition(CGFloat(savedPos), ofDividerAt: 0)
+        } else if totalSpan > 100 {
+            splitView.setPosition(totalSpan / 2.0, ofDividerAt: 0)
+        }
+    }
+
+    override public func splitViewDidResizeSubviews(_ notification: Notification) {
+        super.splitViewDidResizeSubviews(notification)
+        if isDualView && splitView.subviews.count > 0 {
+            let currentSpan = splitView.isVertical ? splitView.subviews[0].frame.width : splitView.subviews[0].frame.height
+            if currentSpan > 40 {
+                UserDefaults.standard.set(currentSpan, forKey: SidebarContainerViewController.previewSubSplitPositionKey)
+            }
         }
     }
 }

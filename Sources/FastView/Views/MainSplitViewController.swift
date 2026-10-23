@@ -52,6 +52,21 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         return activeSidebar.selectedItem?.id
     }
 
+    public var isPreviewPaneHidden: Bool {
+        get {
+            guard splitViewItems.count > 0 else { return false }
+            return splitViewItems[0].isCollapsed
+        }
+        set {
+            guard splitViewItems.count > 0 else { return }
+            splitViewItems[0].isCollapsed = newValue
+        }
+    }
+
+    @objc public func togglePreviewPane() {
+        isPreviewPaneHidden = !isPreviewPaneHidden
+    }
+
     public var showFavoritesOnly: Bool = false {
         didSet {
             UserDefaults.standard.set(showFavoritesOnly, forKey: "FastViewIsFavoritesMode")

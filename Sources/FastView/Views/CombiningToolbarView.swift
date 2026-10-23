@@ -73,6 +73,8 @@ public class CombiningToolbarView: NSView {
         layer?.borderWidth = 1.5
         layer?.borderColor = NSColor.white.withAlphaComponent(0.4).cgColor
 
+        self.appearance = NSAppearance(named: .darkAqua)
+
         // Header Stack
         headerStack.orientation = .horizontal
         headerStack.spacing = 14
@@ -130,10 +132,10 @@ public class CombiningToolbarView: NSView {
     private func styleButton(_ btn: NSButton) {
         btn.bezelStyle = .inline
         btn.wantsLayer = true
-        btn.layer?.backgroundColor = NSColor(calibratedWhite: 0.28, alpha: 1.0).cgColor
+        btn.layer?.backgroundColor = NSColor(calibratedWhite: 0.35, alpha: 1.0).cgColor
         btn.layer?.cornerRadius = 5
         btn.layer?.borderWidth = 1
-        btn.layer?.borderColor = NSColor.white.withAlphaComponent(0.4).cgColor
+        btn.layer?.borderColor = NSColor.white.withAlphaComponent(0.6).cgColor
         setButtonTitle(btn, title: btn.title)
     }
 

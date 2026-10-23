@@ -292,13 +292,20 @@ public class CombiningCanvasView: NSView {
     private func drawForegroundObject(_ obj: ForegroundObject, paneIndex: Int, in rect: CGRect, context: CGContext) {
         context.saveGState()
 
-        let orientation = (paneIndex == 1) ? orientation1 : orientation2
-        let cached = (paneIndex == 1) ? cachedFgImage1 : cachedFgImage2
-        let orientedImg = cached ?? obj.image.transformed(with: orientation)
-
+        let baseImg = obj.image
         let effectiveScale = defaultFitScale(for: obj)
-        let targetWidth = orientedImg.size.width * effectiveScale
-        let targetHeight = orientedImg.size.height * effectiveScale
+        let targetWidth = baseImg.size.width * effectiveScale
+        let targetHeight = baseImg.size.height * effectiveScale
+
+        context.translateBy(x: obj.position.x, y: obj.position.y)
+        context.rotate(by: obj.rotationDegrees * .pi / 180.0)
+
+        let scaleX: CGFloat = obj.isFlippedHorizontal ? -1.0 : 1.0
+        let scaleY: CGFloat = obj.isFlippedVertical ? -1.0 : 1.0
+        if scaleX != 1.0 || scaleY != 1.0 {
+            context.scaleBy(x: scaleX, y: scaleY)
+        }
+
         let drawRect = CGRect(
             x: -targetWidth / 2.0,
             y: -targetHeight / 2.0,
@@ -306,10 +313,7 @@ public class CombiningCanvasView: NSView {
             height: targetHeight
         )
 
-        context.translateBy(x: obj.position.x, y: obj.position.y)
-        context.rotate(by: obj.rotationDegrees * .pi / 180.0)
-
-        orientedImg.draw(in: drawRect)
+        baseImg.draw(in: drawRect)
 
         if selectedObjectPane == paneIndex {
             context.setStrokeColor(NSColor.controlAccentColor.cgColor)
@@ -458,10 +462,8 @@ public class CombiningCanvasView: NSView {
         guard let pane = sender.representedObject as? Int else { return }
         if pane == 1 {
             foregroundObject1?.isFlippedHorizontal.toggle()
-            orientation1.toggleFlipHorizontal()
         } else {
             foregroundObject2?.isFlippedHorizontal.toggle()
-            orientation2.toggleFlipHorizontal()
         }
         needsDisplay = true
     }
@@ -470,10 +472,8 @@ public class CombiningCanvasView: NSView {
         guard let pane = sender.representedObject as? Int else { return }
         if pane == 1 {
             foregroundObject1?.isFlippedVertical.toggle()
-            orientation1.toggleFlipVertical()
         } else {
             foregroundObject2?.isFlippedVertical.toggle()
-            orientation2.toggleFlipVertical()
         }
         needsDisplay = true
     }

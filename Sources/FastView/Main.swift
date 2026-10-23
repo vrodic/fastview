@@ -159,6 +159,10 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         viewMenu.addItem(withTitle: "Show All Items", action: #selector(showAllItemsAction(_:)), keyEquivalent: "")
         viewMenu.addItem(withTitle: "Show Favorites Only", action: #selector(showFavoritesOnlyAction(_:)), keyEquivalent: "")
         viewMenu.addItem(NSMenuItem.separator())
+        viewMenu.addItem(withTitle: "Toggle Preview Pane", action: #selector(togglePreviewPaneAction(_:)), keyEquivalent: "b")
+        viewMenu.addItem(withTitle: "Split 2nd View Horizontally", action: #selector(setSubSplitHorizontalAction(_:)), keyEquivalent: "")
+        viewMenu.addItem(withTitle: "Split 2nd View Vertically", action: #selector(setSubSplitVerticalAction(_:)), keyEquivalent: "")
+        viewMenu.addItem(NSMenuItem.separator())
         viewMenu.addItem(withTitle: "Pick Folder for 2nd View…", action: #selector(openSecondFolderAction(_:)), keyEquivalent: "")
         viewMenu.addItem(withTitle: "Show Favorites in 2nd View", action: #selector(toggleFavoritesPane2Action), keyEquivalent: "")
         viewMenu.addItem(withTitle: "Close 2nd View", action: #selector(closeSecondViewAction(_:)), keyEquivalent: "")
@@ -407,6 +411,18 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func resetOrientationAction() {
         windowController?.splitVC.resetOrientationForActivePane()
+    }
+
+    @objc private func togglePreviewPaneAction(_ sender: Any?) {
+        windowController?.splitVC.togglePreviewPane()
+    }
+
+    @objc private func setSubSplitHorizontalAction(_ sender: Any?) {
+        windowController?.splitVC.sidebarContainerVC.isSubSplitVertical = false
+    }
+
+    @objc private func setSubSplitVerticalAction(_ sender: Any?) {
+        windowController?.splitVC.sidebarContainerVC.isSubSplitVertical = true
     }
 
     @objc private func toggleCombiningControlsAction(_ sender: Any?) {
