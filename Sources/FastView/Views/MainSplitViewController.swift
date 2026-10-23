@@ -61,6 +61,22 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         }
     }
 
+    public var showFavoritesOnlyPane2: Bool = false {
+        didSet {
+            if sidebarContainerVC.isDualView {
+                reloadDirectoryContentsAsync(pane: 2)
+            }
+        }
+    }
+
+    @objc public func toggleFavoritesOnlyPane2() {
+        if !sidebarContainerVC.isDualView {
+            sidebarContainerVC.updateViewMode(isDual: true)
+            dualCanvasVC.setDualViewEnabled(true)
+        }
+        showFavoritesOnlyPane2 = !showFavoritesOnlyPane2
+    }
+
     override public func viewDidLoad() {
         super.viewDidLoad()
         setupUI()
@@ -183,6 +199,103 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
     public func toggleCombiningControls() {
         guard sidebarContainerVC.isDualView else { return }
         dualCanvasVC.toggleToolbar()
+    }
+
+    @objc public func saveCombinationStatePrompt() {
+        guard sidebarContainerVC.isDualView else {
+            let alert = NSAlert()
+            alert.messageText = "Dual View Not Active"
+            alert.informativeText = "Open a 2nd view folder before saving a combination state."
+            alert.alertStyle = .informational
+            alert.runModal()
+            return
+        }
+
+        let name1 = ((sidebarContainerVC.sidebarVC1.selectedItem?.name ?? "Image1") as NSString).deletingPathExtension
+        let name2 = ((sidebarContainerVC.sidebarVC2.selectedItem?.name ?? "Image2") as NSString).deletingPathExtension
+        let defaultComboName = "\(name1) + \(name2)"
+
+        let alert = NSAlert()
+        alert.messageText = "Save Combination State"
+        alert.informativeText = "Enter a name for this combination state:"
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Cancel")
+
+        let inputTF = NSTextField(frame: NSRect(x: 0, y: 0, width: 300, height: 24))
+        inputTF.stringValue = defaultComboName
+        alert.accessoryView = inputTF
+
+        if alert.runModal() == .alertFirstButtonReturn {
+            let comboName = inputTF.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !comboName.isEmpty else { return }
+
+            let path1 = currentLocationPath ?? NSHomeDirectory()
+            let itemPath1 = sidebarContainerVC.sidebarVC1.selectedItem?.id ?? sidebarContainerVC.sidebarVC1.selectedItem?.path
+            let path2 = navigationManager2?.currentLocation.physicalPath ?? path1
+            let itemPath2 = sidebarContainerVC.sidebarVC2.selectedItem?.id ?? sidebarContainerVC.sidebarVC2.selectedItem?.path
+
+            let o1 = dualCanvasVC.imageView1.orientation
+            let o2 = dualCanvasVC.imageView2.orientation
+            let canvas = dualCanvasVC.combiningCanvasView
+
+            let state = SavedCombinationState(
+                name: comboName,
+                path1: path1,
+                itemPath1: itemPath1,
+                path2: path2,
+                itemPath2: itemPath2,
+                rot1: Double(o1.rotationDegrees),
+                flipH1: o1.isFlippedHorizontal,
+                flipV1: o1.isFlippedVertical,
+                rot2: Double(o2.rotationDegrees),
+                flipH2: o2.isFlippedHorizontal,
+                flipV2: o2.isFlippedVertical,
+                combiningMode: dualCanvasVC.combiningMode.rawValue,
+                mergeLeftPercent: Double(canvas.mergeLeftPercent),
+                mergeRightPercent: Double(canvas.mergeRightPercent),
+                alphaGradientPercent: Double(canvas.alphaGradientPercent),
+                fgOffset1Percent: Double(canvas.fgOffset1Percent),
+                fgOffset2Percent: Double(canvas.fgOffset2Percent),
+                showBackground1: canvas.showBackground1,
+                showBackground2: canvas.showBackground2,
+                fg1OnTop: canvas.fg1OnTop
+            )
+
+            CombinationStateManager.saveState(state)
+            globalAppDelegate?.updateRestoreCombinationMenu()
+        }
+    }
+
+    public func restoreCombinationState(_ state: SavedCombinationState) {
+        let loc1 = NavigationManager.locationForPath(state.path1)
+        loadLocation(loc1, pane: 1, targetSelectedItemPath: state.itemPath1)
+
+        let loc2 = NavigationManager.locationForPath(state.path2)
+        loadLocation(loc2, pane: 2, targetSelectedItemPath: state.itemPath2)
+
+        let o1 = ImageOrientation(rotationDegrees: CGFloat(state.rot1), isFlippedHorizontal: state.flipH1, isFlippedVertical: state.flipV1)
+        dualCanvasVC.imageView1.orientation = o1
+        dualCanvasVC.combiningCanvasView.orientation1 = o1
+
+        let o2 = ImageOrientation(rotationDegrees: CGFloat(state.rot2), isFlippedHorizontal: state.flipH2, isFlippedVertical: state.flipV2)
+        dualCanvasVC.imageView2.orientation = o2
+        dualCanvasVC.combiningCanvasView.orientation2 = o2
+
+        if let mode = CanvasCombiningMode(rawValue: state.combiningMode) {
+            dualCanvasVC.combiningMode = mode
+        }
+
+        let canvas = dualCanvasVC.combiningCanvasView
+        canvas.mergeLeftPercent = CGFloat(state.mergeLeftPercent)
+        canvas.mergeRightPercent = CGFloat(state.mergeRightPercent)
+        canvas.alphaGradientPercent = CGFloat(state.alphaGradientPercent)
+        canvas.fgOffset1Percent = CGFloat(state.fgOffset1Percent)
+        canvas.fgOffset2Percent = CGFloat(state.fgOffset2Percent)
+        canvas.showBackground1 = state.showBackground1
+        canvas.showBackground2 = state.showBackground2
+        canvas.fg1OnTop = state.fg1OnTop
+
+        dualCanvasVC.setDualViewEnabled(true)
     }
 
     public func saveSelectionAndDualState() {
@@ -354,6 +467,28 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
                 displayItem(favorites[idx], pane: pane)
             } else if targetSelectedItemPath == nil, let first = favorites.first {
                 displayItem(first, pane: pane)
+            }
+            return
+        }
+
+        if pane == 2 && showFavoritesOnlyPane2 {
+            let favorites = SQLiteCache.shared.getAllFavorites()
+            targetSidebar.setHeaderTitle("Pane 2: Favorites")
+            targetSidebar.setItems(favorites, selectFirst: targetSelectedItemPath == nil)
+
+            if let targetPath = targetSelectedItemPath,
+               let idx = favorites.firstIndex(where: {
+                   $0.id == targetPath ||
+                   $0.path == targetPath ||
+                   $0.name == targetPath ||
+                   (targetPath as NSString).lastPathComponent == $0.name ||
+                   $0.path.hasSuffix(targetPath) ||
+                   targetPath.hasSuffix($0.path)
+               }) {
+                targetSidebar.selectRow(idx)
+                displayItem(favorites[idx], pane: 2)
+            } else if targetSelectedItemPath == nil, let first = favorites.first {
+                displayItem(first, pane: 2)
             }
             return
         }

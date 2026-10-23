@@ -5,6 +5,7 @@ var globalAppDelegate: AppDelegate?
 @main
 public class AppDelegate: NSObject, NSApplicationDelegate {
     private var windowController: MainWindowController?
+    private var restoreCombinationSubmenu: NSMenu?
     private static let lastPathKey = "FastViewLastOpenedPath"
     private static let lastSelectedItemKey = "FastViewLastSelectedItemPath"
     private static let lastSelectedItemIdKey = "FastViewLastSelectedItemId"
@@ -130,7 +131,18 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         fileMenuItem.submenu = fileMenu
         fileMenu.addItem(withTitle: "Open…", action: #selector(openDocument(_:)), keyEquivalent: "o")
         fileMenu.addItem(withTitle: "Pick Folder for 2nd View…", action: #selector(openSecondFolderAction(_:)), keyEquivalent: "")
+        fileMenu.addItem(withTitle: "Show Favorites in 2nd View", action: #selector(toggleFavoritesPane2Action), keyEquivalent: "")
         fileMenu.addItem(withTitle: "Close 2nd View", action: #selector(closeSecondViewAction(_:)), keyEquivalent: "")
+        fileMenu.addItem(NSMenuItem.separator())
+        fileMenu.addItem(withTitle: "Save Combination State…", action: #selector(saveCombinationStateAction(_:)), keyEquivalent: "s")
+
+        let restoreItem = NSMenuItem(title: "Restore Combination State", action: nil, keyEquivalent: "")
+        let restoreSubmenu = NSMenu(title: "Restore Combination State")
+        restoreItem.submenu = restoreSubmenu
+        self.restoreCombinationSubmenu = restoreSubmenu
+        fileMenu.addItem(restoreItem)
+        updateRestoreCombinationMenu()
+
         fileMenu.addItem(NSMenuItem.separator())
         fileMenu.addItem(withTitle: "Show Info", action: #selector(showInfoAction(_:)), keyEquivalent: "i")
         fileMenu.addItem(withTitle: "Toggle Favorite", action: #selector(toggleFavoriteAction(_:)), keyEquivalent: "f")
@@ -148,6 +160,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         viewMenu.addItem(withTitle: "Show Favorites Only", action: #selector(showFavoritesOnlyAction(_:)), keyEquivalent: "")
         viewMenu.addItem(NSMenuItem.separator())
         viewMenu.addItem(withTitle: "Pick Folder for 2nd View…", action: #selector(openSecondFolderAction(_:)), keyEquivalent: "")
+        viewMenu.addItem(withTitle: "Show Favorites in 2nd View", action: #selector(toggleFavoritesPane2Action), keyEquivalent: "")
         viewMenu.addItem(withTitle: "Close 2nd View", action: #selector(closeSecondViewAction(_:)), keyEquivalent: "")
         viewMenu.addItem(NSMenuItem.separator())
 
@@ -400,9 +413,50 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         windowController?.splitVC.toggleCombiningControls()
     }
 
+    @objc private func toggleFavoritesPane2Action() {
+        windowController?.splitVC.toggleFavoritesOnlyPane2()
+    }
+
+    @objc private func saveCombinationStateAction(_ sender: Any?) {
+        windowController?.splitVC.saveCombinationStatePrompt()
+    }
+
+    public func updateRestoreCombinationMenu() {
+        guard let restoreSubmenu = restoreCombinationSubmenu else { return }
+        restoreSubmenu.removeAllItems()
+
+        let savedStates = CombinationStateManager.getAllSavedStates()
+        if savedStates.isEmpty {
+            let emptyItem = NSMenuItem(title: "No Saved Combinations", action: nil, keyEquivalent: "")
+            emptyItem.isEnabled = false
+            restoreSubmenu.addItem(emptyItem)
+        } else {
+            for state in savedStates {
+                let item = NSMenuItem(title: state.name, action: #selector(restoreComboStateItemAction(_:)), keyEquivalent: "")
+                item.representedObject = state.id
+                restoreSubmenu.addItem(item)
+            }
+            restoreSubmenu.addItem(NSMenuItem.separator())
+            let clearItem = NSMenuItem(title: "Clear All Saved Combinations", action: #selector(clearAllComboStatesAction), keyEquivalent: "")
+            restoreSubmenu.addItem(clearItem)
+        }
+    }
+
+    @objc private func restoreComboStateItemAction(_ sender: NSMenuItem) {
+        guard let stateId = sender.representedObject as? String,
+              let state = CombinationStateManager.getAllSavedStates().first(where: { $0.id == stateId }) else { return }
+        windowController?.splitVC.restoreCombinationState(state)
+    }
+
+    @objc private func clearAllComboStatesAction() {
+        CombinationStateManager.clearAll()
+        updateRestoreCombinationMenu()
+    }
+
     public func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         if menuItem.action == #selector(toggleCombiningControlsAction(_:)) ||
-           menuItem.action == #selector(closeSecondViewAction(_:)) {
+           menuItem.action == #selector(closeSecondViewAction(_:)) ||
+           menuItem.action == #selector(saveCombinationStateAction(_:)) {
             return windowController?.splitVC.sidebarContainerVC.isDualView ?? false
         }
         return true
