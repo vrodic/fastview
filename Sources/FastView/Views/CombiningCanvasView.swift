@@ -1,6 +1,13 @@
 import AppKit
 
 public class CombiningCanvasView: NSView {
+    public var canvasBackgroundColor: NSColor = .black {
+        didSet {
+            layer?.backgroundColor = canvasBackgroundColor.cgColor
+            needsDisplay = true
+        }
+    }
+
     public var image1: NSImage? {
         didSet {
             updateCachedTransformedImage1()
@@ -133,7 +140,7 @@ public class CombiningCanvasView: NSView {
 
     private func setupView() {
         wantsLayer = true
-        layer?.backgroundColor = NSColor.black.cgColor
+        layer?.backgroundColor = canvasBackgroundColor.cgColor
     }
 
     override public var isFlipped: Bool { return false }
@@ -179,7 +186,7 @@ public class CombiningCanvasView: NSView {
         super.draw(dirtyRect)
 
         guard let context = NSGraphicsContext.current?.cgContext else { return }
-        context.setFillColor(NSColor.black.cgColor)
+        context.setFillColor(canvasBackgroundColor.cgColor)
         context.fill(bounds)
 
         switch combiningMode {

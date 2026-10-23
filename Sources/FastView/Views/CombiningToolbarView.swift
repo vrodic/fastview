@@ -14,6 +14,7 @@ public protocol CombiningToolbarDelegate: AnyObject {
     func combiningToolbar(_ toolbar: CombiningToolbarView, didTriggerRotateLeft pane: Int)
     func combiningToolbar(_ toolbar: CombiningToolbarView, didTriggerFlipHorizontal pane: Int)
     func combiningToolbar(_ toolbar: CombiningToolbarView, didTriggerFlipVertical pane: Int)
+    func combiningToolbar(_ toolbar: CombiningToolbarView, didSelectBackgroundColor color: NSColor)
     func combiningToolbarDidToggleCollapse(_ toolbar: CombiningToolbarView)
 }
 
@@ -52,6 +53,7 @@ public class CombiningToolbarView: NSView {
     private let bg1Checkbox = NSButton(checkboxWithTitle: "Show BG 1", target: nil, action: nil)
     private let bg2Checkbox = NSButton(checkboxWithTitle: "Show BG 2", target: nil, action: nil)
     private let layerOrderControl = NSSegmentedControl(labels: ["FG 1 Top", "FG 2 Top"], trackingMode: .selectOne, target: nil, action: nil)
+    private let bgColorControl = NSSegmentedControl(labels: ["Black Canvas", "White Canvas"], trackingMode: .selectOne, target: nil, action: nil)
 
     // Orientation Group
     private let orientationGroup = NSStackView()
@@ -230,14 +232,19 @@ public class CombiningToolbarView: NSView {
         layerOrderControl.target = self
         layerOrderControl.action = #selector(layerOrderChanged(_:))
 
+        bgColorControl.segmentStyle = .texturedSquare
+        bgColorControl.selectedSegment = 0
+        bgColorControl.target = self
+        bgColorControl.action = #selector(bgColorChanged(_:))
+
         let slidersRow = NSStackView(views: [fgLabel1, fgSlider1, fgLabel2, fgSlider2])
         slidersRow.orientation = .horizontal
         slidersRow.spacing = 12
         slidersRow.alignment = .centerY
 
-        let bgRow = NSStackView(views: [bg1Checkbox, bg2Checkbox, layerOrderControl])
+        let bgRow = NSStackView(views: [bg1Checkbox, bg2Checkbox, layerOrderControl, bgColorControl])
         bgRow.orientation = .horizontal
-        bgRow.spacing = 16
+        bgRow.spacing = 14
         bgRow.alignment = .centerY
 
         fgGroup.addArrangedSubview(slidersRow)
@@ -363,6 +370,11 @@ public class CombiningToolbarView: NSView {
     @objc private func layerOrderChanged(_ sender: NSSegmentedControl) {
         let fg1Top = (sender.selectedSegment == 0)
         delegate?.combiningToolbar(self, didToggleFG1OnTop: fg1Top)
+    }
+
+    @objc private func bgColorChanged(_ sender: NSSegmentedControl) {
+        let color: NSColor = (sender.selectedSegment == 0) ? .black : .white
+        delegate?.combiningToolbar(self, didSelectBackgroundColor: color)
     }
 
     @objc private func rotLAction(_ sender: NSButton) {

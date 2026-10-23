@@ -100,31 +100,23 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
     override public func viewDidAppear() {
         super.viewDidAppear()
         splitView.delegate = self
-        applySavedSidebarWidth()
+        restoreSidebarWidth()
     }
 
-    override public func viewDidLayout() {
-        super.viewDidLayout()
-        applySavedSidebarWidth()
-    }
-
-    private func applySavedSidebarWidth() {
+    private func restoreSidebarWidth() {
         let savedWidth = UserDefaults.standard.double(forKey: MainSplitViewController.sidebarWidthKey)
-        if savedWidth >= 120 && splitView.subviews.count > 0 {
-            let currentWidth = splitView.subviews[0].frame.width
-            if abs(currentWidth - CGFloat(savedWidth)) > 2 {
-                splitView.setPosition(CGFloat(savedWidth), ofDividerAt: 0)
-            }
+        if savedWidth >= 120 {
+            splitViewItems[0].preferredThicknessFraction = 0
+            splitView.setPosition(CGFloat(savedWidth), ofDividerAt: 0)
         }
     }
 
     override public func splitViewDidResizeSubviews(_ notification: Notification) {
         super.splitViewDidResizeSubviews(notification)
-        if splitView.subviews.count > 0 {
-            let currentWidth = splitView.subviews[0].frame.width
-            if currentWidth >= 120 {
-                UserDefaults.standard.set(Double(currentWidth), forKey: MainSplitViewController.sidebarWidthKey)
-            }
+        guard splitView.subviews.count > 0 else { return }
+        let currentWidth = splitView.subviews[0].frame.width
+        if currentWidth >= 120 {
+            UserDefaults.standard.set(Double(currentWidth), forKey: MainSplitViewController.sidebarWidthKey)
         }
     }
 
@@ -303,10 +295,14 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
                 fgPos1Y: fg1.map { Double($0.position.y) },
                 fgScale1: fg1.map { Double($0.scale) },
                 fgRot1: fg1.map { Double($0.rotationDegrees) },
+                fgFlipH1: fg1?.isFlippedHorizontal,
+                fgFlipV1: fg1?.isFlippedVertical,
                 fgPos2X: fg2.map { Double($0.position.x) },
                 fgPos2Y: fg2.map { Double($0.position.y) },
                 fgScale2: fg2.map { Double($0.scale) },
-                fgRot2: fg2.map { Double($0.rotationDegrees) }
+                fgRot2: fg2.map { Double($0.rotationDegrees) },
+                fgFlipH2: fg2?.isFlippedHorizontal,
+                fgFlipV2: fg2?.isFlippedVertical
             )
 
             CombinationStateManager.saveState(state)
@@ -355,6 +351,12 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
             canvas.pendingFg1Rotation = CGFloat(r1)
             canvas.foregroundObject1?.rotationDegrees = CGFloat(r1)
         }
+        if let fh1 = state.fgFlipH1 {
+            canvas.foregroundObject1?.isFlippedHorizontal = fh1
+        }
+        if let fv1 = state.fgFlipV1 {
+            canvas.foregroundObject1?.isFlippedVertical = fv1
+        }
 
         if let x2 = state.fgPos2X, let y2 = state.fgPos2Y {
             canvas.pendingFg2Position = CGPoint(x: x2, y: y2)
@@ -367,6 +369,12 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         if let r2 = state.fgRot2 {
             canvas.pendingFg2Rotation = CGFloat(r2)
             canvas.foregroundObject2?.rotationDegrees = CGFloat(r2)
+        }
+        if let fh2 = state.fgFlipH2 {
+            canvas.foregroundObject2?.isFlippedHorizontal = fh2
+        }
+        if let fv2 = state.fgFlipV2 {
+            canvas.foregroundObject2?.isFlippedVertical = fv2
         }
 
         dualCanvasVC.setDualViewEnabled(true)

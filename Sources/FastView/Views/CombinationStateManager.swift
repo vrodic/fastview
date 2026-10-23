@@ -27,10 +27,14 @@ public struct SavedCombinationState: Codable {
     public var fgPos1Y: Double?
     public var fgScale1: Double?
     public var fgRot1: Double?
+    public var fgFlipH1: Bool?
+    public var fgFlipV1: Bool?
     public var fgPos2X: Double?
     public var fgPos2Y: Double?
     public var fgScale2: Double?
     public var fgRot2: Double?
+    public var fgFlipH2: Bool?
+    public var fgFlipV2: Bool?
 
     public init(
         id: String = UUID().uuidString,
@@ -59,10 +63,14 @@ public struct SavedCombinationState: Codable {
         fgPos1Y: Double? = nil,
         fgScale1: Double? = nil,
         fgRot1: Double? = nil,
+        fgFlipH1: Bool? = nil,
+        fgFlipV1: Bool? = nil,
         fgPos2X: Double? = nil,
         fgPos2Y: Double? = nil,
         fgScale2: Double? = nil,
-        fgRot2: Double? = nil
+        fgRot2: Double? = nil,
+        fgFlipH2: Bool? = nil,
+        fgFlipV2: Bool? = nil
     ) {
         self.id = id
         self.name = name
@@ -90,10 +98,14 @@ public struct SavedCombinationState: Codable {
         self.fgPos1Y = fgPos1Y
         self.fgScale1 = fgScale1
         self.fgRot1 = fgRot1
+        self.fgFlipH1 = fgFlipH1
+        self.fgFlipV1 = fgFlipV1
         self.fgPos2X = fgPos2X
         self.fgPos2Y = fgPos2Y
         self.fgScale2 = fgScale2
         self.fgRot2 = fgRot2
+        self.fgFlipH2 = fgFlipH2
+        self.fgFlipV2 = fgFlipV2
     }
 }
 

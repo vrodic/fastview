@@ -6,9 +6,11 @@ var globalAppDelegate: AppDelegate?
 public class AppDelegate: NSObject, NSApplicationDelegate {
     private var windowController: MainWindowController?
     private var restoreCombinationSubmenu: NSMenu?
+    private var recentDirsSubmenu: NSMenu?
     private static let lastPathKey = "FastViewLastOpenedPath"
     private static let lastSelectedItemKey = "FastViewLastSelectedItemPath"
     private static let lastSelectedItemIdKey = "FastViewLastSelectedItemId"
+    private static let recentDirsKey = "FastViewRecentCmdLineDirs"
 
     public static func main() {
         let app = NSApplication.shared
@@ -106,6 +108,15 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func saveLastOpenedPath(_ path: String) {
         UserDefaults.standard.set(path, forKey: AppDelegate.lastPathKey)
+
+        var recents = UserDefaults.standard.stringArray(forKey: AppDelegate.recentDirsKey) ?? []
+        recents.removeAll { $0 == path }
+        recents.insert(path, at: 0)
+        if recents.count > 20 {
+            recents = Array(recents.prefix(20))
+        }
+        UserDefaults.standard.set(recents, forKey: AppDelegate.recentDirsKey)
+        updateRecentDirsMenu()
     }
 
     private func setupMenuBar() {
@@ -130,6 +141,15 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         let fileMenu = NSMenu(title: "File")
         fileMenuItem.submenu = fileMenu
         fileMenu.addItem(withTitle: "Open…", action: #selector(openDocument(_:)), keyEquivalent: "o")
+
+        let recentItem = NSMenuItem(title: "Recent Directories & Archives", action: nil, keyEquivalent: "")
+        let recentSubmenu = NSMenu(title: "Recent Directories & Archives")
+        recentItem.submenu = recentSubmenu
+        self.recentDirsSubmenu = recentSubmenu
+        fileMenu.addItem(recentItem)
+        updateRecentDirsMenu()
+
+        fileMenu.addItem(NSMenuItem.separator())
         fileMenu.addItem(withTitle: "Pick Folder for 2nd View…", action: #selector(openSecondFolderAction(_:)), keyEquivalent: "")
         fileMenu.addItem(withTitle: "Show Favorites in 2nd View", action: #selector(toggleFavoritesPane2Action), keyEquivalent: "")
         fileMenu.addItem(withTitle: "Close 2nd View", action: #selector(closeSecondViewAction(_:)), keyEquivalent: "")
@@ -145,8 +165,6 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
 
         fileMenu.addItem(NSMenuItem.separator())
         fileMenu.addItem(withTitle: "Show Info", action: #selector(showInfoAction(_:)), keyEquivalent: "i")
-        fileMenu.addItem(withTitle: "Toggle Favorite", action: #selector(toggleFavoriteAction(_:)), keyEquivalent: "f")
-        fileMenu.addItem(withTitle: "Switch to All Mode", action: #selector(switchToAllModeAction(_:)), keyEquivalent: "l")
         fileMenu.addItem(NSMenuItem.separator())
         fileMenu.addItem(withTitle: "Close Window", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
 
@@ -435,6 +453,41 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func saveCombinationStateAction(_ sender: Any?) {
         windowController?.splitVC.saveCombinationStatePrompt()
+    }
+
+    public func updateRecentDirsMenu() {
+        guard let submenu = recentDirsSubmenu else { return }
+        submenu.removeAllItems()
+
+        let recents = UserDefaults.standard.stringArray(forKey: AppDelegate.recentDirsKey) ?? []
+        if recents.isEmpty {
+            let emptyItem = NSMenuItem(title: "No Recent Items", action: nil, keyEquivalent: "")
+            emptyItem.isEnabled = false
+            submenu.addItem(emptyItem)
+        } else {
+            for path in recents {
+                let name = (path as NSString).lastPathComponent
+                let item = NSMenuItem(title: name, action: #selector(openRecentDirAction(_:)), keyEquivalent: "")
+                item.representedObject = path
+                submenu.addItem(item)
+            }
+            submenu.addItem(NSMenuItem.separator())
+            let clearItem = NSMenuItem(title: "Clear Recent Menu", action: #selector(clearRecentDirsAction), keyEquivalent: "")
+            submenu.addItem(clearItem)
+        }
+    }
+
+    @objc private func openRecentDirAction(_ sender: NSMenuItem) {
+        guard let path = sender.representedObject as? String,
+              FileManager.default.fileExists(atPath: path) else { return }
+        saveLastOpenedPath(path)
+        let loc = NavigationManager.locationForPath(path)
+        windowController?.splitVC.loadLocation(loc)
+    }
+
+    @objc private func clearRecentDirsAction() {
+        UserDefaults.standard.removeObject(forKey: AppDelegate.recentDirsKey)
+        updateRecentDirsMenu()
     }
 
     public func updateRestoreCombinationMenu() {

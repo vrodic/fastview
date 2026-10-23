@@ -18,7 +18,7 @@ public class SidebarContainerViewController: NSSplitViewController {
             splitView.isVertical = newValue
             UserDefaults.standard.set(newValue, forKey: SidebarContainerViewController.previewSubSplitIsVerticalKey)
             if isDualView {
-                adjustSubSplitRatio()
+                makeEvenSplit()
             }
         }
     }
@@ -72,13 +72,10 @@ public class SidebarContainerViewController: NSSplitViewController {
         }
     }
 
-    private func adjustSubSplitRatio() {
+    public func makeEvenSplit() {
         guard isDualView else { return }
         let totalSpan = splitView.isVertical ? splitView.bounds.width : splitView.bounds.height
-        let savedPos = UserDefaults.standard.double(forKey: SidebarContainerViewController.previewSubSplitPositionKey)
-        if savedPos > 50 && savedPos < Double(totalSpan - 50) {
-            splitView.setPosition(CGFloat(savedPos), ofDividerAt: 0)
-        } else if totalSpan > 100 {
+        if totalSpan > 100 {
             splitView.setPosition(totalSpan / 2.0, ofDividerAt: 0)
         }
     }
