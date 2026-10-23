@@ -163,6 +163,10 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         fileMenu.addItem(restoreItem)
         updateRestoreCombinationMenu()
 
+        let switcherItem = NSMenuItem(title: "Saved Combination States Manager…", action: #selector(openCombinationSwitcherAction), keyEquivalent: "k")
+        switcherItem.keyEquivalentModifierMask = [.command, .option]
+        fileMenu.addItem(switcherItem)
+
         fileMenu.addItem(NSMenuItem.separator())
         fileMenu.addItem(withTitle: "Show Info", action: #selector(showInfoAction(_:)), keyEquivalent: "i")
         fileMenu.addItem(NSMenuItem.separator())
@@ -511,11 +515,19 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         updateRecentDirsMenu()
     }
 
+    @objc private func openCombinationSwitcherAction() {
+        CombinationStatesWindowController.shared.showWindowAndRefresh()
+    }
+
     public func updateRestoreCombinationMenu() {
         guard let restoreSubmenu = restoreCombinationSubmenu else { return }
         restoreSubmenu.removeAllItems()
 
         let savedStates = CombinationStateManager.getAllSavedStates()
+        let managerItem = NSMenuItem(title: "Open Combination Switcher…", action: #selector(openCombinationSwitcherAction), keyEquivalent: "")
+        restoreSubmenu.addItem(managerItem)
+        restoreSubmenu.addItem(NSMenuItem.separator())
+
         if savedStates.isEmpty {
             let emptyItem = NSMenuItem(title: "No Saved Combinations", action: nil, keyEquivalent: "")
             emptyItem.isEnabled = false

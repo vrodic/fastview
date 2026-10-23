@@ -151,7 +151,6 @@ public class CombiningCanvasView: NSView {
 
     override public func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
-        updateFGPositionsFromSliders()
     }
 
     public func updateFGPositionsFromSliders() {
