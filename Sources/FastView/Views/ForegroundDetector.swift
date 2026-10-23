@@ -2,6 +2,34 @@ import AppKit
 import Vision
 import CoreImage
 
+public struct ForegroundObject {
+    public var image: NSImage
+    public var normalizedBoundingBox: CGRect // In (0..1, 0..1) normalized coordinates
+    public var position: CGPoint = .zero     // Center coordinate on canvas
+    public var scale: CGFloat = 1.0
+    public var rotationDegrees: CGFloat = 0.0
+    public var isFlippedHorizontal: Bool = false
+    public var isFlippedVertical: Bool = false
+
+    public init(
+        image: NSImage,
+        normalizedBoundingBox: CGRect,
+        position: CGPoint = .zero,
+        scale: CGFloat = 1.0,
+        rotationDegrees: CGFloat = 0.0,
+        isFlippedHorizontal: Bool = false,
+        isFlippedVertical: Bool = false
+    ) {
+        self.image = image
+        self.normalizedBoundingBox = normalizedBoundingBox
+        self.position = position
+        self.scale = scale
+        self.rotationDegrees = rotationDegrees
+        self.isFlippedHorizontal = isFlippedHorizontal
+        self.isFlippedVertical = isFlippedVertical
+    }
+}
+
 public class ForegroundDetector {
     private static let ciContext = CIContext()
 
