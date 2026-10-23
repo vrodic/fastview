@@ -15,6 +15,7 @@ public class DualCanvasViewController: NSViewController, CombiningToolbarDelegat
     public private(set) var isDualView: Bool = false
     public var combiningMode: CanvasCombiningMode = .split {
         didSet {
+            guard combiningMode != oldValue else { return }
             combiningCanvasView.combiningMode = combiningMode
             toolbarView.setMode(combiningMode)
             updateCanvasLayout()
@@ -109,7 +110,9 @@ public class DualCanvasViewController: NSViewController, CombiningToolbarDelegat
                 combiningCanvasView.isHidden = false
             }
         } else {
-            combiningMode = .split
+            if combiningMode != .split {
+                combiningMode = .split
+            }
             splitContainer.isHidden = false
             combiningCanvasView.isHidden = true
             imageView2.isHidden = true
