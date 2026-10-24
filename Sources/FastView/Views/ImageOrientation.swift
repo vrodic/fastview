@@ -89,3 +89,27 @@ public extension NSImage {
         return newImage
     }
 }
+
+public extension NSPasteboard {
+    func copyImage(_ image: NSImage) {
+        clearContents()
+
+        guard let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+            writeObjects([image])
+            return
+        }
+
+        let bitmapRep = NSBitmapImageRep(cgImage: cgImage)
+        bitmapRep.size = image.size
+
+        if let pngData = bitmapRep.representation(using: .png, properties: [:]) {
+            declareTypes([.png, .tiff], owner: nil)
+            setData(pngData, forType: .png)
+            if let tiffData = bitmapRep.representation(using: .tiff, properties: [:]) {
+                setData(tiffData, forType: .tiff)
+            }
+        } else {
+            writeObjects([image])
+        }
+    }
+}

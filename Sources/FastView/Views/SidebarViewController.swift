@@ -414,8 +414,7 @@ class CustomTableView: NSTableView {
         ThumbnailGenerator.shared.loadFullImage(for: item) { image in
             guard let image = image else { return }
             DispatchQueue.main.async {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.writeObjects([image])
+                NSPasteboard.general.copyImage(image)
             }
         }
     }

@@ -249,8 +249,7 @@ public class MainImageView: NSView {
 
     @objc private func contextCopyImageAction(_ sender: NSMenuItem) {
         guard let img = sender.representedObject as? NSImage else { return }
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.writeObjects([img])
+        NSPasteboard.general.copyImage(img)
     }
 
     public func setActualSize() {

@@ -539,8 +539,7 @@ public class CombiningCanvasView: NSView {
         copyOrientation.isFlippedVertical = fg.isFlippedVertical
         let flippedImage = fg.image.transformed(with: copyOrientation)
 
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.writeObjects([flippedImage])
+        NSPasteboard.general.copyImage(flippedImage)
     }
 
     @objc private func contextFlipHorizontalAction(_ sender: NSMenuItem) {
