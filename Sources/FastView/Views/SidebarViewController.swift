@@ -377,6 +377,11 @@ class CustomTableView: NSTableView {
 
             menu.addItem(NSMenuItem.separator())
 
+            let copyImageItem = NSMenuItem(title: "Copy Image to Clipboard", action: #selector(contextCopyImageAction(_:)), keyEquivalent: "")
+            copyImageItem.target = self
+            copyImageItem.representedObject = item
+            menu.addItem(copyImageItem)
+
             let copyItem = NSMenuItem(title: "Copy File Path", action: #selector(contextCopyPathAction(_:)), keyEquivalent: "")
             copyItem.target = self
             copyItem.representedObject = item.path
@@ -401,6 +406,17 @@ class CustomTableView: NSTableView {
         } else if let container = vc.parent as? SidebarContainerViewController,
                   let mainSplitVC = container.parent as? MainSplitViewController {
             mainSplitVC.showInfo(for: item)
+        }
+    }
+
+    @objc private func contextCopyImageAction(_ sender: NSMenuItem) {
+        guard let item = sender.representedObject as? FileItem else { return }
+        ThumbnailGenerator.shared.loadFullImage(for: item) { image in
+            guard let image = image else { return }
+            DispatchQueue.main.async {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.writeObjects([image])
+            }
         }
     }
 

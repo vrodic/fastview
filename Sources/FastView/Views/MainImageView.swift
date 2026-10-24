@@ -237,6 +237,22 @@ public class MainImageView: NSView {
         updateLayout()
     }
 
+    override public func menu(for event: NSEvent) -> NSMenu? {
+        guard let img = currentImage else { return super.menu(for: event) }
+        let menu = NSMenu(title: "Main Image Menu")
+        let copyItem = NSMenuItem(title: "Copy Image to Clipboard", action: #selector(contextCopyImageAction(_:)), keyEquivalent: "")
+        copyItem.target = self
+        copyItem.representedObject = img
+        menu.addItem(copyItem)
+        return menu
+    }
+
+    @objc private func contextCopyImageAction(_ sender: NSMenuItem) {
+        guard let img = sender.representedObject as? NSImage else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.writeObjects([img])
+    }
+
     public func setActualSize() {
         zoomMode = .actualSize
         scrollView.magnification = 1.0
