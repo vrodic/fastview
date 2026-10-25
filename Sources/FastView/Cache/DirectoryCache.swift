@@ -29,6 +29,7 @@ public struct FolderStats {
     public let totalImages: Int
     public let isComplete: Bool
     public let viewedPercentage: Int
+    public let favoriteCount: Int
 
     public var badgeString: String {
         guard totalImages > 0 else { return "" }
@@ -38,6 +39,11 @@ public struct FolderStats {
         } else {
             return countText
         }
+    }
+
+    public var favoriteBadgeString: String {
+        guard favoriteCount > 0 else { return "" }
+        return "★ \(favoriteCount)"
     }
 }
 
@@ -69,12 +75,16 @@ public enum FolderStatsCalculator {
 
         let total = cached.imageKeys.count
         var percentage = 0
-        if total > 0 && SQLiteCache.shared.isTrackingViewedImagesEnabled {
-            let viewedCount = SQLiteCache.shared.getViewedCount(keys: cached.imageKeys)
-            percentage = Int(round(Double(viewedCount) / Double(total) * 100.0))
+        var favCount = 0
+        if total > 0 {
+            favCount = SQLiteCache.shared.getFavoriteCount(keys: cached.imageKeys)
+            if SQLiteCache.shared.isTrackingViewedImagesEnabled {
+                let viewedCount = SQLiteCache.shared.getViewedCount(keys: cached.imageKeys)
+                percentage = Int(round(Double(viewedCount) / Double(total) * 100.0))
+            }
         }
 
-        return FolderStats(totalImages: total, isComplete: cached.isComplete, viewedPercentage: percentage)
+        return FolderStats(totalImages: total, isComplete: cached.isComplete, viewedPercentage: percentage, favoriteCount: favCount)
     }
 
     public static func stats(for item: FileItem) -> FolderStats? {
@@ -150,11 +160,15 @@ public enum FolderStatsCalculator {
 
         let total = imageKeys.count
         var percentage = 0
-        if total > 0 && SQLiteCache.shared.isTrackingViewedImagesEnabled {
-            let viewedCount = SQLiteCache.shared.getViewedCount(keys: imageKeys)
-            percentage = Int(round(Double(viewedCount) / Double(total) * 100.0))
+        var favCount = 0
+        if total > 0 {
+            favCount = SQLiteCache.shared.getFavoriteCount(keys: imageKeys)
+            if SQLiteCache.shared.isTrackingViewedImagesEnabled {
+                let viewedCount = SQLiteCache.shared.getViewedCount(keys: imageKeys)
+                percentage = Int(round(Double(viewedCount) / Double(total) * 100.0))
+            }
         }
 
-        return FolderStats(totalImages: total, isComplete: isComplete, viewedPercentage: percentage)
+        return FolderStats(totalImages: total, isComplete: isComplete, viewedPercentage: percentage, favoriteCount: favCount)
     }
 }

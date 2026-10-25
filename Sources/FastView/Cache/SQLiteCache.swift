@@ -71,11 +71,13 @@ public class SQLiteCache {
         sqlite3_exec(db, "ALTER TABLE favorites ADD COLUMN timestamp REAL;", nil, nil, nil)
 
         loadViewedPaths()
+        loadFavoritePaths()
 
         print("[SQLiteCache] Database initialized at \(dbPath)")
     }
 
     private var viewedPathsSet = Set<String>()
+    private var favoritePathsSet = Set<String>()
 
     private func loadViewedPaths() {
         guard db != nil else { return }
@@ -90,6 +92,27 @@ public class SQLiteCache {
             }
         }
         sqlite3_finalize(statement)
+    }
+
+    private func loadFavoritePaths() {
+        guard db != nil else { return }
+        let query = "SELECT path FROM favorites;"
+        var statement: OpaquePointer?
+        if sqlite3_prepare_v2(db, query, -1, &statement, nil) == SQLITE_OK {
+            while sqlite3_step(statement) == SQLITE_ROW {
+                if let cString = sqlite3_column_text(statement, 0) {
+                    let path = String(cString: cString)
+                    favoritePathsSet.insert(path)
+                }
+            }
+        }
+        sqlite3_finalize(statement)
+    }
+
+    public func getFavoriteCount(keys: [String]) -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return keys.filter { favoritePathsSet.contains($0) || favoritePathsSet.contains(($0 as NSString).lastPathComponent) }.count
     }
 
     public var isTrackingViewedImagesEnabled: Bool {
@@ -157,6 +180,8 @@ public class SQLiteCache {
         let isFav = isFavoriteUnlocked(path: favKey) || isFavoriteUnlocked(path: item.path)
 
         if isFav {
+            favoritePathsSet.remove(favKey)
+            favoritePathsSet.remove(item.path)
             let deleteQuery = "DELETE FROM favorites WHERE path = ? OR path = ?;"
             var statement: OpaquePointer?
             let prepRes = sqlite3_prepare_v2(db, deleteQuery, -1, &statement, nil)
@@ -170,8 +195,11 @@ public class SQLiteCache {
                 print("[SQLiteCache] Failed to prepare delete query, error code: \(prepRes), msg: \(errmsg)")
             }
             sqlite3_finalize(statement)
+            FolderStatsCalculator.clearCache()
             return false
         } else {
+            favoritePathsSet.insert(favKey)
+            favoritePathsSet.insert(item.path)
             let codable = CodableFileItem(from: item)
             guard let jsonData = try? JSONEncoder().encode(codable),
                   let jsonString = String(data: jsonData, encoding: .utf8) else {
@@ -202,6 +230,7 @@ public class SQLiteCache {
                 print("[SQLiteCache] Still failed to prepare insert query after schema fix, error code: \(prepRes), msg: \(errmsg)")
             }
             sqlite3_finalize(statement)
+            FolderStatsCalculator.clearCache()
             return true
         }
     }
