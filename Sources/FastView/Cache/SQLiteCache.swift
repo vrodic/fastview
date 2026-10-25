@@ -39,6 +39,8 @@ public class SQLiteCache {
             return
         }
 
+        sqlite3_exec(db, "PRAGMA synchronous = OFF;", nil, nil, nil)
+
         let createDirectoryTable = """
         CREATE TABLE IF NOT EXISTS directory_entries (
             cache_key TEXT PRIMARY KEY,
@@ -70,39 +72,41 @@ public class SQLiteCache {
         sqlite3_exec(db, "ALTER TABLE favorites ADD COLUMN item_json TEXT;", nil, nil, nil)
         sqlite3_exec(db, "ALTER TABLE favorites ADD COLUMN timestamp REAL;", nil, nil, nil)
 
-        loadViewedPaths()
         loadFavoritePaths()
 
         print("[SQLiteCache] Database initialized at \(dbPath)")
     }
 
-    private var viewedPathsSet = Set<String>()
+    private var viewedCache = [String: Bool]()
     private var favoritePathsSet = Set<String>()
 
-    private func loadViewedPaths() {
-        guard db != nil else { return }
-        let query = "SELECT path FROM viewed_images;"
-        var statement: OpaquePointer?
-        if sqlite3_prepare_v2(db, query, -1, &statement, nil) == SQLITE_OK {
-            while sqlite3_step(statement) == SQLITE_ROW {
-                if let cString = sqlite3_column_text(statement, 0) {
-                    let path = String(cString: cString)
-                    viewedPathsSet.insert(path)
-                }
-            }
-        }
-        sqlite3_finalize(statement)
-    }
-
     private func loadFavoritePaths() {
+        favoritePathsSet.removeAll()
         guard db != nil else { return }
-        let query = "SELECT path FROM favorites;"
+        let query = "SELECT path, item_json FROM favorites;"
         var statement: OpaquePointer?
         if sqlite3_prepare_v2(db, query, -1, &statement, nil) == SQLITE_OK {
             while sqlite3_step(statement) == SQLITE_ROW {
-                if let cString = sqlite3_column_text(statement, 0) {
-                    let path = String(cString: cString)
+                if let cPath = sqlite3_column_text(statement, 0) {
+                    let path = String(cString: cPath)
                     favoritePathsSet.insert(path)
+                    favoritePathsSet.insert((path as NSString).lastPathComponent)
+                }
+                if let cJson = sqlite3_column_text(statement, 1) {
+                    let jsonStr = String(cString: cJson)
+                    if let data = jsonStr.data(using: .utf8),
+                       let decoded = try? JSONDecoder().decode(CodableFileItem.self, from: data) {
+                        let item = decoded.toFileItem()
+                        favoritePathsSet.insert(item.id)
+                        favoritePathsSet.insert(item.path)
+                        favoritePathsSet.insert(item.name)
+                        favoritePathsSet.insert((item.id as NSString).lastPathComponent)
+                        favoritePathsSet.insert((item.path as NSString).lastPathComponent)
+                        if let archivePath = item.archivePath {
+                            favoritePathsSet.insert("\(archivePath)#\(item.id)")
+                            favoritePathsSet.insert("\(archivePath)#\(item.path)")
+                        }
+                    }
                 }
             }
         }
@@ -112,7 +116,26 @@ public class SQLiteCache {
     public func getFavoriteCount(keys: [String]) -> Int {
         lock.lock()
         defer { lock.unlock() }
-        return keys.filter { favoritePathsSet.contains($0) || favoritePathsSet.contains(($0 as NSString).lastPathComponent) }.count
+
+        var count = 0
+        for key in keys {
+            var matched = favoritePathsSet.contains(key)
+            if !matched {
+                let lastComp = (key as NSString).lastPathComponent
+                matched = favoritePathsSet.contains(lastComp)
+            }
+            if !matched, key.contains("#") {
+                let parts = key.components(separatedBy: "#")
+                if parts.count >= 2 {
+                    let entryId = parts.suffix(from: 1).joined(separator: "#")
+                    matched = favoritePathsSet.contains(entryId) || favoritePathsSet.contains((entryId as NSString).lastPathComponent)
+                }
+            }
+            if matched {
+                count += 1
+            }
+        }
+        return count
     }
 
     public var isTrackingViewedImagesEnabled: Bool {
@@ -132,8 +155,8 @@ public class SQLiteCache {
         lock.lock()
         defer { lock.unlock() }
 
-        if viewedPathsSet.contains(key) { return }
-        viewedPathsSet.insert(key)
+        if viewedCache[key] == true { return }
+        viewedCache[key] = true
 
         guard db != nil else { return }
         let query = "INSERT OR REPLACE INTO viewed_images (path, timestamp) VALUES (?, ?);"
@@ -147,17 +170,49 @@ public class SQLiteCache {
     }
 
     public func isImageViewed(key: String) -> Bool {
-        guard isTrackingViewedImagesEnabled else { return false }
-        lock.lock()
-        defer { lock.unlock() }
-        return viewedPathsSet.contains(key)
+        return getViewedCount(keys: [key]) > 0
     }
 
     public func getViewedCount(keys: [String]) -> Int {
-        guard isTrackingViewedImagesEnabled else { return 0 }
+        guard isTrackingViewedImagesEnabled, !keys.isEmpty else { return 0 }
         lock.lock()
         defer { lock.unlock() }
-        return keys.filter { viewedPathsSet.contains($0) }.count
+
+        let missingKeys = keys.filter { viewedCache[$0] == nil }
+
+        if !missingKeys.isEmpty, db != nil {
+            let chunkSize = 500
+            for i in stride(from: 0, to: missingKeys.count, by: chunkSize) {
+                let chunk = Array(missingKeys[i..<min(i + chunkSize, missingKeys.count)])
+                let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ",")
+                let query = "SELECT path FROM viewed_images WHERE path IN (\(placeholders));"
+
+                var statement: OpaquePointer?
+                if sqlite3_prepare_v2(db, query, -1, &statement, nil) == SQLITE_OK {
+                    for (index, pathKey) in chunk.enumerated() {
+                        sqlite3_bind_text(statement, Int32(index + 1), pathKey, -1, SQLITE_TRANSIENT)
+                    }
+                    var foundPaths = Set<String>()
+                    while sqlite3_step(statement) == SQLITE_ROW {
+                        if let cString = sqlite3_column_text(statement, 0) {
+                            foundPaths.insert(String(cString: cString))
+                        }
+                    }
+                    sqlite3_finalize(statement)
+
+                    for pathKey in chunk {
+                        viewedCache[pathKey] = foundPaths.contains(pathKey)
+                    }
+                } else {
+                    sqlite3_finalize(statement)
+                    for pathKey in chunk {
+                        viewedCache[pathKey] = false
+                    }
+                }
+            }
+        }
+
+        return keys.filter { viewedCache[$0] == true }.count
     }
 
     public func isFavorite(path: String) -> Bool {
@@ -180,8 +235,6 @@ public class SQLiteCache {
         let isFav = isFavoriteUnlocked(path: favKey) || isFavoriteUnlocked(path: item.path)
 
         if isFav {
-            favoritePathsSet.remove(favKey)
-            favoritePathsSet.remove(item.path)
             let deleteQuery = "DELETE FROM favorites WHERE path = ? OR path = ?;"
             var statement: OpaquePointer?
             let prepRes = sqlite3_prepare_v2(db, deleteQuery, -1, &statement, nil)
@@ -195,11 +248,10 @@ public class SQLiteCache {
                 print("[SQLiteCache] Failed to prepare delete query, error code: \(prepRes), msg: \(errmsg)")
             }
             sqlite3_finalize(statement)
+            loadFavoritePaths()
             FolderStatsCalculator.clearCache()
             return false
         } else {
-            favoritePathsSet.insert(favKey)
-            favoritePathsSet.insert(item.path)
             let codable = CodableFileItem(from: item)
             guard let jsonData = try? JSONEncoder().encode(codable),
                   let jsonString = String(data: jsonData, encoding: .utf8) else {
@@ -230,6 +282,7 @@ public class SQLiteCache {
                 print("[SQLiteCache] Still failed to prepare insert query after schema fix, error code: \(prepRes), msg: \(errmsg)")
             }
             sqlite3_finalize(statement)
+            loadFavoritePaths()
             FolderStatsCalculator.clearCache()
             return true
         }
