@@ -34,15 +34,46 @@ public class CombiningCanvasView: NSView {
         }
     }
 
-    public var foregroundObject1: ForegroundObject? {
+    public var objects: [ForegroundObject] = [] {
         didSet {
-            updateCachedFgImage1()
             needsDisplay = true
         }
     }
+
+    public var foregroundObject1: ForegroundObject? {
+        get {
+            return objects.first
+        }
+        set {
+            if let newObj = newValue {
+                if objects.isEmpty {
+                    objects.append(newObj)
+                } else {
+                    objects[0] = newObj
+                }
+            } else if !objects.isEmpty {
+                objects.remove(at: 0)
+            }
+            needsDisplay = true
+        }
+    }
+
     public var foregroundObject2: ForegroundObject? {
-        didSet {
-            updateCachedFgImage2()
+        get {
+            return objects.count > 1 ? objects[1] : nil
+        }
+        set {
+            if let newObj = newValue {
+                if objects.count > 1 {
+                    objects[1] = newObj
+                } else if objects.count == 1 {
+                    objects.append(newObj)
+                } else {
+                    objects.append(newObj)
+                }
+            } else if objects.count > 1 {
+                objects.remove(at: 1)
+            }
             needsDisplay = true
         }
     }
@@ -61,7 +92,6 @@ public class CombiningCanvasView: NSView {
 
     public var showBackground1: Bool = true { didSet { needsDisplay = true } }
     public var showBackground2: Bool = true { didSet { needsDisplay = true } }
-    public var fg1OnTop: Bool = true { didSet { needsDisplay = true } }
 
     public var combiningMode: CanvasCombiningMode = .split { didSet { needsDisplay = true } }
 
@@ -91,37 +121,40 @@ public class CombiningCanvasView: NSView {
     // Cached Transformed Images
     private var cachedTransformedImage1: NSImage?
     private var cachedTransformedImage2: NSImage?
-    private var cachedFgImage1: NSImage?
-    private var cachedFgImage2: NSImage?
 
     private func updateCachedTransformedImage1() {
         cachedTransformedImage1 = image1?.transformed(with: orientation1)
-        updateCachedFgImage1()
     }
 
     private func updateCachedTransformedImage2() {
         cachedTransformedImage2 = image2?.transformed(with: orientation2)
-        updateCachedFgImage2()
-    }
-
-    private func updateCachedFgImage1() {
-        if let fg = foregroundObject1 {
-            cachedFgImage1 = fg.image.transformed(with: orientation1)
-        } else {
-            cachedFgImage1 = nil
-        }
-    }
-
-    private func updateCachedFgImage2() {
-        if let fg = foregroundObject2 {
-            cachedFgImage2 = fg.image.transformed(with: orientation2)
-        } else {
-            cachedFgImage2 = nil
-        }
     }
 
     // Interactivity
-    public private(set) var selectedObjectPane: Int? = nil // 1 or 2
+    public var selectedObjectIndex: Int? = nil {
+        didSet {
+            needsDisplay = true
+            if let idx = selectedObjectIndex, idx >= 0 && idx < objects.count {
+                let pane = idx + 1
+                onSelectedObjectChanged?(pane, objects[idx])
+            }
+        }
+    }
+
+    public var selectedObjectPane: Int? {
+        get {
+            guard let idx = selectedObjectIndex else { return nil }
+            return idx + 1
+        }
+        set {
+            if let val = newValue, val >= 1 && val <= objects.count {
+                selectedObjectIndex = val - 1
+            } else {
+                selectedObjectIndex = nil
+            }
+        }
+    }
+
     private var isDraggingObject: Bool = false
     private var isResizingObject: Bool = false
     private var isRotatingObject: Bool = false
@@ -150,8 +183,28 @@ public class CombiningCanvasView: NSView {
 
     override public var isFlipped: Bool { return false }
 
-    override public func setFrameSize(_ newSize: NSSize) {
-        super.setFrameSize(newSize)
+    public func addObject(_ object: ForegroundObject) {
+        var obj = object
+        if obj.position == .zero {
+            let midX = bounds.width > 0 ? bounds.width / 2.0 : 300
+            let midY = bounds.height > 0 ? bounds.height / 2.0 : 300
+            let offset = CGFloat(objects.count * 20)
+            obj.position = CGPoint(x: midX + offset, y: midY + offset)
+        }
+        objects.append(obj)
+        selectedObjectIndex = objects.count - 1
+        needsDisplay = true
+    }
+
+    public func removeSelectedObject() {
+        guard let idx = selectedObjectIndex, idx >= 0 && idx < objects.count else { return }
+        objects.remove(at: idx)
+        if objects.isEmpty {
+            selectedObjectIndex = nil
+        } else {
+            selectedObjectIndex = min(idx, objects.count - 1)
+        }
+        needsDisplay = true
     }
 
     public func updateFGPositionsFromSliders() {
@@ -159,19 +212,19 @@ public class CombiningCanvasView: NSView {
         let midX = bounds.width / 2.0
         let midY = bounds.height / 2.0
 
-        if foregroundObject1 != nil {
+        if objects.count > 0 {
             let defaultX = bounds.width * 0.25
             let moveAmount = (midX - defaultX) * (fgOffset1Percent / 100.0)
-            if !isDraggingObject || selectedObjectPane != 1 {
-                foregroundObject1?.position = CGPoint(x: defaultX + moveAmount, y: midY)
+            if !isDraggingObject || selectedObjectIndex != 0 {
+                objects[0].position = CGPoint(x: defaultX + moveAmount, y: midY)
             }
         }
 
-        if foregroundObject2 != nil {
+        if objects.count > 1 {
             let defaultX = bounds.width * 0.75
             let moveAmount = (midX - defaultX) * (fgOffset2Percent / 100.0)
-            if !isDraggingObject || selectedObjectPane != 2 {
-                foregroundObject2?.position = CGPoint(x: defaultX - moveAmount, y: midY)
+            if !isDraggingObject || selectedObjectIndex != 1 {
+                objects[1].position = CGPoint(x: defaultX - moveAmount, y: midY)
             }
         }
     }
@@ -283,24 +336,18 @@ public class CombiningCanvasView: NSView {
         }
         context.restoreGState()
 
-        if fg1OnTop {
-            if let fg2 = foregroundObject2 {
-                drawForegroundObject(fg2, paneIndex: 2, in: rect, context: context)
-            }
-            if let fg1 = foregroundObject1 {
-                drawForegroundObject(fg1, paneIndex: 1, in: rect, context: context)
-            }
-        } else {
-            if let fg1 = foregroundObject1 {
-                drawForegroundObject(fg1, paneIndex: 1, in: rect, context: context)
-            }
-            if let fg2 = foregroundObject2 {
-                drawForegroundObject(fg2, paneIndex: 2, in: rect, context: context)
-            }
+        // 1. Draw all object images in array order (bottom to top)
+        for obj in objects {
+            drawForegroundObjectBody(obj, in: rect, context: context)
+        }
+
+        // 2. Overlay pass: Draw selection outline & handles on top of ALL objects for selected object
+        if let selIdx = selectedObjectIndex, selIdx >= 0 && selIdx < objects.count {
+            drawSelectedObjectHandles(objects[selIdx], in: rect, context: context)
         }
     }
 
-    private func drawForegroundObject(_ obj: ForegroundObject, paneIndex: Int, in rect: CGRect, context: CGContext) {
+    private func drawForegroundObjectBody(_ obj: ForegroundObject, in rect: CGRect, context: CGContext) {
         context.saveGState()
 
         let baseImg = obj.image
@@ -326,46 +373,81 @@ public class CombiningCanvasView: NSView {
 
         baseImg.draw(in: drawRect)
 
-        if selectedObjectPane == paneIndex {
-            context.setStrokeColor(NSColor.controlAccentColor.cgColor)
-            context.setLineWidth(2.0)
-            context.stroke(drawRect)
+        context.restoreGState()
+    }
 
-            let handleSize: CGFloat = 10.0
-            let corners = [
-                CGPoint(x: drawRect.minX, y: drawRect.minY),
-                CGPoint(x: drawRect.maxX, y: drawRect.minY),
-                CGPoint(x: drawRect.minX, y: drawRect.maxY),
-                CGPoint(x: drawRect.maxX, y: drawRect.maxY)
-            ]
-            context.setFillColor(NSColor.controlAccentColor.cgColor)
-            for c in corners {
-                let hRect = CGRect(x: c.x - handleSize/2, y: c.y - handleSize/2, width: handleSize, height: handleSize)
-                context.fill(hRect)
-            }
+    private func drawSelectedObjectHandles(_ obj: ForegroundObject, in rect: CGRect, context: CGContext) {
+        context.saveGState()
 
-            // Top rotate handle
-            let topRotateStemY = drawRect.maxY + 20.0
-            context.setStrokeColor(NSColor.controlAccentColor.cgColor)
-            context.setLineWidth(1.5)
-            context.move(to: CGPoint(x: 0, y: drawRect.maxY))
-            context.addLine(to: CGPoint(x: 0, y: topRotateStemY))
-            context.strokePath()
+        let baseImg = obj.image
+        let effectiveScale = defaultFitScale(for: obj)
+        let targetWidth = baseImg.size.width * effectiveScale
+        let targetHeight = baseImg.size.height * effectiveScale
 
-            let topRotateCircleRect = CGRect(x: -6, y: topRotateStemY - 6, width: 12, height: 12)
-            context.setFillColor(NSColor.systemYellow.cgColor)
-            context.fillEllipse(in: topRotateCircleRect)
+        context.translateBy(x: obj.position.x, y: obj.position.y)
+        context.rotate(by: obj.rotationDegrees * .pi / 180.0)
 
-            // Bottom rotate handle
-            let bottomRotateStemY = drawRect.minY - 20.0
-            context.move(to: CGPoint(x: 0, y: drawRect.minY))
-            context.addLine(to: CGPoint(x: 0, y: bottomRotateStemY))
-            context.strokePath()
-
-            let bottomRotateCircleRect = CGRect(x: -6, y: bottomRotateStemY - 6, width: 12, height: 12)
-            context.setFillColor(NSColor.systemYellow.cgColor)
-            context.fillEllipse(in: bottomRotateCircleRect)
+        let scaleX: CGFloat = obj.isFlippedHorizontal ? -1.0 : 1.0
+        let scaleY: CGFloat = obj.isFlippedVertical ? -1.0 : 1.0
+        if scaleX != 1.0 || scaleY != 1.0 {
+            context.scaleBy(x: scaleX, y: scaleY)
         }
+
+        let drawRect = CGRect(
+            x: -targetWidth / 2.0,
+            y: -targetHeight / 2.0,
+            width: targetWidth,
+            height: targetHeight
+        )
+
+        // Bounding Box
+        context.setStrokeColor(NSColor.controlAccentColor.cgColor)
+        context.setLineWidth(2.0)
+        context.stroke(drawRect)
+
+        let handleSize: CGFloat = 10.0
+
+        // Corner handles (4)
+        let cornerHandles = [
+            CGPoint(x: drawRect.minX, y: drawRect.minY),
+            CGPoint(x: drawRect.maxX, y: drawRect.minY),
+            CGPoint(x: drawRect.minX, y: drawRect.maxY),
+            CGPoint(x: drawRect.maxX, y: drawRect.maxY)
+        ]
+
+        // Vertical side midpoint handles (2) - half-length of vertical sides
+        let sideHandles = [
+            CGPoint(x: drawRect.minX, y: 0),
+            CGPoint(x: drawRect.maxX, y: 0)
+        ]
+
+        context.setFillColor(NSColor.controlAccentColor.cgColor)
+        for h in (cornerHandles + sideHandles) {
+            let hRect = CGRect(x: h.x - handleSize/2, y: h.y - handleSize/2, width: handleSize, height: handleSize)
+            context.fill(hRect)
+        }
+
+        // Top rotate handle
+        let topRotateStemY = drawRect.maxY + 20.0
+        context.setStrokeColor(NSColor.controlAccentColor.cgColor)
+        context.setLineWidth(1.5)
+        context.move(to: CGPoint(x: 0, y: drawRect.maxY))
+        context.addLine(to: CGPoint(x: 0, y: topRotateStemY))
+        context.strokePath()
+
+        let topRotateCircleRect = CGRect(x: -6, y: topRotateStemY - 6, width: 12, height: 12)
+        context.setFillColor(NSColor.systemYellow.cgColor)
+        context.fillEllipse(in: topRotateCircleRect)
+
+        // Bottom rotate handle
+        let bottomRotateStemY = drawRect.minY - 20.0
+        context.move(to: CGPoint(x: 0, y: drawRect.minY))
+        context.addLine(to: CGPoint(x: 0, y: bottomRotateStemY))
+        context.strokePath()
+
+        let bottomRotateCircleRect = CGRect(x: -6, y: bottomRotateStemY - 6, width: 12, height: 12)
+        context.setFillColor(NSColor.systemYellow.cgColor)
+        context.fillEllipse(in: bottomRotateCircleRect)
 
         context.restoreGState()
     }
@@ -438,23 +520,13 @@ public class CombiningCanvasView: NSView {
         }
 
         let pt = convert(event.locationInWindow, from: nil)
-        var clickedPane: Int? = nil
+        var clickedIdx: Int? = nil
 
-        var objectsInZOrder: [(ForegroundObject, Int)] = []
-        if fg1OnTop {
-            if let fg1 = foregroundObject1 { objectsInZOrder.append((fg1, 1)) }
-            if let fg2 = foregroundObject2 { objectsInZOrder.append((fg2, 2)) }
-        } else {
-            if let fg2 = foregroundObject2 { objectsInZOrder.append((fg2, 2)) }
-            if let fg1 = foregroundObject1 { objectsInZOrder.append((fg1, 1)) }
-        }
-
-        for (fg, pane) in objectsInZOrder {
-            let orientation = (pane == 1) ? orientation1 : orientation2
-            let orientedImg = fg.image.transformed(with: orientation)
+        for i in stride(from: objects.count - 1, through: 0, by: -1) {
+            let fg = objects[i]
             let effectiveScale = defaultFitScale(for: fg)
-            let w = orientedImg.size.width * effectiveScale
-            let h = orientedImg.size.height * effectiveScale
+            let w = fg.image.size.width * effectiveScale
+            let h = fg.image.size.height * effectiveScale
 
             let dx = pt.x - fg.position.x
             let dy = pt.y - fg.position.y
@@ -469,54 +541,71 @@ public class CombiningCanvasView: NSView {
             let normPt = CGPoint(x: xInRect / w, y: yInRect / h)
 
             if normPt.x >= 0 && normPt.x <= 1 && normPt.y >= 0 && normPt.y <= 1 {
-                if isPixelOpaque(in: orientedImg, atNormalizedPoint: normPt) {
-                    clickedPane = pane
-                    selectedObjectPane = pane
+                if isPixelOpaque(in: fg.image, atNormalizedPoint: normPt) {
+                    clickedIdx = i
+                    selectedObjectIndex = i
                     needsDisplay = true
                     break
                 }
             }
         }
 
-        guard let pane = clickedPane else { return super.menu(for: event) }
+        guard let idx = clickedIdx else { return super.menu(for: event) }
 
         let menu = NSMenu(title: "Foreground Object Menu")
 
         let copyItem = NSMenuItem(title: "Copy Object to Clipboard", action: #selector(contextCopyObjectAction(_:)), keyEquivalent: "")
         copyItem.target = self
-        copyItem.representedObject = pane
+        copyItem.representedObject = idx
         menu.addItem(copyItem)
 
         menu.addItem(NSMenuItem.separator())
 
         let flipHItem = NSMenuItem(title: "Flip Object Horizontal", action: #selector(contextFlipHorizontalAction(_:)), keyEquivalent: "")
         flipHItem.target = self
-        flipHItem.representedObject = pane
+        flipHItem.representedObject = idx
         menu.addItem(flipHItem)
 
         let flipVItem = NSMenuItem(title: "Flip Object Vertical", action: #selector(contextFlipVerticalAction(_:)), keyEquivalent: "")
         flipVItem.target = self
-        flipVItem.representedObject = pane
+        flipVItem.representedObject = idx
         menu.addItem(flipVItem)
 
         menu.addItem(NSMenuItem.separator())
 
-        let zOrderTitle = (pane == 1 && fg1OnTop) || (pane == 2 && !fg1OnTop) ? "Send Object to Back" : "Bring Object to Front"
-        let zOrderItem = NSMenuItem(title: zOrderTitle, action: #selector(contextToggleZOrderAction), keyEquivalent: "")
-        zOrderItem.target = self
-        menu.addItem(zOrderItem)
+        // Z-Ordering options
+        let frontItem = NSMenuItem(title: "Bring to Front", action: #selector(contextBringToFrontAction(_:)), keyEquivalent: "")
+        frontItem.target = self
+        frontItem.representedObject = idx
+        menu.addItem(frontItem)
+
+        let backItem = NSMenuItem(title: "Send to Back", action: #selector(contextSendToBackAction(_:)), keyEquivalent: "")
+        backItem.target = self
+        backItem.representedObject = idx
+        menu.addItem(backItem)
+
+        let upItem = NSMenuItem(title: "Move Object Up", action: #selector(contextMoveUpAction(_:)), keyEquivalent: "")
+        upItem.target = self
+        upItem.representedObject = idx
+        upItem.isEnabled = (idx < objects.count - 1)
+        menu.addItem(upItem)
+
+        let downItem = NSMenuItem(title: "Move Object Down", action: #selector(contextMoveDownAction(_:)), keyEquivalent: "")
+        downItem.target = self
+        downItem.representedObject = idx
+        downItem.isEnabled = (idx > 0)
+        menu.addItem(downItem)
 
         menu.addItem(NSMenuItem.separator())
 
         let tuningItem = NSMenuItem(title: "Vision Detector Tuning", action: nil, keyEquivalent: "")
         let tuningMenu = NSMenu(title: "Vision Detector Tuning")
-
-        let currentMode = (pane == 1) ? foregroundObject1?.detectionMode : foregroundObject2?.detectionMode
+        let currentMode = objects[idx].detectionMode
 
         for mode in VisionDetectionMode.allCases {
             let modeItem = NSMenuItem(title: mode.rawValue, action: #selector(contextSelectDetectionModeAction(_:)), keyEquivalent: "")
             modeItem.target = self
-            modeItem.representedObject = ["pane": pane, "mode": mode] as [String : Any]
+            modeItem.representedObject = ["index": idx, "mode": mode] as [String : Any]
             if currentMode == mode {
                 modeItem.state = .on
             }
@@ -526,14 +615,20 @@ public class CombiningCanvasView: NSView {
         tuningItem.submenu = tuningMenu
         menu.addItem(tuningItem)
 
+        menu.addItem(NSMenuItem.separator())
+
+        let removeItem = NSMenuItem(title: "Remove Object from Canvas", action: #selector(contextRemoveObjectAction(_:)), keyEquivalent: "")
+        removeItem.target = self
+        removeItem.representedObject = idx
+        menu.addItem(removeItem)
+
         return menu
     }
 
     @objc private func contextCopyObjectAction(_ sender: NSMenuItem) {
-        guard let pane = sender.representedObject as? Int else { return }
-        guard let fg = (pane == 1) ? foregroundObject1 : foregroundObject2 else { return }
+        guard let idx = sender.representedObject as? Int, idx < objects.count else { return }
+        let fg = objects[idx]
 
-        // Copy image with active horizontal/vertical flip applied
         var copyOrientation = ImageOrientation()
         copyOrientation.isFlippedHorizontal = fg.isFlippedHorizontal
         copyOrientation.isFlippedVertical = fg.isFlippedVertical
@@ -543,35 +638,55 @@ public class CombiningCanvasView: NSView {
     }
 
     @objc private func contextFlipHorizontalAction(_ sender: NSMenuItem) {
-        guard let pane = sender.representedObject as? Int else { return }
-        if pane == 1 {
-            foregroundObject1?.isFlippedHorizontal.toggle()
-        } else {
-            foregroundObject2?.isFlippedHorizontal.toggle()
-        }
+        guard let idx = sender.representedObject as? Int, idx < objects.count else { return }
+        objects[idx].isFlippedHorizontal.toggle()
         needsDisplay = true
     }
 
     @objc private func contextFlipVerticalAction(_ sender: NSMenuItem) {
-        guard let pane = sender.representedObject as? Int else { return }
-        if pane == 1 {
-            foregroundObject1?.isFlippedVertical.toggle()
-        } else {
-            foregroundObject2?.isFlippedVertical.toggle()
-        }
+        guard let idx = sender.representedObject as? Int, idx < objects.count else { return }
+        objects[idx].isFlippedVertical.toggle()
         needsDisplay = true
     }
 
-    @objc private func contextToggleZOrderAction() {
-        fg1OnTop.toggle()
+    @objc private func contextBringToFrontAction(_ sender: NSMenuItem) {
+        guard let idx = sender.representedObject as? Int, idx < objects.count else { return }
+        let obj = objects.remove(at: idx)
+        objects.append(obj)
+        selectedObjectIndex = objects.count - 1
+    }
+
+    @objc private func contextSendToBackAction(_ sender: NSMenuItem) {
+        guard let idx = sender.representedObject as? Int, idx < objects.count else { return }
+        let obj = objects.remove(at: idx)
+        objects.insert(obj, at: 0)
+        selectedObjectIndex = 0
+    }
+
+    @objc private func contextMoveUpAction(_ sender: NSMenuItem) {
+        guard let idx = sender.representedObject as? Int, idx < objects.count - 1 else { return }
+        objects.swapAt(idx, idx + 1)
+        selectedObjectIndex = idx + 1
+    }
+
+    @objc private func contextMoveDownAction(_ sender: NSMenuItem) {
+        guard let idx = sender.representedObject as? Int, idx > 0 else { return }
+        objects.swapAt(idx, idx - 1)
+        selectedObjectIndex = idx - 1
+    }
+
+    @objc private func contextRemoveObjectAction(_ sender: NSMenuItem) {
+        guard let idx = sender.representedObject as? Int, idx < objects.count else { return }
+        selectedObjectIndex = idx
+        removeSelectedObject()
     }
 
     @objc private func contextSelectDetectionModeAction(_ sender: NSMenuItem) {
         guard let dict = sender.representedObject as? [String: Any],
-              let pane = dict["pane"] as? Int,
+              let idx = dict["index"] as? Int,
               let mode = dict["mode"] as? VisionDetectionMode else { return }
 
-        onRetuneDetector?(pane, mode)
+        onRetuneDetector?(idx + 1, mode)
     }
 
     // MARK: - Interactive Canvas Mouse Events
@@ -584,22 +699,12 @@ public class CombiningCanvasView: NSView {
         let pt = convert(event.locationInWindow, from: nil)
         dragStartPoint = pt
 
-        var objectsInZOrder: [(ForegroundObject, Int)] = []
-        if fg1OnTop {
-            if let fg1 = foregroundObject1 { objectsInZOrder.append((fg1, 1)) }
-            if let fg2 = foregroundObject2 { objectsInZOrder.append((fg2, 2)) }
-        } else {
-            if let fg2 = foregroundObject2 { objectsInZOrder.append((fg2, 2)) }
-            if let fg1 = foregroundObject1 { objectsInZOrder.append((fg1, 1)) }
-        }
-
-        // Phase 1: Check handles across ALL objects first
-        for (fg, pane) in objectsInZOrder {
-            let orientation = (pane == 1) ? orientation1 : orientation2
-            let orientedImg = fg.image.transformed(with: orientation)
+        // Phase 1: Check handles across ALL objects (reverse Z-order)
+        for i in stride(from: objects.count - 1, through: 0, by: -1) {
+            let fg = objects[i]
             let effectiveScale = defaultFitScale(for: fg)
-            let w = orientedImg.size.width * effectiveScale
-            let h = orientedImg.size.height * effectiveScale
+            let w = fg.image.size.width * effectiveScale
+            let h = fg.image.size.height * effectiveScale
 
             let dx = pt.x - fg.position.x
             let dy = pt.y - fg.position.y
@@ -611,7 +716,7 @@ public class CombiningCanvasView: NSView {
 
             let topRotHandleLocal = CGPoint(x: 0, y: h/2 + 20)
             if hypot(localPt.x - topRotHandleLocal.x, localPt.y - topRotHandleLocal.y) <= 12 {
-                selectedObjectPane = pane
+                selectedObjectIndex = i
                 isRotatingObject = true
                 isBottomRotateHandle = false
                 initialObjRotation = fg.rotationDegrees
@@ -621,7 +726,7 @@ public class CombiningCanvasView: NSView {
 
             let bottomRotHandleLocal = CGPoint(x: 0, y: -h/2 - 20)
             if hypot(localPt.x - bottomRotHandleLocal.x, localPt.y - bottomRotHandleLocal.y) <= 12 {
-                selectedObjectPane = pane
+                selectedObjectIndex = i
                 isRotatingObject = true
                 isBottomRotateHandle = true
                 initialObjRotation = fg.rotationDegrees
@@ -629,15 +734,18 @@ public class CombiningCanvasView: NSView {
                 return
             }
 
-            let localCorners = [
+            // 4 Corner handles + 2 Vertical side midpoint handles
+            let localHandles = [
                 CGPoint(x: -w/2, y: -h/2),
                 CGPoint(x: w/2, y: -h/2),
                 CGPoint(x: -w/2, y: h/2),
-                CGPoint(x: w/2, y: h/2)
+                CGPoint(x: w/2, y: h/2),
+                CGPoint(x: -w/2, y: 0),
+                CGPoint(x: w/2, y: 0)
             ]
-            for c in localCorners {
-                if hypot(localPt.x - c.x, localPt.y - c.y) <= 12 {
-                    selectedObjectPane = pane
+            for hPt in localHandles {
+                if hypot(localPt.x - hPt.x, localPt.y - hPt.y) <= 12 {
+                    selectedObjectIndex = i
                     isResizingObject = true
                     initialObjScale = fg.scale
                     initialDistToCenter = max(1.0, hypot(pt.x - fg.position.x, pt.y - fg.position.y))
@@ -647,13 +755,12 @@ public class CombiningCanvasView: NSView {
             }
         }
 
-        // Phase 2: Check object body dragging in Z-order with pixel opacity priority
-        for (fg, pane) in objectsInZOrder {
-            let orientation = (pane == 1) ? orientation1 : orientation2
-            let orientedImg = fg.image.transformed(with: orientation)
+        // Phase 2: Check object body dragging in reverse Z-order with pixel opacity priority
+        for i in stride(from: objects.count - 1, through: 0, by: -1) {
+            let fg = objects[i]
             let effectiveScale = defaultFitScale(for: fg)
-            let w = orientedImg.size.width * effectiveScale
-            let h = orientedImg.size.height * effectiveScale
+            let w = fg.image.size.width * effectiveScale
+            let h = fg.image.size.height * effectiveScale
 
             let dx = pt.x - fg.position.x
             let dy = pt.y - fg.position.y
@@ -668,18 +775,17 @@ public class CombiningCanvasView: NSView {
             let normPt = CGPoint(x: xInRect / w, y: yInRect / h)
 
             if normPt.x >= 0 && normPt.x <= 1 && normPt.y >= 0 && normPt.y <= 1 {
-                if isPixelOpaque(in: orientedImg, atNormalizedPoint: normPt) {
-                    selectedObjectPane = pane
+                if isPixelOpaque(in: fg.image, atNormalizedPoint: normPt) {
+                    selectedObjectIndex = i
                     isDraggingObject = true
                     initialObjPosition = fg.position
                     needsDisplay = true
-                    notifySelectedObjectChanged()
                     return
                 }
             }
         }
 
-        selectedObjectPane = nil
+        selectedObjectIndex = nil
         isDraggingObject = false
         isResizingObject = false
         isRotatingObject = false
@@ -687,7 +793,7 @@ public class CombiningCanvasView: NSView {
     }
 
     override public func mouseDragged(with event: NSEvent) {
-        guard combiningMode == .foregroundCombine, let pane = selectedObjectPane else {
+        guard combiningMode == .foregroundCombine, let idx = selectedObjectIndex, idx < objects.count else {
             super.mouseDragged(with: event)
             return
         }
@@ -695,48 +801,22 @@ public class CombiningCanvasView: NSView {
         let currentPt = convert(event.locationInWindow, from: nil)
 
         if isRotatingObject {
-            let fg = (pane == 1) ? foregroundObject1 : foregroundObject2
-            guard let fgObj = fg else { return }
+            let fgObj = objects[idx]
             let rawAngle = atan2(currentPt.y - fgObj.position.y, currentPt.x - fgObj.position.x) * 180.0 / .pi
             let angle = isBottomRotateHandle ? (rawAngle + 90.0) : (rawAngle - 90.0)
-            if pane == 1 {
-                foregroundObject1?.rotationDegrees = angle
-            } else {
-                foregroundObject2?.rotationDegrees = angle
-            }
-            notifySelectedObjectChanged()
+            objects[idx].rotationDegrees = angle
         } else if isResizingObject {
-            let fg = (pane == 1) ? foregroundObject1 : foregroundObject2
-            guard let fgObj = fg else { return }
+            let fgObj = objects[idx]
             let currentDist = hypot(currentPt.x - fgObj.position.x, currentPt.y - fgObj.position.y)
             let factor = max(0.1, currentDist / initialDistToCenter)
-            if pane == 1 {
-                foregroundObject1?.scale = initialObjScale * factor
-            } else {
-                foregroundObject2?.scale = initialObjScale * factor
-            }
-            notifySelectedObjectChanged()
+            objects[idx].scale = initialObjScale * factor
         } else if isDraggingObject {
             let deltaX = currentPt.x - dragStartPoint.x
             let deltaY = currentPt.y - dragStartPoint.y
-            if pane == 1 {
-                foregroundObject1?.position = CGPoint(x: initialObjPosition.x + deltaX, y: initialObjPosition.y + deltaY)
-            } else if pane == 2 {
-                foregroundObject2?.position = CGPoint(x: initialObjPosition.x + deltaX, y: initialObjPosition.y + deltaY)
-            }
-            notifySelectedObjectChanged()
+            objects[idx].position = CGPoint(x: initialObjPosition.x + deltaX, y: initialObjPosition.y + deltaY)
         }
 
         needsDisplay = true
-    }
-
-    private func notifySelectedObjectChanged() {
-        guard let pane = selectedObjectPane else { return }
-        if pane == 1, let fg1 = foregroundObject1 {
-            onSelectedObjectChanged?(1, fg1)
-        } else if pane == 2, let fg2 = foregroundObject2 {
-            onSelectedObjectChanged?(2, fg2)
-        }
     }
 
     override public func mouseUp(with event: NSEvent) {

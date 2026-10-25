@@ -22,6 +22,19 @@ public class MainImageView: NSView {
         }
     }
 
+    public var isFreehandSelectionMode: Bool = false {
+        didSet {
+            if isFreehandSelectionMode {
+                window?.makeFirstResponder(self)
+            }
+            needsDisplay = true
+        }
+    }
+
+    private var selectionPath: [CGPoint] = []
+    private var isDrawingSelection: Bool = false
+    public var onRegionSelectedForDetection: ((NSImage) -> Void)?
+
     private let imageView = NSImageView()
     private let scrollView = NSScrollView()
 
@@ -240,16 +253,152 @@ public class MainImageView: NSView {
     override public func menu(for event: NSEvent) -> NSMenu? {
         guard let img = currentImage else { return super.menu(for: event) }
         let menu = NSMenu(title: "Main Image Menu")
+
+        let drawSelectionItem = NSMenuItem(title: "Draw Selection for Foreground Detection", action: #selector(contextDrawSelectionAction(_:)), keyEquivalent: "")
+        drawSelectionItem.target = self
+        menu.addItem(drawSelectionItem)
+
+        menu.addItem(NSMenuItem.separator())
+
         let copyItem = NSMenuItem(title: "Copy Image to Clipboard", action: #selector(contextCopyImageAction(_:)), keyEquivalent: "")
         copyItem.target = self
         copyItem.representedObject = img
         menu.addItem(copyItem)
+
         return menu
+    }
+
+    @objc private func contextDrawSelectionAction(_ sender: NSMenuItem) {
+        isFreehandSelectionMode = true
+        selectionPath = []
     }
 
     @objc private func contextCopyImageAction(_ sender: NSMenuItem) {
         guard let img = sender.representedObject as? NSImage else { return }
         NSPasteboard.general.copyImage(img)
+    }
+
+    override public func mouseDown(with event: NSEvent) {
+        if isFreehandSelectionMode {
+            let pt = convert(event.locationInWindow, from: nil)
+            selectionPath = [pt]
+            isDrawingSelection = true
+            needsDisplay = true
+            return
+        }
+        super.mouseDown(with: event)
+    }
+
+    override public func mouseDragged(with event: NSEvent) {
+        if isFreehandSelectionMode && isDrawingSelection {
+            let pt = convert(event.locationInWindow, from: nil)
+            selectionPath.append(pt)
+            needsDisplay = true
+            return
+        }
+        super.mouseDragged(with: event)
+    }
+
+    override public func mouseUp(with event: NSEvent) {
+        if isFreehandSelectionMode && isDrawingSelection {
+            isDrawingSelection = false
+            isFreehandSelectionMode = false
+            processFreehandSelection()
+            needsDisplay = true
+            return
+        }
+        super.mouseUp(with: event)
+    }
+
+    private func processFreehandSelection() {
+        guard let img = currentImage, selectionPath.count > 2 else { return }
+
+        var minX = selectionPath[0].x
+        var maxX = selectionPath[0].x
+        var minY = selectionPath[0].y
+        var maxY = selectionPath[0].y
+
+        for pt in selectionPath {
+            minX = min(minX, pt.x)
+            maxX = max(maxX, pt.x)
+            minY = min(minY, pt.y)
+            maxY = max(maxY, pt.y)
+        }
+
+        let boundingBox = CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
+        guard boundingBox.width > 5 && boundingBox.height > 5 else { return }
+
+        let imgSize = img.size
+        guard imgSize.width > 0 && imgSize.height > 0 else { return }
+
+        let viewSize = bounds.size
+        guard viewSize.width > 0 && viewSize.height > 0 else { return }
+
+        let aspect = imgSize.width / imgSize.height
+        var drawW = viewSize.width
+        var drawH = drawW / aspect
+        if drawH > viewSize.height {
+            drawH = viewSize.height
+            drawW = drawH * aspect
+        }
+        let drawX = (viewSize.width - drawW) / 2.0
+        let drawY = (viewSize.height - drawH) / 2.0
+        let drawRect = CGRect(x: drawX, y: drawY, width: drawW, height: drawH)
+
+        let intersect = boundingBox.intersection(drawRect)
+        guard !intersect.isNull && intersect.width > 5 && intersect.height > 5 else { return }
+
+        let normX = (intersect.origin.x - drawRect.origin.x) / drawRect.width
+        let normY = (intersect.origin.y - drawRect.origin.y) / drawRect.height
+        let normW = intersect.width / drawRect.width
+        let normH = intersect.height / drawRect.height
+
+        guard let cgImg = img.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return }
+        let pixelW = CGFloat(cgImg.width)
+        let pixelH = CGFloat(cgImg.height)
+
+        let cropRect = CGRect(
+            x: max(0, normX * pixelW),
+            y: max(0, (1.0 - normY - normH) * pixelH),
+            width: min(pixelW, normW * pixelW),
+            height: min(pixelH, normH * pixelH)
+        )
+
+        guard cropRect.width > 2 && cropRect.height > 2,
+              let croppedCG = cgImg.cropping(to: cropRect) else { return }
+
+        let croppedImage = NSImage(cgImage: croppedCG, size: NSSize(width: cropRect.width, height: cropRect.height))
+        onRegionSelectedForDetection?(croppedImage)
+        selectionPath = []
+    }
+
+    override public func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+
+        if (isFreehandSelectionMode || isDrawingSelection) && selectionPath.count > 1 {
+            guard let context = NSGraphicsContext.current?.cgContext else { return }
+            context.saveGState()
+
+            let cgPath = CGMutablePath()
+            cgPath.move(to: selectionPath[0])
+            for pt in selectionPath.dropFirst() {
+                cgPath.addLine(to: pt)
+            }
+            cgPath.closeSubpath()
+
+            context.addPath(cgPath)
+            context.setFillColor(NSColor.controlAccentColor.withAlphaComponent(0.2).cgColor)
+            context.fillPath()
+
+            context.addPath(cgPath)
+            context.setStrokeColor(NSColor.controlAccentColor.cgColor)
+            context.setLineWidth(2.5)
+            let dashes: [CGFloat] = [6.0, 3.0]
+            context.setLineDash(phase: 0, lengths: dashes)
+            context.strokePath()
+
+            context.restoreGState()
+        }
     }
 
     public func setActualSize() {

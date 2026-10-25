@@ -154,6 +154,35 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
             self?.statusBarView.updateForegroundObjectInfo(pane: pane, object: fgObj)
         }
 
+        dualCanvasVC.imageView1.onRegionSelectedForDetection = { [weak self] croppedImg in
+            guard let self = self else { return }
+            if !self.sidebarContainerVC.isDualView {
+                self.sidebarContainerVC.updateViewMode(isDual: true)
+                self.dualCanvasVC.setDualViewEnabled(true)
+                self.showFavoritesOnlyPane2 = true
+            }
+            self.dualCanvasVC.combiningMode = .foregroundCombine
+            ForegroundDetector.detectForegroundObject(in: croppedImg) { [weak self] fgObj in
+                guard let self = self, var fg = fgObj else { return }
+                fg.itemPath = self.sidebarContainerVC.sidebarVC1.selectedItem?.id ?? self.sidebarContainerVC.sidebarVC1.selectedItem?.path
+                DispatchQueue.main.async {
+                    self.dualCanvasVC.combiningCanvasView.addObject(fg)
+                }
+            }
+        }
+
+        dualCanvasVC.imageView2.onRegionSelectedForDetection = { [weak self] croppedImg in
+            guard let self = self else { return }
+            self.dualCanvasVC.combiningMode = .foregroundCombine
+            ForegroundDetector.detectForegroundObject(in: croppedImg) { [weak self] fgObj in
+                guard let self = self, var fg = fgObj else { return }
+                fg.itemPath = self.sidebarContainerVC.sidebarVC2.selectedItem?.id ?? self.sidebarContainerVC.sidebarVC2.selectedItem?.path
+                DispatchQueue.main.async {
+                    self.dualCanvasVC.combiningCanvasView.addObject(fg)
+                }
+            }
+        }
+
         let mainStackView = NSStackView()
         mainStackView.orientation = .vertical
         mainStackView.spacing = 0
@@ -253,6 +282,27 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         dualCanvasVC.toggleToolbar()
     }
 
+    public func addObjectToCanvas(from item: FileItem) {
+        if !sidebarContainerVC.isDualView {
+            sidebarContainerVC.updateViewMode(isDual: true)
+            dualCanvasVC.setDualViewEnabled(true)
+            showFavoritesOnlyPane2 = true
+        }
+
+        dualCanvasVC.combiningMode = .foregroundCombine
+
+        ThumbnailGenerator.shared.loadFullImage(for: item) { [weak self] image in
+            guard let self = self, let img = image else { return }
+            ForegroundDetector.detectForegroundObject(in: img) { [weak self] fgObj in
+                guard let self = self, var fg = fgObj else { return }
+                fg.itemPath = item.id.isEmpty ? item.path : item.id
+                DispatchQueue.main.async {
+                    self.dualCanvasVC.combiningCanvasView.addObject(fg)
+                }
+            }
+        }
+    }
+
     @objc public func saveCombinationStatePrompt() {
         guard sidebarContainerVC.isDualView else {
             let alert = NSAlert()
@@ -290,6 +340,36 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
             let o2 = dualCanvasVC.imageView2.orientation
             let canvas = dualCanvasVC.combiningCanvasView
 
+            var colorR: Double? = nil
+            var colorG: Double? = nil
+            var colorB: Double? = nil
+            var colorA: Double? = nil
+
+            if let cgColor = canvas.canvasBackgroundColor.cgColor.converted(to: CGColorSpace(name: CGColorSpace.sRGB)!, intent: .defaultIntent, options: nil),
+               let components = cgColor.components, components.count >= 4 {
+                colorR = Double(components[0])
+                colorG = Double(components[1])
+                colorB = Double(components[2])
+                colorA = Double(components[3])
+            } else if canvas.canvasBackgroundColor == .white {
+                colorR = 1.0; colorG = 1.0; colorB = 1.0; colorA = 1.0
+            } else {
+                colorR = 0.0; colorG = 0.0; colorB = 0.0; colorA = 1.0
+            }
+
+            let savedObjects = canvas.objects.map { fg in
+                SavedForegroundObjectState(
+                    itemPath: fg.itemPath,
+                    posX: Double(fg.position.x),
+                    posY: Double(fg.position.y),
+                    scale: Double(fg.scale),
+                    rot: Double(fg.rotationDegrees),
+                    flipH: fg.isFlippedHorizontal,
+                    flipV: fg.isFlippedVertical,
+                    detectionMode: fg.detectionMode.rawValue
+                )
+            }
+
             let fg1 = canvas.foregroundObject1
             let fg2 = canvas.foregroundObject2
 
@@ -313,7 +393,7 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
                 fgOffset2Percent: Double(canvas.fgOffset2Percent),
                 showBackground1: canvas.showBackground1,
                 showBackground2: canvas.showBackground2,
-                fg1OnTop: canvas.fg1OnTop,
+                fg1OnTop: true,
                 fgPos1X: fg1.map { Double($0.position.x) },
                 fgPos1Y: fg1.map { Double($0.position.y) },
                 fgScale1: fg1.map { Double($0.scale) },
@@ -325,7 +405,12 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
                 fgScale2: fg2.map { Double($0.scale) },
                 fgRot2: fg2.map { Double($0.rotationDegrees) },
                 fgFlipH2: fg2?.isFlippedHorizontal,
-                fgFlipV2: fg2?.isFlippedVertical
+                fgFlipV2: fg2?.isFlippedVertical,
+                canvasRed: colorR,
+                canvasGreen: colorG,
+                canvasBlue: colorB,
+                canvasAlpha: colorA,
+                objects: savedObjects
             )
 
             CombinationStateManager.saveState(state)
@@ -360,48 +445,76 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         canvas.fgOffset2Percent = CGFloat(state.fgOffset2Percent)
         canvas.showBackground1 = state.showBackground1
         canvas.showBackground2 = state.showBackground2
-        canvas.fg1OnTop = state.fg1OnTop
 
-        if let x1 = state.fgPos1X, let y1 = state.fgPos1Y {
-            canvas.pendingFg1Position = CGPoint(x: x1, y: y1)
-            canvas.foregroundObject1?.position = CGPoint(x: x1, y: y1)
-        }
-        if let s1 = state.fgScale1 {
-            canvas.pendingFg1Scale = CGFloat(s1)
-            canvas.foregroundObject1?.scale = CGFloat(s1)
-        }
-        if let r1 = state.fgRot1 {
-            canvas.pendingFg1Rotation = CGFloat(r1)
-            canvas.foregroundObject1?.rotationDegrees = CGFloat(r1)
-        }
-        if let fh1 = state.fgFlipH1 {
-            canvas.pendingFg1FlipH = fh1
-            canvas.foregroundObject1?.isFlippedHorizontal = fh1
-        }
-        if let fv1 = state.fgFlipV1 {
-            canvas.pendingFg1FlipV = fv1
-            canvas.foregroundObject1?.isFlippedVertical = fv1
+        if let r = state.canvasRed, let g = state.canvasGreen, let b = state.canvasBlue, let a = state.canvasAlpha {
+            canvas.canvasBackgroundColor = NSColor(srgbRed: CGFloat(r), green: CGFloat(g), blue: CGFloat(b), alpha: CGFloat(a))
         }
 
-        if let x2 = state.fgPos2X, let y2 = state.fgPos2Y {
-            canvas.pendingFg2Position = CGPoint(x: x2, y: y2)
-            canvas.foregroundObject2?.position = CGPoint(x: x2, y: y2)
-        }
-        if let s2 = state.fgScale2 {
-            canvas.pendingFg2Scale = CGFloat(s2)
-            canvas.foregroundObject2?.scale = CGFloat(s2)
-        }
-        if let r2 = state.fgRot2 {
-            canvas.pendingFg2Rotation = CGFloat(r2)
-            canvas.foregroundObject2?.rotationDegrees = CGFloat(r2)
-        }
-        if let fh2 = state.fgFlipH2 {
-            canvas.pendingFg2FlipH = fh2
-            canvas.foregroundObject2?.isFlippedHorizontal = fh2
-        }
-        if let fv2 = state.fgFlipV2 {
-            canvas.pendingFg2FlipV = fv2
-            canvas.foregroundObject2?.isFlippedVertical = fv2
+        if let savedObjects = state.objects, !savedObjects.isEmpty {
+            canvas.objects = []
+            for savedObj in savedObjects {
+                if let itemPath = savedObj.itemPath {
+                    let fileItem = FileItem(path: itemPath, name: (itemPath as NSString).lastPathComponent, type: .image, fileSize: 0)
+                    ThumbnailGenerator.shared.loadFullImage(for: fileItem) { image in
+                        guard let image = image else { return }
+                        let mode = VisionDetectionMode(rawValue: savedObj.detectionMode) ?? .instanceMask
+                        ForegroundDetector.detectForegroundObject(in: image, mode: mode) { fgObj in
+                            guard var fg = fgObj else { return }
+                            fg.itemPath = itemPath
+                            fg.position = CGPoint(x: savedObj.posX, y: savedObj.posY)
+                            fg.scale = CGFloat(savedObj.scale)
+                            fg.rotationDegrees = CGFloat(savedObj.rot)
+                            fg.isFlippedHorizontal = savedObj.flipH
+                            fg.isFlippedVertical = savedObj.flipV
+                            DispatchQueue.main.async {
+                                canvas.addObject(fg)
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            if let x1 = state.fgPos1X, let y1 = state.fgPos1Y {
+                canvas.pendingFg1Position = CGPoint(x: x1, y: y1)
+                canvas.foregroundObject1?.position = CGPoint(x: x1, y: y1)
+            }
+            if let s1 = state.fgScale1 {
+                canvas.pendingFg1Scale = CGFloat(s1)
+                canvas.foregroundObject1?.scale = CGFloat(s1)
+            }
+            if let r1 = state.fgRot1 {
+                canvas.pendingFg1Rotation = CGFloat(r1)
+                canvas.foregroundObject1?.rotationDegrees = CGFloat(r1)
+            }
+            if let fh1 = state.fgFlipH1 {
+                canvas.pendingFg1FlipH = fh1
+                canvas.foregroundObject1?.isFlippedHorizontal = fh1
+            }
+            if let fv1 = state.fgFlipV1 {
+                canvas.pendingFg1FlipV = fv1
+                canvas.foregroundObject1?.isFlippedVertical = fv1
+            }
+
+            if let x2 = state.fgPos2X, let y2 = state.fgPos2Y {
+                canvas.pendingFg2Position = CGPoint(x: x2, y: y2)
+                canvas.foregroundObject2?.position = CGPoint(x: x2, y: y2)
+            }
+            if let s2 = state.fgScale2 {
+                canvas.pendingFg2Scale = CGFloat(s2)
+                canvas.foregroundObject2?.scale = CGFloat(s2)
+            }
+            if let r2 = state.fgRot2 {
+                canvas.pendingFg2Rotation = CGFloat(r2)
+                canvas.foregroundObject2?.rotationDegrees = CGFloat(r2)
+            }
+            if let fh2 = state.fgFlipH2 {
+                canvas.pendingFg2FlipH = fh2
+                canvas.foregroundObject2?.isFlippedHorizontal = fh2
+            }
+            if let fv2 = state.fgFlipV2 {
+                canvas.pendingFg2FlipV = fv2
+                canvas.foregroundObject2?.isFlippedVertical = fv2
+            }
         }
 
         dualCanvasVC.setDualViewEnabled(true)
