@@ -39,6 +39,9 @@ public class SQLiteCache {
             return
         }
 
+        // Disable explicit disk syncs to avoid NVMe wear and let OS handle flushing opportunistically
+        sqlite3_exec(db, "PRAGMA synchronous = OFF;", nil, nil, nil)
+
         let createDirectoryTable = """
         CREATE TABLE IF NOT EXISTS directory_entries (
             cache_key TEXT PRIMARY KEY,
