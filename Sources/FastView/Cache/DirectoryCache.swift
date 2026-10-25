@@ -123,25 +123,17 @@ public enum FolderStatsCalculator {
                 let subFolders = contents.filter { $0.isDirectory || $0.type == .archiveZip || $0.type == .archiveRar }
                 if !subFolders.isEmpty {
                     for sub in subFolders {
-                        if sub.type == .archiveZip {
-                            let zipEntries = ArchiveReader.listAllZipImages(archivePath: sub.path)
-                            imageKeys.append(contentsOf: zipEntries.map { "\(sub.path)#\($0.id)" })
-                        } else if sub.type == .archiveRar {
-                            let rarEntries = ArchiveReader.listAllRarImages(archivePath: sub.path)
-                            imageKeys.append(contentsOf: rarEntries.map { "\(sub.path)#\($0.id)" })
-                        } else if sub.isDirectory {
-                            cacheLock.lock()
-                            let cachedSubData = folderStatsCache[sub.path]
-                            cacheLock.unlock()
+                        cacheLock.lock()
+                        let cachedSubData = folderStatsCache[sub.path]
+                        cacheLock.unlock()
 
-                            if let cachedSub = cachedSubData {
-                                imageKeys.append(contentsOf: cachedSub.imageKeys)
-                                if !cachedSub.isComplete {
-                                    isComplete = false
-                                }
-                            } else {
+                        if let cachedSub = cachedSubData {
+                            imageKeys.append(contentsOf: cachedSub.imageKeys)
+                            if !cachedSub.isComplete {
                                 isComplete = false
                             }
+                        } else {
+                            isComplete = false
                         }
                     }
                 }

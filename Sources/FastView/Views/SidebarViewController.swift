@@ -656,6 +656,20 @@ public class SidebarTableCellView: NSTableCellView {
                 }
             }
         }
+        if item.isDirectory || item.type == .archiveZip || item.type == .archiveRar {
+            DispatchQueue.global(qos: .utility).async {
+                let stats = FolderStatsCalculator.stats(for: item)
+                DispatchQueue.main.async { [weak self] in
+                    guard let self = self, self.currentItem?.id == item.id else { return }
+                    if let stats = stats, !stats.badgeString.isEmpty {
+                        self.statsBadgeLabel.stringValue = stats.badgeString
+                        self.statsBadgeContainer.isHidden = false
+                    } else {
+                        self.statsBadgeContainer.isHidden = true
+                    }
+                }
+            }
+        }
     }
 
     public func loadThumbnailOnSelection(for item: FileItem) {
@@ -666,6 +680,20 @@ public class SidebarTableCellView: NSTableCellView {
                 guard let self = self, self.currentItem?.id == item.id else { return }
                 if let img = image {
                     self.setThumbnailLoaded(img)
+                }
+            }
+        }
+        if item.isDirectory || item.type == .archiveZip || item.type == .archiveRar {
+            DispatchQueue.global(qos: .utility).async {
+                let stats = FolderStatsCalculator.stats(for: item)
+                DispatchQueue.main.async { [weak self] in
+                    guard let self = self, self.currentItem?.id == item.id else { return }
+                    if let stats = stats, !stats.badgeString.isEmpty {
+                        self.statsBadgeLabel.stringValue = stats.badgeString
+                        self.statsBadgeContainer.isHidden = false
+                    } else {
+                        self.statsBadgeContainer.isHidden = true
+                    }
                 }
             }
         }
