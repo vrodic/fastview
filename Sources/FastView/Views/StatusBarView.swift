@@ -102,9 +102,15 @@ public class StatusBarView: NSView {
 
         var sizeBytes = item.fileSize
         if sizeBytes == 0 {
-            let path = item.archivePath ?? item.path
-            if let attrs = try? FileManager.default.attributesOfItem(atPath: path),
-               let size = attrs[.size] as? UInt64 {
+            if let archivePath = item.archivePath {
+                let ext = (archivePath as NSString).pathExtension.lowercased()
+                if ext == "zip", let data = ArchiveReader.loadZipData(archivePath: archivePath, entryPath: item.path) {
+                    sizeBytes = UInt64(data.count)
+                } else if ext == "rar", let data = ArchiveReader.loadRarData(archivePath: archivePath, entryPath: item.path) {
+                    sizeBytes = UInt64(data.count)
+                }
+            } else if let attrs = try? FileManager.default.attributesOfItem(atPath: item.path),
+                      let size = attrs[.size] as? UInt64 {
                 sizeBytes = size
             }
         }
@@ -141,8 +147,14 @@ public class StatusBarView: NSView {
         }
 
         if let img = image {
-            let width = Int(img.size.width)
-            let height = Int(img.size.height)
+            var width = Int(img.size.width)
+            var height = Int(img.size.height)
+            if let rep = img.representations.first {
+                if rep.pixelsWide > 0 && rep.pixelsHigh > 0 {
+                    width = rep.pixelsWide
+                    height = rep.pixelsHigh
+                }
+            }
             infoParts.append("\(width) × \(height) px")
         }
 

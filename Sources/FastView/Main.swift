@@ -203,10 +203,6 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         flattenItem.state = ArchiveReader.flattenArchiveDirectories ? .on : .off
         viewMenu.addItem(flattenItem)
 
-        let lowMemItem = NSMenuItem(title: "Low Memory Mode", action: #selector(toggleLowMemoryModeAction(_:)), keyEquivalent: "")
-        lowMemItem.state = MemoryLRUCache.shared.isLowMemoryMode ? .on : .off
-        viewMenu.addItem(lowMemItem)
-
         let combiningControlsItem = NSMenuItem(title: "Image Combining Controls", action: #selector(toggleCombiningControlsAction(_:)), keyEquivalent: "c")
         combiningControlsItem.keyEquivalentModifierMask = [.command, .option]
         viewMenu.addItem(combiningControlsItem)
@@ -226,7 +222,21 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         viewMenu.addItem(withTitle: "Actual Size", action: #selector(actualSizeAction), keyEquivalent: "1")
         viewMenu.addItem(withTitle: "Zoom to Fit", action: #selector(zoomToFitAction), keyEquivalent: "0")
 
-        // 4. Controls Menu
+        // 4. Options Menu
+        let optionsMenuItem = NSMenuItem()
+        mainMenu.addItem(optionsMenuItem)
+        let optionsMenu = NSMenu(title: "Options")
+        optionsMenuItem.submenu = optionsMenu
+
+        let trackViewedItem = NSMenuItem(title: "Track Viewed Images Info", action: #selector(toggleTrackViewedImagesAction(_:)), keyEquivalent: "")
+        trackViewedItem.state = SQLiteCache.shared.isTrackingViewedImagesEnabled ? .on : .off
+        optionsMenu.addItem(trackViewedItem)
+
+        let lowMemItem = NSMenuItem(title: "Low Memory Mode", action: #selector(toggleLowMemoryModeAction(_:)), keyEquivalent: "")
+        lowMemItem.state = MemoryLRUCache.shared.isLowMemoryMode ? .on : .off
+        optionsMenu.addItem(lowMemItem)
+
+        // 5. Controls Menu
         let controlsMenuItem = NSMenuItem()
         mainMenu.addItem(controlsMenuItem)
         let controlsMenu = NSMenu(title: "Controls")
@@ -351,6 +361,14 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         sender.state = newState ? .on : .off
         DirectoryCache.shared.clear()
         SQLiteCache.shared.clear()
+        windowController?.splitVC.reloadDirectoryContentsPublic()
+    }
+
+    @objc private func toggleTrackViewedImagesAction(_ sender: NSMenuItem) {
+        let newState = !SQLiteCache.shared.isTrackingViewedImagesEnabled
+        SQLiteCache.shared.isTrackingViewedImagesEnabled = newState
+        sender.state = newState ? .on : .off
+        FolderStatsCalculator.clearCache()
         windowController?.splitVC.reloadDirectoryContentsPublic()
     }
 
@@ -556,6 +574,14 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     public func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(toggleTrackViewedImagesAction(_:)) {
+            menuItem.state = SQLiteCache.shared.isTrackingViewedImagesEnabled ? .on : .off
+            return true
+        }
+        if menuItem.action == #selector(toggleLowMemoryModeAction(_:)) {
+            menuItem.state = MemoryLRUCache.shared.isLowMemoryMode ? .on : .off
+            return true
+        }
         if menuItem.action == #selector(toggleCombiningControlsAction(_:)) ||
            menuItem.action == #selector(closeSecondViewAction(_:)) ||
            menuItem.action == #selector(saveCombinationStateAction(_:)) {

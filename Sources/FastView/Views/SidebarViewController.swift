@@ -484,6 +484,10 @@ public class SidebarTableCellView: NSTableCellView {
     private let nameLabel = NSTextField(labelWithString: "")
     private let favoriteBadge = NSImageView()
     private let typeBadge = NSImageView()
+    private let statsBadgeContainer = NSView()
+    private let statsBadgeLabel = NSTextField(labelWithString: "")
+    private let favoriteCountContainer = NSView()
+    private let favoriteCountLabel = NSTextField(labelWithString: "")
     private var currentItem: FileItem?
 
     override public init(frame frameRect: NSRect) {
@@ -528,10 +532,40 @@ public class SidebarTableCellView: NSTableCellView {
         typeBadge.contentTintColor = NSColor.controlAccentColor
         typeBadge.isHidden = true
 
+        statsBadgeContainer.translatesAutoresizingMaskIntoConstraints = false
+        statsBadgeContainer.wantsLayer = true
+        statsBadgeContainer.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.75).cgColor
+        statsBadgeContainer.layer?.cornerRadius = 4
+        statsBadgeContainer.layer?.zPosition = 10
+        statsBadgeContainer.isHidden = true
+
+        statsBadgeLabel.translatesAutoresizingMaskIntoConstraints = false
+        statsBadgeLabel.font = NSFont.systemFont(ofSize: 10, weight: .bold)
+        statsBadgeLabel.textColor = NSColor.white
+        statsBadgeLabel.alignment = .center
+
+        statsBadgeContainer.addSubview(statsBadgeLabel)
+
+        favoriteCountContainer.translatesAutoresizingMaskIntoConstraints = false
+        favoriteCountContainer.wantsLayer = true
+        favoriteCountContainer.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.75).cgColor
+        favoriteCountContainer.layer?.cornerRadius = 4
+        favoriteCountContainer.layer?.zPosition = 10
+        favoriteCountContainer.isHidden = true
+
+        favoriteCountLabel.translatesAutoresizingMaskIntoConstraints = false
+        favoriteCountLabel.font = NSFont.systemFont(ofSize: 10, weight: .bold)
+        favoriteCountLabel.textColor = NSColor.systemYellow
+        favoriteCountLabel.alignment = .center
+
+        favoriteCountContainer.addSubview(favoriteCountLabel)
+
         addSubview(thumbnailImageView)
         addSubview(nameLabel)
         addSubview(typeBadge)
         addSubview(favoriteBadge)
+        addSubview(statsBadgeContainer)
+        addSubview(favoriteCountContainer)
 
         NSLayoutConstraint.activate([
             thumbnailImageView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
@@ -551,7 +585,23 @@ public class SidebarTableCellView: NSTableCellView {
             favoriteBadge.topAnchor.constraint(equalTo: topAnchor, constant: 6),
             favoriteBadge.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
             favoriteBadge.widthAnchor.constraint(equalToConstant: 44),
-            favoriteBadge.heightAnchor.constraint(equalToConstant: 44)
+            favoriteBadge.heightAnchor.constraint(equalToConstant: 44),
+
+            statsBadgeContainer.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+            statsBadgeContainer.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
+
+            statsBadgeLabel.leadingAnchor.constraint(equalTo: statsBadgeContainer.leadingAnchor, constant: 5),
+            statsBadgeLabel.trailingAnchor.constraint(equalTo: statsBadgeContainer.trailingAnchor, constant: -5),
+            statsBadgeLabel.topAnchor.constraint(equalTo: statsBadgeContainer.topAnchor, constant: 2),
+            statsBadgeLabel.bottomAnchor.constraint(equalTo: statsBadgeContainer.bottomAnchor, constant: -2),
+
+            favoriteCountContainer.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
+            favoriteCountContainer.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
+
+            favoriteCountLabel.leadingAnchor.constraint(equalTo: favoriteCountContainer.leadingAnchor, constant: 5),
+            favoriteCountLabel.trailingAnchor.constraint(equalTo: favoriteCountContainer.trailingAnchor, constant: -5),
+            favoriteCountLabel.topAnchor.constraint(equalTo: favoriteCountContainer.topAnchor, constant: 2),
+            favoriteCountLabel.bottomAnchor.constraint(equalTo: favoriteCountContainer.bottomAnchor, constant: -2)
         ])
     }
 
@@ -568,6 +618,47 @@ public class SidebarTableCellView: NSTableCellView {
             typeBadge.isHidden = false
         } else {
             typeBadge.isHidden = true
+        }
+
+        if item.isDirectory || item.type == .archiveZip || item.type == .archiveRar {
+            if let stats = FolderStatsCalculator.cachedStats(for: item) {
+                if !stats.badgeString.isEmpty {
+                    statsBadgeLabel.stringValue = stats.badgeString
+                    statsBadgeContainer.isHidden = false
+                } else {
+                    statsBadgeContainer.isHidden = true
+                }
+                if !stats.favoriteBadgeString.isEmpty {
+                    favoriteCountLabel.stringValue = stats.favoriteBadgeString
+                    favoriteCountContainer.isHidden = false
+                } else {
+                    favoriteCountContainer.isHidden = true
+                }
+            } else {
+                statsBadgeContainer.isHidden = true
+                favoriteCountContainer.isHidden = true
+                DispatchQueue.global(qos: .utility).async {
+                    let stats = FolderStatsCalculator.stats(for: item)
+                    DispatchQueue.main.async { [weak self] in
+                        guard let self = self, self.currentItem?.id == item.id else { return }
+                        if let stats = stats, !stats.badgeString.isEmpty {
+                            self.statsBadgeLabel.stringValue = stats.badgeString
+                            self.statsBadgeContainer.isHidden = false
+                        } else {
+                            self.statsBadgeContainer.isHidden = true
+                        }
+                        if let stats = stats, !stats.favoriteBadgeString.isEmpty {
+                            self.favoriteCountLabel.stringValue = stats.favoriteBadgeString
+                            self.favoriteCountContainer.isHidden = false
+                        } else {
+                            self.favoriteCountContainer.isHidden = true
+                        }
+                    }
+                }
+            }
+        } else {
+            statsBadgeContainer.isHidden = true
+            favoriteCountContainer.isHidden = true
         }
 
         let isFav = SQLiteCache.shared.isFavorite(path: item.id) || SQLiteCache.shared.isFavorite(path: item.path)
@@ -604,6 +695,26 @@ public class SidebarTableCellView: NSTableCellView {
                 }
             }
         }
+        if item.isDirectory || item.type == .archiveZip || item.type == .archiveRar {
+            DispatchQueue.global(qos: .utility).async {
+                let stats = FolderStatsCalculator.stats(for: item)
+                DispatchQueue.main.async { [weak self] in
+                    guard let self = self, self.currentItem?.id == item.id else { return }
+                    if let stats = stats, !stats.badgeString.isEmpty {
+                        self.statsBadgeLabel.stringValue = stats.badgeString
+                        self.statsBadgeContainer.isHidden = false
+                    } else {
+                        self.statsBadgeContainer.isHidden = true
+                    }
+                    if let stats = stats, !stats.favoriteBadgeString.isEmpty {
+                        self.favoriteCountLabel.stringValue = stats.favoriteBadgeString
+                        self.favoriteCountContainer.isHidden = false
+                    } else {
+                        self.favoriteCountContainer.isHidden = true
+                    }
+                }
+            }
+        }
     }
 
     public func loadThumbnailOnSelection(for item: FileItem) {
@@ -614,6 +725,26 @@ public class SidebarTableCellView: NSTableCellView {
                 guard let self = self, self.currentItem?.id == item.id else { return }
                 if let img = image {
                     self.setThumbnailLoaded(img)
+                }
+            }
+        }
+        if item.isDirectory || item.type == .archiveZip || item.type == .archiveRar {
+            DispatchQueue.global(qos: .utility).async {
+                let stats = FolderStatsCalculator.stats(for: item)
+                DispatchQueue.main.async { [weak self] in
+                    guard let self = self, self.currentItem?.id == item.id else { return }
+                    if let stats = stats, !stats.badgeString.isEmpty {
+                        self.statsBadgeLabel.stringValue = stats.badgeString
+                        self.statsBadgeContainer.isHidden = false
+                    } else {
+                        self.statsBadgeContainer.isHidden = true
+                    }
+                    if let stats = stats, !stats.favoriteBadgeString.isEmpty {
+                        self.favoriteCountLabel.stringValue = stats.favoriteBadgeString
+                        self.favoriteCountContainer.isHidden = false
+                    } else {
+                        self.favoriteCountContainer.isHidden = true
+                    }
                 }
             }
         }
