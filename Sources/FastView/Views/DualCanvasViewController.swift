@@ -29,7 +29,7 @@ public class DualCanvasViewController: NSViewController, CombiningToolbarDelegat
     }
 
     public var isForegroundCombineAvailable: Bool {
-        return combiningCanvasView.foregroundObject1 != nil || combiningCanvasView.foregroundObject2 != nil
+        return !combiningCanvasView.objects.isEmpty
     }
 
     private let splitContainer = NSStackView()
@@ -346,10 +346,6 @@ public class DualCanvasViewController: NSViewController, CombiningToolbarDelegat
 
     public func combiningToolbar(_ toolbar: CombiningToolbarView, didToggleBackground2 visible: Bool) {
         combiningCanvasView.showBackground2 = visible
-    }
-
-    public func combiningToolbar(_ toolbar: CombiningToolbarView, didToggleFG1OnTop fg1OnTop: Bool) {
-        combiningCanvasView.fg1OnTop = fg1OnTop
     }
 
     public func combiningToolbar(_ toolbar: CombiningToolbarView, didSelectBackgroundColor color: NSColor) {

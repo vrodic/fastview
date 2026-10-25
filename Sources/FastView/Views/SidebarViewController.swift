@@ -370,6 +370,15 @@ class CustomTableView: NSTableView {
 
             menu.addItem(NSMenuItem.separator())
 
+            if item.type == .image {
+                let addObjectItem = NSMenuItem(title: "Add Object to Canvas", action: #selector(contextAddObjectToCanvasAction(_:)), keyEquivalent: "")
+                addObjectItem.target = self
+                addObjectItem.representedObject = item
+                menu.addItem(addObjectItem)
+
+                menu.addItem(NSMenuItem.separator())
+            }
+
             let infoItem = NSMenuItem(title: "Show Info", action: #selector(contextShowInfoAction(_:)), keyEquivalent: "")
             infoItem.target = self
             infoItem.representedObject = clickedRow
@@ -389,6 +398,14 @@ class CustomTableView: NSTableView {
         }
 
         return menu
+    }
+
+    @objc private func contextAddObjectToCanvasAction(_ sender: NSMenuItem) {
+        guard let item = sender.representedObject as? FileItem,
+              let vc = delegate as? SidebarViewController else { return }
+        let splitVC = (vc.parent as? MainSplitViewController)
+            ?? ((vc.parent as? SidebarContainerViewController)?.parent as? MainSplitViewController)
+        splitVC?.addObjectToCanvas(from: item)
     }
 
     @objc private func contextToggleFavoriteAction(_ sender: NSMenuItem) {

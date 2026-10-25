@@ -1,5 +1,36 @@
 import AppKit
 
+public struct SavedForegroundObjectState: Codable {
+    public var itemPath: String?
+    public var posX: Double
+    public var posY: Double
+    public var scale: Double
+    public var rot: Double
+    public var flipH: Bool
+    public var flipV: Bool
+    public var detectionMode: String
+
+    public init(
+        itemPath: String? = nil,
+        posX: Double,
+        posY: Double,
+        scale: Double,
+        rot: Double,
+        flipH: Bool,
+        flipV: Bool,
+        detectionMode: String = "Instance Segmentation"
+    ) {
+        self.itemPath = itemPath
+        self.posX = posX
+        self.posY = posY
+        self.scale = scale
+        self.rot = rot
+        self.flipH = flipH
+        self.flipV = flipV
+        self.detectionMode = detectionMode
+    }
+}
+
 public struct SavedCombinationState: Codable {
     public var id: String
     public var name: String
@@ -35,6 +66,11 @@ public struct SavedCombinationState: Codable {
     public var fgRot2: Double?
     public var fgFlipH2: Bool?
     public var fgFlipV2: Bool?
+    public var canvasRed: Double?
+    public var canvasGreen: Double?
+    public var canvasBlue: Double?
+    public var canvasAlpha: Double?
+    public var objects: [SavedForegroundObjectState]?
 
     public init(
         id: String = UUID().uuidString,
@@ -70,7 +106,12 @@ public struct SavedCombinationState: Codable {
         fgScale2: Double? = nil,
         fgRot2: Double? = nil,
         fgFlipH2: Bool? = nil,
-        fgFlipV2: Bool? = nil
+        fgFlipV2: Bool? = nil,
+        canvasRed: Double? = nil,
+        canvasGreen: Double? = nil,
+        canvasBlue: Double? = nil,
+        canvasAlpha: Double? = nil,
+        objects: [SavedForegroundObjectState]? = nil
     ) {
         self.id = id
         self.name = name
@@ -106,6 +147,11 @@ public struct SavedCombinationState: Codable {
         self.fgRot2 = fgRot2
         self.fgFlipH2 = fgFlipH2
         self.fgFlipV2 = fgFlipV2
+        self.canvasRed = canvasRed
+        self.canvasGreen = canvasGreen
+        self.canvasBlue = canvasBlue
+        self.canvasAlpha = canvasAlpha
+        self.objects = objects
     }
 }
 

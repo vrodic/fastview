@@ -10,6 +10,8 @@ public enum VisionDetectionMode: String, CaseIterable {
 }
 
 public struct ForegroundObject {
+    public var id: UUID = UUID()
+    public var itemPath: String? = nil
     public var image: NSImage
     public var normalizedBoundingBox: CGRect
     public var position: CGPoint = .zero
@@ -20,6 +22,8 @@ public struct ForegroundObject {
     public var detectionMode: VisionDetectionMode = .instanceMask
 
     public init(
+        id: UUID = UUID(),
+        itemPath: String? = nil,
         image: NSImage,
         normalizedBoundingBox: CGRect,
         position: CGPoint = .zero,
@@ -29,6 +33,8 @@ public struct ForegroundObject {
         isFlippedVertical: Bool = false,
         detectionMode: VisionDetectionMode = .instanceMask
     ) {
+        self.id = id
+        self.itemPath = itemPath
         self.image = image
         self.normalizedBoundingBox = normalizedBoundingBox
         self.position = position

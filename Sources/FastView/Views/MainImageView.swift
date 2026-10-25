@@ -7,6 +7,46 @@ public enum ImageZoomMode {
     case custom(CGFloat)
 }
 
+private class SelectionOverlayView: NSView {
+    var selectionPath: [CGPoint] = []
+    var isDrawing: Bool = false
+
+    override var isFlipped: Bool { return false }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        return nil
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+
+        if isDrawing && selectionPath.count > 1 {
+            guard let context = NSGraphicsContext.current?.cgContext else { return }
+            context.saveGState()
+
+            let cgPath = CGMutablePath()
+            cgPath.move(to: selectionPath[0])
+            for pt in selectionPath.dropFirst() {
+                cgPath.addLine(to: pt)
+            }
+            cgPath.closeSubpath()
+
+            context.addPath(cgPath)
+            context.setFillColor(NSColor.controlAccentColor.withAlphaComponent(0.25).cgColor)
+            context.fillPath()
+
+            context.addPath(cgPath)
+            context.setStrokeColor(NSColor.controlAccentColor.cgColor)
+            context.setLineWidth(3.0)
+            let dashes: [CGFloat] = [6.0, 3.0]
+            context.setLineDash(phase: 0, lengths: dashes)
+            context.strokePath()
+
+            context.restoreGState()
+        }
+    }
+}
+
 public class MainImageView: NSView {
     public private(set) var currentImage: NSImage?
     public private(set) var rawImage: NSImage?
@@ -22,8 +62,22 @@ public class MainImageView: NSView {
         }
     }
 
+    public var isFreehandSelectionMode: Bool = false {
+        didSet {
+            if isFreehandSelectionMode {
+                window?.makeFirstResponder(self)
+            }
+            updateOverlay()
+        }
+    }
+
+    private var selectionPath: [CGPoint] = []
+    private var isDrawingSelection: Bool = false
+    public var onRegionSelectedForDetection: ((NSImage) -> Void)?
+
     private let imageView = NSImageView()
     private let scrollView = NSScrollView()
+    private let selectionOverlayView = SelectionOverlayView()
 
     private let loadingContainerView = NSView()
     private let loadingIndicator = NSProgressIndicator()
@@ -60,6 +114,8 @@ public class MainImageView: NSView {
         imageView.imageScaling = .scaleProportionallyUpOrDown
         imageView.imageAlignment = .alignCenter
 
+        selectionOverlayView.translatesAutoresizingMaskIntoConstraints = false
+
         loadingContainerView.translatesAutoresizingMaskIntoConstraints = false
         loadingContainerView.wantsLayer = true
         loadingContainerView.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.85).cgColor
@@ -88,6 +144,7 @@ public class MainImageView: NSView {
         clipView.documentView = imageView
 
         addSubview(scrollView)
+        addSubview(selectionOverlayView)
         addSubview(loadingContainerView)
 
         loadingContainerView.addSubview(loadingIndicator)
@@ -99,6 +156,11 @@ public class MainImageView: NSView {
             scrollView.trailingAnchor.constraint(equalTo: trailingAnchor),
             scrollView.topAnchor.constraint(equalTo: topAnchor),
             scrollView.bottomAnchor.constraint(equalTo: bottomAnchor),
+
+            selectionOverlayView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            selectionOverlayView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            selectionOverlayView.topAnchor.constraint(equalTo: topAnchor),
+            selectionOverlayView.bottomAnchor.constraint(equalTo: bottomAnchor),
 
             loadingContainerView.centerXAnchor.constraint(equalTo: centerXAnchor),
             loadingContainerView.centerYAnchor.constraint(equalTo: centerYAnchor),
@@ -116,6 +178,12 @@ public class MainImageView: NSView {
             speedLabel.topAnchor.constraint(equalTo: progressBar.bottomAnchor, constant: 12),
             speedLabel.bottomAnchor.constraint(equalTo: loadingContainerView.bottomAnchor, constant: -20)
         ])
+    }
+
+    private func updateOverlay() {
+        selectionOverlayView.selectionPath = selectionPath
+        selectionOverlayView.isDrawing = (isFreehandSelectionMode || isDrawingSelection) && selectionPath.count > 1
+        selectionOverlayView.needsDisplay = true
     }
 
     public func showLoading(fileSizeBytes: UInt64, pastSpeedMBs: Double, statusText: String? = nil) {
@@ -240,16 +308,153 @@ public class MainImageView: NSView {
     override public func menu(for event: NSEvent) -> NSMenu? {
         guard let img = currentImage else { return super.menu(for: event) }
         let menu = NSMenu(title: "Main Image Menu")
+
+        let drawSelectionItem = NSMenuItem(title: "Draw Selection for Foreground Detection", action: #selector(contextDrawSelectionAction(_:)), keyEquivalent: "")
+        drawSelectionItem.target = self
+        menu.addItem(drawSelectionItem)
+
+        menu.addItem(NSMenuItem.separator())
+
         let copyItem = NSMenuItem(title: "Copy Image to Clipboard", action: #selector(contextCopyImageAction(_:)), keyEquivalent: "")
         copyItem.target = self
         copyItem.representedObject = img
         menu.addItem(copyItem)
+
         return menu
+    }
+
+    @objc private func contextDrawSelectionAction(_ sender: NSMenuItem) {
+        isFreehandSelectionMode = true
+        selectionPath = []
+        updateOverlay()
     }
 
     @objc private func contextCopyImageAction(_ sender: NSMenuItem) {
         guard let img = sender.representedObject as? NSImage else { return }
         NSPasteboard.general.copyImage(img)
+    }
+
+    override public func mouseDown(with event: NSEvent) {
+        if isFreehandSelectionMode {
+            let pt = convert(event.locationInWindow, from: nil)
+            selectionPath = [pt]
+            isDrawingSelection = true
+            updateOverlay()
+            return
+        }
+        super.mouseDown(with: event)
+    }
+
+    override public func mouseDragged(with event: NSEvent) {
+        if isFreehandSelectionMode && isDrawingSelection {
+            let pt = convert(event.locationInWindow, from: nil)
+            selectionPath.append(pt)
+            updateOverlay()
+            return
+        }
+        super.mouseDragged(with: event)
+    }
+
+    override public func mouseUp(with event: NSEvent) {
+        if isFreehandSelectionMode && isDrawingSelection {
+            isDrawingSelection = false
+            isFreehandSelectionMode = false
+            updateOverlay()
+            processFreehandSelection()
+            return
+        }
+        super.mouseUp(with: event)
+    }
+
+    private func processFreehandSelection() {
+        guard let img = currentImage, selectionPath.count > 2 else {
+            selectionPath = []
+            updateOverlay()
+            return
+        }
+
+        var minX = selectionPath[0].x
+        var maxX = selectionPath[0].x
+        var minY = selectionPath[0].y
+        var maxY = selectionPath[0].y
+
+        for pt in selectionPath {
+            minX = min(minX, pt.x)
+            maxX = max(maxX, pt.x)
+            minY = min(minY, pt.y)
+            maxY = max(maxY, pt.y)
+        }
+
+        let boundingBox = CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
+        guard boundingBox.width > 5 && boundingBox.height > 5 else {
+            selectionPath = []
+            updateOverlay()
+            return
+        }
+
+        let imgSize = img.size
+        guard imgSize.width > 0 && imgSize.height > 0 else {
+            selectionPath = []
+            updateOverlay()
+            return
+        }
+
+        let viewSize = bounds.size
+        guard viewSize.width > 0 && viewSize.height > 0 else {
+            selectionPath = []
+            updateOverlay()
+            return
+        }
+
+        let aspect = imgSize.width / imgSize.height
+        var drawW = viewSize.width
+        var drawH = drawW / aspect
+        if drawH > viewSize.height {
+            drawH = viewSize.height
+            drawW = drawH * aspect
+        }
+        let drawX = (viewSize.width - drawW) / 2.0
+        let drawY = (viewSize.height - drawH) / 2.0
+        let drawRect = CGRect(x: drawX, y: drawY, width: drawW, height: drawH)
+
+        let intersect = boundingBox.intersection(drawRect)
+        guard !intersect.isNull && intersect.width > 5 && intersect.height > 5 else {
+            selectionPath = []
+            updateOverlay()
+            return
+        }
+
+        let normX = (intersect.origin.x - drawRect.origin.x) / drawRect.width
+        let normY = (intersect.origin.y - drawRect.origin.y) / drawRect.height
+        let normW = intersect.width / drawRect.width
+        let normH = intersect.height / drawRect.height
+
+        guard let cgImg = img.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+            selectionPath = []
+            updateOverlay()
+            return
+        }
+        let pixelW = CGFloat(cgImg.width)
+        let pixelH = CGFloat(cgImg.height)
+
+        let cropRect = CGRect(
+            x: max(0, normX * pixelW),
+            y: max(0, (1.0 - normY - normH) * pixelH),
+            width: min(pixelW, normW * pixelW),
+            height: min(pixelH, normH * pixelH)
+        )
+
+        guard cropRect.width > 2 && cropRect.height > 2,
+              let croppedCG = cgImg.cropping(to: cropRect) else {
+            selectionPath = []
+            updateOverlay()
+            return
+        }
+
+        let croppedImage = NSImage(cgImage: croppedCG, size: NSSize(width: cropRect.width, height: cropRect.height))
+        onRegionSelectedForDetection?(croppedImage)
+        selectionPath = []
+        updateOverlay()
     }
 
     public func setActualSize() {
