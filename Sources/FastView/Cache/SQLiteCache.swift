@@ -55,14 +55,86 @@ public class SQLiteCache {
         );
         """
 
+        let createViewedImagesTable = """
+        CREATE TABLE IF NOT EXISTS viewed_images (
+            path TEXT PRIMARY KEY,
+            timestamp REAL
+        );
+        """
+
         sqlite3_exec(db, createDirectoryTable, nil, nil, nil)
         sqlite3_exec(db, createFavoritesTable, nil, nil, nil)
+        sqlite3_exec(db, createViewedImagesTable, nil, nil, nil)
 
         // Ensure missing columns exist in case of legacy schema
         sqlite3_exec(db, "ALTER TABLE favorites ADD COLUMN item_json TEXT;", nil, nil, nil)
         sqlite3_exec(db, "ALTER TABLE favorites ADD COLUMN timestamp REAL;", nil, nil, nil)
 
+        loadViewedPaths()
+
         print("[SQLiteCache] Database initialized at \(dbPath)")
+    }
+
+    private var viewedPathsSet = Set<String>()
+
+    private func loadViewedPaths() {
+        guard db != nil else { return }
+        let query = "SELECT path FROM viewed_images;"
+        var statement: OpaquePointer?
+        if sqlite3_prepare_v2(db, query, -1, &statement, nil) == SQLITE_OK {
+            while sqlite3_step(statement) == SQLITE_ROW {
+                if let cString = sqlite3_column_text(statement, 0) {
+                    let path = String(cString: cString)
+                    viewedPathsSet.insert(path)
+                }
+            }
+        }
+        sqlite3_finalize(statement)
+    }
+
+    public var isTrackingViewedImagesEnabled: Bool {
+        get {
+            if UserDefaults.standard.object(forKey: "FastViewTrackViewedImages") == nil {
+                return true
+            }
+            return UserDefaults.standard.bool(forKey: "FastViewTrackViewedImages")
+        }
+        set {
+            UserDefaults.standard.set(newValue, forKey: "FastViewTrackViewedImages")
+        }
+    }
+
+    public func markImageAsViewed(key: String) {
+        guard isTrackingViewedImagesEnabled else { return }
+        lock.lock()
+        defer { lock.unlock() }
+
+        if viewedPathsSet.contains(key) { return }
+        viewedPathsSet.insert(key)
+
+        guard db != nil else { return }
+        let query = "INSERT OR REPLACE INTO viewed_images (path, timestamp) VALUES (?, ?);"
+        var statement: OpaquePointer?
+        if sqlite3_prepare_v2(db, query, -1, &statement, nil) == SQLITE_OK {
+            sqlite3_bind_text(statement, 1, key, -1, SQLITE_TRANSIENT)
+            sqlite3_bind_double(statement, 2, Date().timeIntervalSince1970)
+            sqlite3_step(statement)
+        }
+        sqlite3_finalize(statement)
+    }
+
+    public func isImageViewed(key: String) -> Bool {
+        guard isTrackingViewedImagesEnabled else { return false }
+        lock.lock()
+        defer { lock.unlock() }
+        return viewedPathsSet.contains(key)
+    }
+
+    public func getViewedCount(keys: [String]) -> Int {
+        guard isTrackingViewedImagesEnabled else { return 0 }
+        lock.lock()
+        defer { lock.unlock() }
+        return keys.filter { viewedPathsSet.contains($0) }.count
     }
 
     public func isFavorite(path: String) -> Bool {

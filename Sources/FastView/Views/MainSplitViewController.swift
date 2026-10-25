@@ -925,6 +925,11 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
                     self.lastMeasuredSpeedMBs = (self.lastMeasuredSpeedMBs * 0.7) + (speedMBs * 0.3)
                 }
 
+                if item.type == .image {
+                    let key = item.archivePath != nil ? "\(item.archivePath!)#\(item.id)" : item.id
+                    SQLiteCache.shared.markImageAsViewed(key: key)
+                }
+
                 self.dualCanvasVC.setImage(image, pane: pane)
                 if pane == 1 {
                     self.statusBarView.updateImageInfo(item: item, image: image, currentIndex: currentIndex, totalImages: totalImages, parentName: parentName)
@@ -1150,7 +1155,17 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
 
         var createdStr = "N/A"
         var modifiedStr = "N/A"
-        var sizeStr = ByteCountFormatter.string(fromByteCount: Int64(item.fileSize), countStyle: .file)
+        var sizeBytes = item.fileSize
+
+        if sizeBytes == 0, let archivePath = item.archivePath {
+            let ext = (archivePath as NSString).pathExtension.lowercased()
+            if ext == "zip", let data = ArchiveReader.loadZipData(archivePath: archivePath, entryPath: item.path) {
+                sizeBytes = UInt64(data.count)
+            } else if ext == "rar", let data = ArchiveReader.loadRarData(archivePath: archivePath, entryPath: item.path) {
+                sizeBytes = UInt64(data.count)
+            }
+        }
+
         var dimensionsStr = "N/A"
 
         if let attrs = try? fileManager.attributesOfItem(atPath: fsPath) {
@@ -1164,18 +1179,52 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
             if let modDate = attrs[.modificationDate] as? Date {
                 modifiedStr = dateFormatter.string(from: modDate)
             }
-            if let sizeNum = attrs[.size] as? Int64 {
-                sizeStr = ByteCountFormatter.string(fromByteCount: sizeNum, countStyle: .file)
+            if item.archivePath == nil, let sizeNum = attrs[.size] as? UInt64 {
+                sizeBytes = sizeNum
             }
         }
 
-        if let imageSource = CGImageSourceCreateWithURL(URL(fileURLWithPath: fsPath) as CFURL, nil),
-           let properties = CGImageSourceCopyPropertiesAtIndex(imageSource, 0, nil) as? [CFString: Any] {
-            if let w = properties[kCGImagePropertyPixelWidth] as? Int,
-               let h = properties[kCGImagePropertyPixelHeight] as? Int {
-                dimensionsStr = "\(w) × \(h) pixels"
+        if let cachedImg = MemoryLRUCache.shared.object(forKey: "full_\(item.id)") {
+            var w = Int(cachedImg.size.width)
+            var h = Int(cachedImg.size.height)
+            if let rep = cachedImg.representations.first {
+                if rep.pixelsWide > 0 && rep.pixelsHigh > 0 {
+                    w = rep.pixelsWide
+                    h = rep.pixelsHigh
+                }
+            }
+            dimensionsStr = "\(w) × \(h) pixels"
+        } else if let archivePath = item.archivePath {
+            let ext = (archivePath as NSString).pathExtension.lowercased()
+            var data: Data? = nil
+            if ext == "zip" {
+                data = ArchiveReader.loadZipData(archivePath: archivePath, entryPath: item.path)
+            } else if ext == "rar" {
+                data = ArchiveReader.loadRarData(archivePath: archivePath, entryPath: item.path)
+            }
+            if let data = data {
+                if sizeBytes == 0 {
+                    sizeBytes = UInt64(data.count)
+                }
+                if let source = CGImageSourceCreateWithData(data as CFData, nil),
+                   let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any] {
+                    if let w = properties[kCGImagePropertyPixelWidth] as? Int,
+                       let h = properties[kCGImagePropertyPixelHeight] as? Int {
+                        dimensionsStr = "\(w) × \(h) pixels"
+                    }
+                }
+            }
+        } else {
+            if let imageSource = CGImageSourceCreateWithURL(URL(fileURLWithPath: item.path) as CFURL, nil),
+               let properties = CGImageSourceCopyPropertiesAtIndex(imageSource, 0, nil) as? [CFString: Any] {
+                if let w = properties[kCGImagePropertyPixelWidth] as? Int,
+                   let h = properties[kCGImagePropertyPixelHeight] as? Int {
+                    dimensionsStr = "\(w) × \(h) pixels"
+                }
             }
         }
+
+        let sizeStr = ByteCountFormatter.string(fromByteCount: Int64(sizeBytes), countStyle: .file)
 
         let container = NSView(frame: NSRect(x: 0, y: 0, width: 550, height: 180))
 
