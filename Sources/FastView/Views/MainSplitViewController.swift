@@ -454,7 +454,7 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
             canvas.objects = []
             for savedObj in savedObjects {
                 if let itemPath = savedObj.itemPath {
-                    let fileItem = FileItem(path: itemPath, name: (itemPath as NSString).lastPathComponent, type: .image, fileSize: 0)
+                    let fileItem = FileItem(id: itemPath, name: (itemPath as NSString).lastPathComponent, path: itemPath, type: .image, fileSize: 0)
                     ThumbnailGenerator.shared.loadFullImage(for: fileItem) { image in
                         guard let image = image else { return }
                         let mode = VisionDetectionMode(rawValue: savedObj.detectionMode) ?? .instanceMask
@@ -569,7 +569,6 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         UserDefaults.standard.set(Double(canvas.alphaGradientPercent), forKey: "FastViewAlphaGradientPercent")
         UserDefaults.standard.set(canvas.showBackground1, forKey: "FastViewShowBackground1")
         UserDefaults.standard.set(canvas.showBackground2, forKey: "FastViewShowBackground2")
-        UserDefaults.standard.set(canvas.fg1OnTop, forKey: "FastViewFG1OnTop")
     }
 
     public func restoreSelectionAndDualState() {
@@ -624,9 +623,6 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
             }
             if UserDefaults.standard.object(forKey: "FastViewShowBackground2") != nil {
                 self.dualCanvasVC.combiningCanvasView.showBackground2 = UserDefaults.standard.bool(forKey: "FastViewShowBackground2")
-            }
-            if UserDefaults.standard.object(forKey: "FastViewFG1OnTop") != nil {
-                self.dualCanvasVC.combiningCanvasView.fg1OnTop = UserDefaults.standard.bool(forKey: "FastViewFG1OnTop")
             }
 
             let isDual = UserDefaults.standard.bool(forKey: "FastViewIsDualViewEnabled")
