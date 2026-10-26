@@ -9,6 +9,9 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
     private var navigationManager1: NavigationManager?
     private var navigationManager2: NavigationManager?
     private let loadQueue = DispatchQueue(label: "com.fastview.directoryload", qos: .userInitiated)
+    // Sibling navigations waiting for their parent listing, by pane: the
+    // accumulated step (left/right presses made meanwhile).
+    private var pendingSiblingSteps: [Int: Int] = [:]
     private var currentDirectoryLoadItem1: DispatchWorkItem?
     private var currentDirectoryLoadItem2: DispatchWorkItem?
     private let lock = NSLock()
@@ -31,7 +34,6 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
 
     private var isRestoringState: Bool = false
     private var lastSelectedInfoPath: String?
-    public private(set) var lastMeasuredSpeedMBs: Double = 25.0
 
     private var wasPreviewHiddenBeforeFullScreen: Bool = false
     private var wasStatusBarHiddenBeforeFullScreen: Bool = false
@@ -668,6 +670,9 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
             cancelAllIOOperations()
         } else {
             cancelIOOperations(forPane: pane)
+            // Opening a location must not wait behind thumbnail I/O for the
+            // previous listing; visible cells re-request their thumbnails.
+            ThumbnailGenerator.shared.cancelAllThumbnailTasks()
         }
 
         let targetSidebar = (pane == 2) ? sidebarContainerVC.sidebarVC2 : sidebarContainerVC.sidebarVC1
@@ -729,12 +734,6 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         let archiveName = archiveURL.lastPathComponent
         let folderName = archiveURL.deletingLastPathComponent().lastPathComponent
 
-        var archiveSize: UInt64 = 0
-        if let attrs = try? FileManager.default.attributesOfItem(atPath: path),
-           let size = attrs[.size] as? UInt64 {
-            archiveSize = size
-        }
-
         let locationTitle: String
         if isArchive {
             if let targetPath = targetSelectedItemPath {
@@ -759,12 +758,12 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
 
         // Draw status bar information immediately
         if pane == 1 {
-            statusBarView.updateDirectoryStats(imageCount: 0, totalSizeBytes: archiveSize, locationName: locationTitle)
+            statusBarView.updateDirectoryStats(imageCount: 0, totalSizeBytes: 0, locationName: locationTitle)
         }
 
         if isArchive && pane == 1 {
             let loadingMessage = String(format: "Opening archive %@...", archiveName)
-            dualCanvasVC.imageView1.showLoading(fileSizeBytes: archiveSize, pastSpeedMBs: lastMeasuredSpeedMBs, statusText: loadingMessage)
+            dualCanvasVC.imageView1.beginLoading(statusText: loadingMessage)
         }
 
         FileLogger.shared.log("DIR_OPEN_START", path: path)
@@ -773,7 +772,20 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         workItem = DispatchWorkItem { [weak self] in
             guard let self = self, !workItem.isCancelled else { return }
 
-            let items = navMgr.contents(isCancelled: { workItem.isCancelled })
+            // stat() off the main thread: on a network volume it can stall
+            // behind in-flight archive reads.
+            let archiveSize = ((try? FileManager.default.attributesOfItem(atPath: path)[.size]) as? NSNumber)?.uint64Value ?? 0
+
+            let listingProgress: LoadProgressHandler? = (isArchive && pane == 1) ? { [weak self] update in
+                DispatchQueue.main.async {
+                    guard let self = self, !workItem.isCancelled else { return }
+                    self.dualCanvasVC.imageView1.updateLoadingProgress(update)
+                }
+            } : nil
+
+            let items = DiskIOGate.shared.perform(.interactive, label: path) {
+                navMgr.contents(progress: listingProgress, isCancelled: { workItem.isCancelled })
+            }
             if workItem.isCancelled { return }
 
             let elapsedTime = (CFAbsoluteTimeGetCurrent() - startTime) * 1000.0
@@ -905,11 +917,17 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         if pane == 1 {
             if item.type == .image {
                 statusBarView.updateImageInfo(item: item, image: nil, currentIndex: currentIndex, totalImages: totalImages, parentName: parentName)
-                if MemoryLRUCache.shared.object(forKey: "full_\(item.id)") == nil {
-                    dualCanvasVC.imageView1.showLoading(fileSizeBytes: item.fileSize, pastSpeedMBs: lastMeasuredSpeedMBs)
+                if let archivePath = item.archivePath {
+                    // The first image of an archive not read yet (e.g. opened
+                    // at launch, its listing cached) waits for the archive read.
+                    let archiveName = (archivePath as NSString).lastPathComponent
+                    dualCanvasVC.imageView1.beginLoading(statusText: "Opening \(archiveName)...")
                 }
             } else if item.type == .archiveZip || item.type == .archiveRar {
                 statusBarView.updateSelectedItemStats(item: item, containedImagesCount: nil, parentName: parentName)
+                // Indexing an archive for the first time can be slow; the
+                // overlay appears only if the scan reports that it is.
+                dualCanvasVC.imageView1.beginLoading(statusText: "Indexing \(item.name)...")
             }
         }
 
@@ -921,19 +939,17 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
             return
         }
 
-        let readStartTime = CFAbsoluteTimeGetCurrent()
+        let isArchive = item.type == .archiveZip || item.type == .archiveRar
+        let loadProgress: LoadProgressHandler? = (pane == 1 && (isArchive || item.archivePath != nil)) ? { [weak self] update in
+            guard let self = self, targetSidebar.selectedItem?.id == item.id else { return }
+            self.dualCanvasVC.imageView1.updateLoadingProgress(update)
+        } : nil
 
-        ThumbnailGenerator.shared.loadFullImage(for: item) { [weak self] image in
+        ThumbnailGenerator.shared.loadFullImage(for: item, progress: loadProgress) { [weak self] image in
             guard let self = self else { return }
             guard targetSidebar.selectedItem?.id == item.id else { return }
 
             if let image = image {
-                let duration = CFAbsoluteTimeGetCurrent() - readStartTime
-                if duration > 0 && item.fileSize > 0 {
-                    let speedMBs = (Double(item.fileSize) / (1024.0 * 1024.0)) / duration
-                    self.lastMeasuredSpeedMBs = (self.lastMeasuredSpeedMBs * 0.7) + (speedMBs * 0.3)
-                }
-
                 if item.type == .image {
                     let key = item.archivePath != nil ? "\(item.archivePath!)#\(item.id)" : item.id
                     SQLiteCache.shared.markImageAsViewed(key: key)
@@ -955,7 +971,16 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
                 }
             }
 
+            if isArchive {
+                // The preview pass also computed the image count.
+                targetSidebar.refreshStatsForSelectedItem()
+            }
+
             targetSidebar.loadVisibleThumbnailsIfIdle()
+            if image != nil, pane == 1 {
+                // Browsing on in the archive should not wait for the disk.
+                ThumbnailGenerator.shared.prefetchFollowingImages(after: item)
+            }
         }
     }
 
@@ -1078,51 +1103,62 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
     }
 
     public func selectPreviousHierarchyItem(pane: Int? = nil) {
-        let p = pane ?? activePane
-        let navMgr = (p == 2) ? navigationManager2 : navigationManager1
-        guard let navMgr = navMgr else { return }
-        cancelAllIOOperations()
-
-        let result = navMgr.navigateUp()
-        let parentLocation = navMgr.currentLocation
-        let parentMgr = NavigationManager(initialLocation: parentLocation)
-        let parentItems = parentMgr.contents()
-
-        if let exitedIdx = parentItems.firstIndex(where: { $0.path == result.exitedItemPath || $0.id == result.exitedItemPath }),
-           exitedIdx > 0 {
-            let prevSibling = parentItems[exitedIdx - 1]
-            if prevSibling.isDirectory || prevSibling.type == .archiveZip || prevSibling.type == .archiveRar {
-                _ = navMgr.navigateTo(prevSibling)
-                reloadDirectoryContentsAsync(pane: p)
-            } else {
-                reloadDirectoryContentsAsync(pane: p, targetSelectedItemPath: prevSibling.path)
-            }
-        } else {
-            reloadDirectoryContentsAsync(pane: p, targetSelectedItemPath: result.exitedItemPath, isNavigatingUp: true)
-        }
+        selectSiblingHierarchyItem(pane: pane, step: -1)
     }
 
     public func selectNextHierarchyItem(pane: Int? = nil) {
+        selectSiblingHierarchyItem(pane: pane, step: 1)
+    }
+
+    /// Moves to the sibling `step` places away from the current location in
+    /// its parent: an archive or folder is opened, a file is selected.
+    ///
+    /// Finding the sibling means listing the parent, possibly a directory
+    /// read on a network volume, so it runs on `loadQueue` (behind the I/O
+    /// gate) with the loading overlay armed.  Presses arriving meanwhile add
+    /// to the step instead of walking further up.
+    private func selectSiblingHierarchyItem(pane: Int?, step: Int) {
         let p = pane ?? activePane
-        let navMgr = (p == 2) ? navigationManager2 : navigationManager1
-        guard let navMgr = navMgr else { return }
+        guard let navMgr = (p == 2) ? navigationManager2 : navigationManager1 else { return }
+
+        if let pending = pendingSiblingSteps[p] {
+            pendingSiblingSteps[p] = pending + step
+            return
+        }
+
         cancelAllIOOperations()
         let result = navMgr.navigateUp()
         let parentLocation = navMgr.currentLocation
-        let parentMgr = NavigationManager(initialLocation: parentLocation)
-        let parentItems = parentMgr.contents()
+        pendingSiblingSteps[p] = step
+        if p == 1 {
+            dualCanvasVC.imageView1.beginLoading(statusText: step > 0 ? "Opening next..." : "Opening previous...")
+        }
 
-        if let exitedIdx = parentItems.firstIndex(where: { $0.path == result.exitedItemPath || $0.id == result.exitedItemPath }),
-           exitedIdx < parentItems.count - 1 {
-            let nextSibling = parentItems[exitedIdx + 1]
-            if nextSibling.isDirectory || nextSibling.type == .archiveZip || nextSibling.type == .archiveRar {
-                _ = navMgr.navigateTo(nextSibling)
-                reloadDirectoryContentsAsync(pane: p)
-            } else {
-                reloadDirectoryContentsAsync(pane: p, targetSelectedItemPath: nextSibling.path)
+        loadQueue.async { [weak self] in
+            let parentItems = DiskIOGate.shared.perform(.interactive, label: parentLocation.physicalPath) {
+                NavigationManager(initialLocation: parentLocation).contents()
             }
-        } else {
-            reloadDirectoryContentsAsync(pane: p, targetSelectedItemPath: result.exitedItemPath, isNavigatingUp: true)
+            DispatchQueue.main.async {
+                guard let self = self, let steps = self.pendingSiblingSteps.removeValue(forKey: p) else { return }
+                guard navMgr.currentLocation == parentLocation else {
+                    // Another navigation happened meanwhile and arms its own overlay.
+                    if p == 1 { self.dualCanvasVC.imageView1.hideLoading() }
+                    return
+                }
+
+                if let exitedIdx = parentItems.firstIndex(where: { $0.path == result.exitedItemPath || $0.id == result.exitedItemPath }),
+                   parentItems.indices.contains(exitedIdx + steps) {
+                    let sibling = parentItems[exitedIdx + steps]
+                    if sibling.isDirectory || sibling.type == .archiveZip || sibling.type == .archiveRar {
+                        _ = navMgr.navigateTo(sibling)
+                        self.reloadDirectoryContentsAsync(pane: p)
+                    } else {
+                        self.reloadDirectoryContentsAsync(pane: p, targetSelectedItemPath: sibling.path)
+                    }
+                } else {
+                    self.reloadDirectoryContentsAsync(pane: p, targetSelectedItemPath: result.exitedItemPath, isNavigatingUp: true)
+                }
+            }
         }
     }
 

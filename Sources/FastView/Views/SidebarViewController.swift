@@ -31,6 +31,10 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
     private let scrollView = NSScrollView()
     private let tableView = CustomTableView()
     private var scrollDebounceTimer: Timer?
+    // Thumbnails are requested only once scrolling has been quiet this long,
+    // so rows that merely scroll past never start (and stop) archive reads.
+    private let thumbnailRefreshDelay: TimeInterval = 0.3
+    private lazy var thumbnailGroup = "sidebar-\(ObjectIdentifier(self).hashValue)"
 
     public var selectedItem: FileItem? {
         let selectedRow = tableView.selectedRow
@@ -161,8 +165,12 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
     }
 
     @objc private func scrollViewDidScroll(_ notification: Notification) {
+        scheduleThumbnailRefresh()
+    }
+
+    private func scheduleThumbnailRefresh() {
         scrollDebounceTimer?.invalidate()
-        scrollDebounceTimer = Timer.scheduledTimer(withTimeInterval: 0.15, repeats: false) { [weak self] _ in
+        scrollDebounceTimer = Timer.scheduledTimer(withTimeInterval: thumbnailRefreshDelay, repeats: false) { [weak self] _ in
             self?.loadVisibleThumbnailsIfIdle()
         }
     }
@@ -189,15 +197,18 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
         }
     }
 
+    /// Drops thumbnail work for rows that are no longer visible (killing a
+    /// running archive read) and requests the visible rows, top to bottom.
+    /// Work for rows that stayed visible keeps running.
     public func loadVisibleThumbnailsIfIdle() {
         let visibleRows = tableView.rows(in: scrollView.contentView.bounds)
-        guard visibleRows.length > 0 else { return }
+        let rows = (visibleRows.location..<NSMaxRange(visibleRows)).filter { $0 >= 0 && $0 < items.count }
 
-        for row in visibleRows.location..<NSMaxRange(visibleRows) {
-            guard row >= 0 && row < items.count else { continue }
-            let item = items[row]
+        ThumbnailGenerator.shared.cancelThumbnailTasks(inGroup: thumbnailGroup, keeping: Set(rows.map { items[$0].id }))
+
+        for row in rows {
             if let cell = tableView.view(atColumn: 0, row: row, makeIfNecessary: false) as? SidebarTableCellView {
-                cell.loadThumbnailIfIdle(for: item)
+                cell.loadThumbnailIfIdle(for: items[row], group: thumbnailGroup)
             }
         }
     }
@@ -275,6 +286,14 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
         }
     }
 
+    public func refreshStatsForSelectedItem() {
+        let selectedRow = tableView.selectedRow
+        if selectedRow >= 0,
+           let cell = tableView.view(atColumn: 0, row: selectedRow, makeIfNecessary: false) as? SidebarTableCellView {
+            cell.refreshStats()
+        }
+    }
+
     public func activateCurrentSelection() {
         let selectedRow = tableView.selectedRow
         guard selectedRow >= 0 && selectedRow < items.count else { return }
@@ -298,6 +317,8 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
         }
 
         cell?.configure(with: item)
+        // Thumbnails for newly shown rows are requested once scrolling settles.
+        scheduleThumbnailRefresh()
         return cell
     }
 
@@ -307,7 +328,7 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
         let selectedItem = items[selectedRow]
 
         if let cell = tableView.view(atColumn: 0, row: selectedRow, makeIfNecessary: false) as? SidebarTableCellView {
-            cell.loadThumbnailOnSelection(for: selectedItem)
+            cell.loadThumbnailOnSelection(for: selectedItem, group: thumbnailGroup)
         }
 
         delegate?.sidebar(self, didSelectItem: selectedItem)
@@ -670,24 +691,14 @@ public class SidebarTableCellView: NSTableCellView {
             return
         }
 
+        // Generating a missing thumbnail is left to the sidebar's debounced
+        // refresh, so scrolling past a row never starts work for it.
         showFilenameTextOnly()
-
-        ThumbnailGenerator.shared.generateThumbnailWithStats(for: item) { [weak self] image, stats in
-            DispatchQueue.main.async {
-                guard let self = self, self.currentItem?.id == item.id else { return }
-                if let img = image {
-                    self.setThumbnailLoaded(img)
-                }
-                if let stats = stats {
-                    self.applyStats(stats)
-                }
-            }
-        }
     }
 
-    public func loadThumbnailIfIdle(for item: FileItem) {
+    public func loadThumbnailIfIdle(for item: FileItem, group: String) {
         guard currentItem?.id == item.id else { return }
-        ThumbnailGenerator.shared.generateThumbnailWithStats(for: item) { [weak self] image, stats in
+        ThumbnailGenerator.shared.generateThumbnailWithStats(for: item, group: group) { [weak self] image, stats in
             DispatchQueue.main.async {
                 guard let self = self, self.currentItem?.id == item.id else { return }
                 if let img = image {
@@ -700,7 +711,7 @@ public class SidebarTableCellView: NSTableCellView {
         }
     }
 
-    public func loadThumbnailOnSelection(for item: FileItem) {
+    public func loadThumbnailOnSelection(for item: FileItem, group: String) {
         guard currentItem?.id == item.id else { return }
 
         let cacheKey = "thumb_\(item.id)_256.0x256.0"
@@ -708,7 +719,7 @@ public class SidebarTableCellView: NSTableCellView {
             FolderStatsCalculator.cancelPendingCountCalculations()
         }
 
-        ThumbnailGenerator.shared.generateThumbnailWithStats(for: item) { [weak self] image, stats in
+        ThumbnailGenerator.shared.generateThumbnailWithStats(for: item, group: group) { [weak self] image, stats in
             DispatchQueue.main.async {
                 guard let self = self, self.currentItem?.id == item.id else { return }
                 if let img = image {
@@ -719,6 +730,11 @@ public class SidebarTableCellView: NSTableCellView {
                 }
             }
         }
+    }
+
+    public func refreshStats() {
+        guard let item = currentItem, let stats = FolderStatsCalculator.cachedStats(for: item) else { return }
+        applyStats(stats)
     }
 
     private func applyStats(_ stats: FolderStats) {

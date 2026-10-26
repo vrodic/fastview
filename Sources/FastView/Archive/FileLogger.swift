@@ -28,4 +28,12 @@ public class FileLogger {
 
         print(msg)
     }
+
+    /// Logs a read of `bytes` with its throughput, e.g. "path | 1.2 GB @ 98.4 MB/s".
+    public func logThroughput(_ operation: String, path: String, bytes: Int64, startTime: CFAbsoluteTime) {
+        let seconds = CFAbsoluteTimeGetCurrent() - startTime
+        let size = ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+        let rate = seconds > 0 ? Double(bytes) / seconds / (1024.0 * 1024.0) : 0
+        log(operation, path: String(format: "%@ | %@ @ %.1f MB/s", path, size, rate), durationMs: seconds * 1000.0)
+    }
 }
