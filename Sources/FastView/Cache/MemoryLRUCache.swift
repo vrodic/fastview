@@ -43,7 +43,6 @@ public class MemoryLRUCache {
 
         guard let entry = cache[key] else { return nil }
         entry.lastAccessed = Date()
-        printCacheStats()
         return entry.image
     }
 
@@ -60,23 +59,15 @@ public class MemoryLRUCache {
         totalCost += cost
 
         evictIfNecessary()
-        printCacheStats()
     }
 
     private func evictIfNecessary() {
-        let effectiveLimit = isLowMemoryMode ? 10 : Int.max
+        let effectiveLimit = isLowMemoryMode ? 50 : Int.max
         while (totalCost > maxMemoryLimit || cache.count > effectiveLimit) && !cache.isEmpty {
             guard let oldest = cache.values.min(by: { $0.lastAccessed < $1.lastAccessed }) else { break }
             cache.removeValue(forKey: oldest.key)
             totalCost -= oldest.cost
         }
-    }
-
-    private func printCacheStats() {
-        let usedMB = Double(totalCost) / (1024.0 * 1024.0)
-        let maxMB = Double(maxMemoryLimit) / (1024.0 * 1024.0)
-        print(String(format: "[CacheStats] Count: %d items | Memory: %.2f MB / %.2f MB (%.1f%%)",
-                     cache.count, usedMB, maxMB, (usedMB / maxMB) * 100.0))
     }
 
     public func clear() {

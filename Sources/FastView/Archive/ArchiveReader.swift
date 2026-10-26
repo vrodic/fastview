@@ -404,8 +404,10 @@ public class ArchiveReader {
             return cached
         }
 
-
         if isCancelled?() == true { return [] }
+
+        let startTime = CFAbsoluteTimeGetCurrent()
+        FileLogger.shared.log("LIST_ZIP_IMAGES_START", path: archivePath)
 
         var items: [FileItem] = []
 
@@ -439,6 +441,8 @@ public class ArchiveReader {
         if isCancelled?() != true {
             DirectoryCache.shared.set(key: cacheKey, items: sorted)
         }
+        let duration = (CFAbsoluteTimeGetCurrent() - startTime) * 1000.0
+        FileLogger.shared.log("LIST_ZIP_IMAGES_END", path: archivePath, durationMs: duration)
         return sorted
     }
 
@@ -544,6 +548,9 @@ public class ArchiveReader {
 
         if isCancelled?() == true { return [] }
 
+        let startTime = CFAbsoluteTimeGetCurrent()
+        FileLogger.shared.log("LIST_RAR_IMAGES_START", path: archivePath)
+
         let result = RarArchiveCache.shared.withArchive(at: archivePath) { archive, entries -> [FileItem]? in
             var list: [FileItem] = []
 
@@ -577,6 +584,8 @@ public class ArchiveReader {
         if isCancelled?() != true {
             DirectoryCache.shared.set(key: cacheKey, items: sorted)
         }
+        let duration = (CFAbsoluteTimeGetCurrent() - startTime) * 1000.0
+        FileLogger.shared.log("LIST_RAR_IMAGES_END", path: archivePath, durationMs: duration)
         return sorted
     }
 

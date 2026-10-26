@@ -47,6 +47,18 @@ private class SelectionOverlayView: NSView {
     }
 }
 
+private class ZoomingScrollView: NSScrollView {
+    weak var ownerImageView: MainImageView?
+
+    override func scrollWheel(with event: NSEvent) {
+        if let owner = ownerImageView, owner.currentImage != nil {
+            owner.handleScrollWheel(with: event)
+        } else {
+            super.scrollWheel(with: event)
+        }
+    }
+}
+
 public class MainImageView: NSView {
     public private(set) var currentImage: NSImage?
     public private(set) var rawImage: NSImage?
@@ -75,8 +87,11 @@ public class MainImageView: NSView {
     private var isDrawingSelection: Bool = false
     public var onRegionSelectedForDetection: ((NSImage) -> Void)?
 
+    private var isDraggingImage: Bool = false
+    private var lastDragLocation: NSPoint = .zero
+
     private let imageView = NSImageView()
-    private let scrollView = NSScrollView()
+    private let scrollView = ZoomingScrollView()
     private let selectionOverlayView = SelectionOverlayView()
 
     private let loadingContainerView = NSView()
@@ -102,6 +117,7 @@ public class MainImageView: NSView {
         wantsLayer = true
         layer?.backgroundColor = NSColor.black.cgColor
 
+        scrollView.ownerImageView = self
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         scrollView.hasVerticalScroller = true
         scrollView.hasHorizontalScroller = true
@@ -305,6 +321,35 @@ public class MainImageView: NSView {
         updateLayout()
     }
 
+    public func handleScrollWheel(with event: NSEvent) {
+        guard currentImage != nil, bounds.width > 0 && bounds.height > 0 else { return }
+
+        let deltaY = event.hasPreciseScrollingDeltas ? event.scrollingDeltaY : event.deltaY
+        guard abs(deltaY) > 0.01 else { return }
+
+        let currentMag = scrollView.magnification
+        let factor: CGFloat = event.hasPreciseScrollingDeltas ? 0.008 : 0.04
+        let targetMag = currentMag * (1.0 + deltaY * factor)
+
+        if targetMag <= 1.001 {
+            resetZoomToFit()
+        } else {
+            let clampedMag = min(scrollView.maxMagnification, max(1.0, targetMag))
+            if clampedMag <= 1.001 {
+                resetZoomToFit()
+            } else {
+                zoomMode = .custom(clampedMag)
+                scrollView.hasHorizontalScroller = true
+                scrollView.hasVerticalScroller = true
+                imageView.frame = NSRect(origin: .zero, size: bounds.size)
+
+                let mouseInScrollView = scrollView.convert(event.locationInWindow, from: nil)
+                scrollView.setMagnification(clampedMag, centeredAt: mouseInScrollView)
+                window?.invalidateCursorRects(for: self)
+            }
+        }
+    }
+
     override public func menu(for event: NSEvent) -> NSMenu? {
         guard let img = currentImage else { return super.menu(for: event) }
         let menu = NSMenu(title: "Main Image Menu")
@@ -342,6 +387,14 @@ public class MainImageView: NSView {
             updateOverlay()
             return
         }
+
+        if scrollView.magnification > 1.001 {
+            isDraggingImage = true
+            lastDragLocation = event.locationInWindow
+            NSCursor.closedHand.set()
+            return
+        }
+
         super.mouseDown(with: event)
     }
 
@@ -352,6 +405,24 @@ public class MainImageView: NSView {
             updateOverlay()
             return
         }
+
+        if isDraggingImage {
+            let currentLocation = event.locationInWindow
+            let deltaX = currentLocation.x - lastDragLocation.x
+            let deltaY = currentLocation.y - lastDragLocation.y
+            lastDragLocation = currentLocation
+
+            let clipView = scrollView.contentView
+            var newOrigin = clipView.bounds.origin
+            newOrigin.x -= deltaX
+            newOrigin.y -= deltaY
+
+            clipView.scroll(to: newOrigin)
+            scrollView.reflectScrolledClipView(clipView)
+            NSCursor.closedHand.set()
+            return
+        }
+
         super.mouseDragged(with: event)
     }
 
@@ -363,7 +434,26 @@ public class MainImageView: NSView {
             processFreehandSelection()
             return
         }
+
+        if isDraggingImage {
+            isDraggingImage = false
+            if scrollView.magnification > 1.001 {
+                NSCursor.openHand.set()
+            } else {
+                NSCursor.arrow.set()
+            }
+            return
+        }
+
         super.mouseUp(with: event)
+    }
+
+    override public func resetCursorRects() {
+        super.resetCursorRects()
+        if !isFreehandSelectionMode && scrollView.magnification > 1.001 {
+            let cursor: NSCursor = isDraggingImage ? .closedHand : .openHand
+            addCursorRect(bounds, cursor: cursor)
+        }
     }
 
     private func processFreehandSelection() {
@@ -458,9 +548,33 @@ public class MainImageView: NSView {
     }
 
     public func setActualSize() {
-        zoomMode = .actualSize
-        scrollView.magnification = 1.0
-        updateLayout()
+        guard let img = currentImage, bounds.width > 0, bounds.height > 0 else {
+            zoomMode = .actualSize
+            scrollView.magnification = 1.0
+            updateLayout()
+            return
+        }
+
+        let imgSize = img.size
+        let aspect = imgSize.width / max(1.0, imgSize.height)
+        var fitW = bounds.width
+        var fitH = fitW / aspect
+        if fitH > bounds.height {
+            fitH = bounds.height
+            fitW = fitH * aspect
+        }
+
+        let actualMag = max(1.0, imgSize.width / max(1.0, fitW))
+        if actualMag <= 1.001 {
+            resetZoomToFit()
+        } else {
+            zoomMode = .actualSize
+            scrollView.hasHorizontalScroller = true
+            scrollView.hasVerticalScroller = true
+            imageView.frame = NSRect(origin: .zero, size: bounds.size)
+            scrollView.setMagnification(actualMag, centeredAt: NSPoint(x: bounds.midX, y: bounds.midY))
+            window?.invalidateCursorRects(for: self)
+        }
     }
 
     override public func setFrameSize(_ newSize: NSSize) {

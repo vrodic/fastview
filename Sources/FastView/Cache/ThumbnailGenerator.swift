@@ -71,17 +71,25 @@ public class ThumbnailGenerator {
     }
 
     public func generateThumbnail(for item: FileItem, targetSize: CGSize = CGSize(width: 256, height: 256), completion: @escaping (NSImage?) -> Void) {
+        generateThumbnailWithStats(for: item, targetSize: targetSize) { img, _ in
+            completion(img)
+        }
+    }
+
+    public func generateThumbnailWithStats(for item: FileItem, targetSize: CGSize = CGSize(width: 256, height: 256), completion: @escaping (NSImage?, FolderStats?) -> Void) {
         let cacheKey = "thumb_\(item.id)_\(targetSize.width)x\(targetSize.height)"
 
-        if let cached = MemoryLRUCache.shared.object(forKey: cacheKey) {
-            completion(cached)
+        let cachedImg = MemoryLRUCache.shared.object(forKey: cacheKey)
+        let cachedStats = FolderStatsCalculator.cachedStats(for: item)
+
+        if let cached = cachedImg {
+            completion(cached, cachedStats)
             return
         }
 
         let opKey = "thumb_\(item.id)"
 
         lock.lock()
-        // If a thumbnail operation for this item is already in flight, let it complete
         if let existing = activeOperations[opKey], !existing.isFinished, !existing.isCancelled {
             lock.unlock()
             return
@@ -91,21 +99,40 @@ public class ThumbnailGenerator {
         op.addExecutionBlock { [weak self, weak op] in
             guard let self = self, let currentOp = op, !currentOp.isCancelled else { return }
 
+            let startTime = CFAbsoluteTimeGetCurrent()
+            FileLogger.shared.log("THUMB_GENERATE_START", path: item.path)
+
+            var stats: FolderStats? = cachedStats
+            if stats == nil && (item.isDirectory || item.type == .archiveZip || item.type == .archiveRar) {
+                let statsStart = CFAbsoluteTimeGetCurrent()
+                FileLogger.shared.log("COUNT_GENERATE_START", path: item.path)
+                stats = FolderStatsCalculator.stats(for: item, isCancelled: { currentOp.isCancelled })
+                let statsDuration = (CFAbsoluteTimeGetCurrent() - statsStart) * 1000.0
+                FileLogger.shared.log("COUNT_GENERATE_END", path: item.path, durationMs: statsDuration)
+            }
+
+            if currentOp.isCancelled { return }
+
             guard let cgImage = self.loadAndScaleCGImage(for: item, targetSize: targetSize, isCancelled: { currentOp.isCancelled }) else {
+                let duration = (CFAbsoluteTimeGetCurrent() - startTime) * 1000.0
+                FileLogger.shared.log("THUMB_GENERATE_END", path: item.path, durationMs: duration)
                 DispatchQueue.main.async {
-                    if !currentOp.isCancelled { completion(nil) }
+                    if !currentOp.isCancelled { completion(nil, stats) }
                 }
                 return
             }
 
             if currentOp.isCancelled { return }
 
+            let duration = (CFAbsoluteTimeGetCurrent() - startTime) * 1000.0
+            FileLogger.shared.log("THUMB_GENERATE_END", path: item.path, durationMs: duration)
+
             DispatchQueue.main.async {
                 if !currentOp.isCancelled {
                     let image = NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
                     let cost = Int(cgImage.width * cgImage.height * 4)
                     MemoryLRUCache.shared.setObject(image, forKey: cacheKey, cost: cost)
-                    completion(image)
+                    completion(image, stats)
                 }
             }
         }
@@ -113,8 +140,6 @@ public class ThumbnailGenerator {
         activeOperations[opKey] = op
         lock.unlock()
 
-        // Thumbnail ops go on the background queue so they never block the
-        // priority queue that loads the full selected image.
         thumbnailQueue.addOperation(op)
     }
 
@@ -260,6 +285,9 @@ public class ThumbnailGenerator {
         op.addExecutionBlock { [weak self, weak op] in
             guard let self = self, let currentOp = op, !currentOp.isCancelled else { return }
 
+            let startTime = CFAbsoluteTimeGetCurrent()
+            FileLogger.shared.log("FULL_IMAGE_LOAD_START", path: item.path)
+
             var targetItem = item
             if item.type == .archiveZip || item.type == .archiveRar || item.isDirectory {
                 if let peeked = self.peekFirstImage(in: item) {
@@ -291,12 +319,17 @@ public class ThumbnailGenerator {
             }
 
             guard let data = imageData, !currentOp.isCancelled else {
+                let duration = (CFAbsoluteTimeGetCurrent() - startTime) * 1000.0
+                FileLogger.shared.log("FULL_IMAGE_LOAD_END", path: item.path, durationMs: duration)
                 DispatchQueue.main.async {
                     self.setMainImageLoading(false)
                     completion(nil)
                 }
                 return
             }
+
+            let duration = (CFAbsoluteTimeGetCurrent() - startTime) * 1000.0
+            FileLogger.shared.log("FULL_IMAGE_LOAD_END", path: item.path, durationMs: duration)
 
             DispatchQueue.main.async {
                 self.setMainImageLoading(false)

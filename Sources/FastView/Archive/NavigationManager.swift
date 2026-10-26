@@ -55,7 +55,9 @@ public class NavigationManager {
         }
     }
 
-    public func contents() -> [FileItem] {
+    public func contents(isCancelled: (() -> Bool)? = nil) -> [FileItem] {
+        if isCancelled?() == true { return [] }
+
         let key = currentLocation.cacheKey
         if let cached = SQLiteCache.shared.getDirectoryContents(key: key) {
             let hasContent = cached.contains { $0.type == .image || $0.type == .directory || $0.type == .archiveZip || $0.type == .archiveRar }
@@ -72,9 +74,9 @@ public class NavigationManager {
             let subfolder = currentLocation.archiveSubfolder ?? ""
             let archiveItems: [FileItem]
             if currentLocation.archiveType == .archiveZip {
-                archiveItems = ArchiveReader.listZipContents(archivePath: currentLocation.physicalPath, subfolder: subfolder)
+                archiveItems = ArchiveReader.listZipContents(archivePath: currentLocation.physicalPath, subfolder: subfolder, isCancelled: isCancelled)
             } else {
-                archiveItems = ArchiveReader.listRarContents(archivePath: currentLocation.physicalPath, subfolder: subfolder)
+                archiveItems = ArchiveReader.listRarContents(archivePath: currentLocation.physicalPath, subfolder: subfolder, isCancelled: isCancelled)
             }
             results.append(contentsOf: archiveItems)
         } else {

@@ -211,7 +211,11 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
     }
 
     public func loadLocation(_ location: NavigationLocation, pane: Int = 1, targetSelectedItemPath: String? = nil) {
-        cancelIOOperations(forPane: pane)
+        if location.isArchive {
+            cancelAllIOOperations()
+        } else {
+            cancelIOOperations(forPane: pane)
+        }
         if pane == 1 {
             navigationManager1 = NavigationManager(initialLocation: location)
             reloadDirectoryContentsAsync(pane: 1, targetSelectedItemPath: targetSelectedItemPath)
@@ -659,7 +663,12 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
     }
 
     private func reloadDirectoryContentsAsync(pane: Int = 1, targetSelectedItemPath: String? = nil, isNavigatingUp: Bool = false) {
-        cancelIOOperations(forPane: pane)
+        let navMgrCheck = (pane == 2) ? navigationManager2 : navigationManager1
+        if navMgrCheck?.currentLocation.isArchive == true {
+            cancelAllIOOperations()
+        } else {
+            cancelIOOperations(forPane: pane)
+        }
 
         let targetSidebar = (pane == 2) ? sidebarContainerVC.sidebarVC2 : sidebarContainerVC.sidebarVC1
         let navMgr = (pane == 2) ? navigationManager2 : navigationManager1
@@ -764,7 +773,7 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         workItem = DispatchWorkItem { [weak self] in
             guard let self = self, !workItem.isCancelled else { return }
 
-            let items = navMgr.contents()
+            let items = navMgr.contents(isCancelled: { workItem.isCancelled })
             if workItem.isCancelled { return }
 
             let elapsedTime = (CFAbsoluteTimeGetCurrent() - startTime) * 1000.0
