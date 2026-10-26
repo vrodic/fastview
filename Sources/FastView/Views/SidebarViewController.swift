@@ -654,45 +654,8 @@ public class SidebarTableCellView: NSTableCellView {
             archiveNameContainer.isHidden = true
         }
 
-        if item.isDirectory || item.type == .archiveZip || item.type == .archiveRar {
-            if let stats = FolderStatsCalculator.cachedStats(for: item) {
-                if !stats.badgeString.isEmpty {
-                    statsBadgeLabel.stringValue = stats.badgeString
-                    statsBadgeContainer.isHidden = false
-                } else {
-                    statsBadgeContainer.isHidden = true
-                }
-                if !stats.favoriteBadgeString.isEmpty {
-                    favoriteCountLabel.stringValue = stats.favoriteBadgeString
-                    favoriteCountContainer.isHidden = false
-                } else {
-                    favoriteCountContainer.isHidden = true
-                }
-            } else {
-                statsBadgeContainer.isHidden = true
-                favoriteCountContainer.isHidden = true
-                let op = BlockOperation()
-                op.addExecutionBlock { [weak op, weak self] in
-                    guard let currentOp = op, !currentOp.isCancelled else { return }
-                    let stats = FolderStatsCalculator.stats(for: item, isCancelled: { currentOp.isCancelled })
-                    DispatchQueue.main.async {
-                        guard let self = self, self.currentItem?.id == item.id, !currentOp.isCancelled else { return }
-                        if let stats = stats, !stats.badgeString.isEmpty {
-                            self.statsBadgeLabel.stringValue = stats.badgeString
-                            self.statsBadgeContainer.isHidden = false
-                        } else {
-                            self.statsBadgeContainer.isHidden = true
-                        }
-                        if let stats = stats, !stats.favoriteBadgeString.isEmpty {
-                            self.favoriteCountLabel.stringValue = stats.favoriteBadgeString
-                            self.favoriteCountContainer.isHidden = false
-                        } else {
-                            self.favoriteCountContainer.isHidden = true
-                        }
-                    }
-                }
-                FolderStatsCalculator.statsQueue.addOperation(op)
-            }
+        if let stats = FolderStatsCalculator.cachedStats(for: item) {
+            applyStats(stats)
         } else {
             statsBadgeContainer.isHidden = true
             favoriteCountContainer.isHidden = true
@@ -709,13 +672,14 @@ public class SidebarTableCellView: NSTableCellView {
 
         showFilenameTextOnly()
 
-        if item.type == .image {
-            ThumbnailGenerator.shared.generateThumbnail(for: item) { [weak self] image in
-                DispatchQueue.main.async {
-                    guard let self = self, self.currentItem?.id == item.id else { return }
-                    if let img = image {
-                        self.setThumbnailLoaded(img)
-                    }
+        ThumbnailGenerator.shared.generateThumbnailWithStats(for: item) { [weak self] image, stats in
+            DispatchQueue.main.async {
+                guard let self = self, self.currentItem?.id == item.id else { return }
+                if let img = image {
+                    self.setThumbnailLoaded(img)
+                }
+                if let stats = stats {
+                    self.applyStats(stats)
                 }
             }
         }
@@ -723,31 +687,14 @@ public class SidebarTableCellView: NSTableCellView {
 
     public func loadThumbnailIfIdle(for item: FileItem) {
         guard currentItem?.id == item.id else { return }
-        ThumbnailGenerator.shared.generateThumbnail(for: item) { [weak self] image in
+        ThumbnailGenerator.shared.generateThumbnailWithStats(for: item) { [weak self] image, stats in
             DispatchQueue.main.async {
                 guard let self = self, self.currentItem?.id == item.id else { return }
                 if let img = image {
                     self.setThumbnailLoaded(img)
                 }
-            }
-        }
-        if item.isDirectory || item.type == .archiveZip || item.type == .archiveRar {
-            DispatchQueue.global(qos: .utility).async {
-                let stats = FolderStatsCalculator.stats(for: item)
-                DispatchQueue.main.async { [weak self] in
-                    guard let self = self, self.currentItem?.id == item.id else { return }
-                    if let stats = stats, !stats.badgeString.isEmpty {
-                        self.statsBadgeLabel.stringValue = stats.badgeString
-                        self.statsBadgeContainer.isHidden = false
-                    } else {
-                        self.statsBadgeContainer.isHidden = true
-                    }
-                    if let stats = stats, !stats.favoriteBadgeString.isEmpty {
-                        self.favoriteCountLabel.stringValue = stats.favoriteBadgeString
-                        self.favoriteCountContainer.isHidden = false
-                    } else {
-                        self.favoriteCountContainer.isHidden = true
-                    }
+                if let stats = stats {
+                    self.applyStats(stats)
                 }
             }
         }
@@ -758,37 +705,34 @@ public class SidebarTableCellView: NSTableCellView {
 
         let cacheKey = "thumb_\(item.id)_256.0x256.0"
         if (item.type == .archiveZip || item.type == .archiveRar) && MemoryLRUCache.shared.object(forKey: cacheKey) == nil {
-            // Cancel pending count calculations if selected archive does not have a cached thumbnail
             FolderStatsCalculator.cancelPendingCountCalculations()
         }
 
-        ThumbnailGenerator.shared.generateThumbnail(for: item) { [weak self] image in
+        ThumbnailGenerator.shared.generateThumbnailWithStats(for: item) { [weak self] image, stats in
             DispatchQueue.main.async {
                 guard let self = self, self.currentItem?.id == item.id else { return }
                 if let img = image {
                     self.setThumbnailLoaded(img)
                 }
-            }
-        }
-        if item.isDirectory || item.type == .archiveZip || item.type == .archiveRar {
-            DispatchQueue.global(qos: .utility).async {
-                let stats = FolderStatsCalculator.stats(for: item)
-                DispatchQueue.main.async { [weak self] in
-                    guard let self = self, self.currentItem?.id == item.id else { return }
-                    if let stats = stats, !stats.badgeString.isEmpty {
-                        self.statsBadgeLabel.stringValue = stats.badgeString
-                        self.statsBadgeContainer.isHidden = false
-                    } else {
-                        self.statsBadgeContainer.isHidden = true
-                    }
-                    if let stats = stats, !stats.favoriteBadgeString.isEmpty {
-                        self.favoriteCountLabel.stringValue = stats.favoriteBadgeString
-                        self.favoriteCountContainer.isHidden = false
-                    } else {
-                        self.favoriteCountContainer.isHidden = true
-                    }
+                if let stats = stats {
+                    self.applyStats(stats)
                 }
             }
+        }
+    }
+
+    private func applyStats(_ stats: FolderStats) {
+        if !stats.badgeString.isEmpty {
+            statsBadgeLabel.stringValue = stats.badgeString
+            statsBadgeContainer.isHidden = false
+        } else {
+            statsBadgeContainer.isHidden = true
+        }
+        if !stats.favoriteBadgeString.isEmpty {
+            favoriteCountLabel.stringValue = stats.favoriteBadgeString
+            favoriteCountContainer.isHidden = false
+        } else {
+            favoriteCountContainer.isHidden = true
         }
     }
 
