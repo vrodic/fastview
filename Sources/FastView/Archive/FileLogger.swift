@@ -13,11 +13,22 @@ public class FileLogger {
         lock.lock()
         defer { lock.unlock() }
 
+        let isArchiveOp = operation.contains("ZIP") || operation.contains("RAR") || operation.contains("ARCHIVE") || path.lowercased().hasSuffix(".zip") || path.lowercased().hasSuffix(".rar")
+        guard isArchiveOp else { return }
+
         let timestamp = formatter.string(from: Date())
+        var msg: String
         if let ms = durationMs {
-            print(String(format: "[FileOp %@] %@ | %@ | %.2f ms", timestamp, operation, path, ms))
+            let sec = ms / 1000.0
+            msg = String(format: "[ArchiveOp %@] %@ | %@ | %.2f ms (%.2fs)", timestamp, operation, path, ms, sec)
+            if ms >= 1000.0 {
+                // Mark operations over 1 sec in red using ANSI escape code
+                msg = "\u{001B}[31m\(msg)\u{001B}[0m"
+            }
         } else {
-            print("[FileOp \(timestamp)] \(operation) | \(path)")
+            msg = "[ArchiveOp \(timestamp)] \(operation) | \(path)"
         }
+
+        print(msg)
     }
 }

@@ -488,6 +488,8 @@ public class SidebarTableCellView: NSTableCellView {
     private let statsBadgeLabel = NSTextField(labelWithString: "")
     private let favoriteCountContainer = NSView()
     private let favoriteCountLabel = NSTextField(labelWithString: "")
+    private let archiveNameContainer = NSView()
+    private let archiveNameLabel = NSTextField(labelWithString: "")
     private var currentItem: FileItem?
 
     override public init(frame frameRect: NSRect) {
@@ -560,11 +562,27 @@ public class SidebarTableCellView: NSTableCellView {
 
         favoriteCountContainer.addSubview(favoriteCountLabel)
 
+        archiveNameContainer.translatesAutoresizingMaskIntoConstraints = false
+        archiveNameContainer.wantsLayer = true
+        archiveNameContainer.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.75).cgColor
+        archiveNameContainer.layer?.cornerRadius = 4
+        archiveNameContainer.layer?.zPosition = 10
+        archiveNameContainer.isHidden = true
+
+        archiveNameLabel.translatesAutoresizingMaskIntoConstraints = false
+        archiveNameLabel.font = NSFont.systemFont(ofSize: 10, weight: .bold)
+        archiveNameLabel.textColor = NSColor.white
+        archiveNameLabel.lineBreakMode = .byTruncatingMiddle
+        archiveNameLabel.maximumNumberOfLines = 1
+
+        archiveNameContainer.addSubview(archiveNameLabel)
+
         addSubview(thumbnailImageView)
         addSubview(nameLabel)
         addSubview(typeBadge)
         addSubview(favoriteBadge)
         addSubview(statsBadgeContainer)
+        addSubview(archiveNameContainer)
         addSubview(favoriteCountContainer)
 
         NSLayoutConstraint.activate([
@@ -595,8 +613,17 @@ public class SidebarTableCellView: NSTableCellView {
             statsBadgeLabel.topAnchor.constraint(equalTo: statsBadgeContainer.topAnchor, constant: 2),
             statsBadgeLabel.bottomAnchor.constraint(equalTo: statsBadgeContainer.bottomAnchor, constant: -2),
 
+            archiveNameContainer.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
+            archiveNameContainer.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
+            archiveNameContainer.trailingAnchor.constraint(lessThanOrEqualTo: statsBadgeContainer.leadingAnchor, constant: -8),
+
+            archiveNameLabel.leadingAnchor.constraint(equalTo: archiveNameContainer.leadingAnchor, constant: 5),
+            archiveNameLabel.trailingAnchor.constraint(equalTo: archiveNameContainer.trailingAnchor, constant: -5),
+            archiveNameLabel.topAnchor.constraint(equalTo: archiveNameContainer.topAnchor, constant: 2),
+            archiveNameLabel.bottomAnchor.constraint(equalTo: archiveNameContainer.bottomAnchor, constant: -2),
+
             favoriteCountContainer.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
-            favoriteCountContainer.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
+            favoriteCountContainer.bottomAnchor.constraint(equalTo: archiveNameContainer.topAnchor, constant: -4),
 
             favoriteCountLabel.leadingAnchor.constraint(equalTo: favoriteCountContainer.leadingAnchor, constant: 5),
             favoriteCountLabel.trailingAnchor.constraint(equalTo: favoriteCountContainer.trailingAnchor, constant: -5),
@@ -620,6 +647,13 @@ public class SidebarTableCellView: NSTableCellView {
             typeBadge.isHidden = true
         }
 
+        if item.type == .archiveZip || item.type == .archiveRar {
+            archiveNameLabel.stringValue = item.name
+            archiveNameContainer.isHidden = false
+        } else {
+            archiveNameContainer.isHidden = true
+        }
+
         if item.isDirectory || item.type == .archiveZip || item.type == .archiveRar {
             if let stats = FolderStatsCalculator.cachedStats(for: item) {
                 if !stats.badgeString.isEmpty {
@@ -637,10 +671,12 @@ public class SidebarTableCellView: NSTableCellView {
             } else {
                 statsBadgeContainer.isHidden = true
                 favoriteCountContainer.isHidden = true
-                DispatchQueue.global(qos: .utility).async {
-                    let stats = FolderStatsCalculator.stats(for: item)
-                    DispatchQueue.main.async { [weak self] in
-                        guard let self = self, self.currentItem?.id == item.id else { return }
+                let op = BlockOperation()
+                op.addExecutionBlock { [weak op, weak self] in
+                    guard let currentOp = op, !currentOp.isCancelled else { return }
+                    let stats = FolderStatsCalculator.stats(for: item, isCancelled: { currentOp.isCancelled })
+                    DispatchQueue.main.async {
+                        guard let self = self, self.currentItem?.id == item.id, !currentOp.isCancelled else { return }
                         if let stats = stats, !stats.badgeString.isEmpty {
                             self.statsBadgeLabel.stringValue = stats.badgeString
                             self.statsBadgeContainer.isHidden = false
@@ -655,6 +691,7 @@ public class SidebarTableCellView: NSTableCellView {
                         }
                     }
                 }
+                FolderStatsCalculator.statsQueue.addOperation(op)
             }
         } else {
             statsBadgeContainer.isHidden = true
@@ -719,6 +756,12 @@ public class SidebarTableCellView: NSTableCellView {
 
     public func loadThumbnailOnSelection(for item: FileItem) {
         guard currentItem?.id == item.id else { return }
+
+        let cacheKey = "thumb_\(item.id)_256.0x256.0"
+        if (item.type == .archiveZip || item.type == .archiveRar) && MemoryLRUCache.shared.object(forKey: cacheKey) == nil {
+            // Cancel pending count calculations if selected archive does not have a cached thumbnail
+            FolderStatsCalculator.cancelPendingCountCalculations()
+        }
 
         ThumbnailGenerator.shared.generateThumbnail(for: item) { [weak self] image in
             DispatchQueue.main.async {

@@ -48,6 +48,14 @@ public struct FolderStats {
 }
 
 public enum FolderStatsCalculator {
+    public static let statsQueue: OperationQueue = {
+        let q = OperationQueue()
+        q.name = "com.fastview.statsqueue"
+        q.maxConcurrentOperationCount = 1
+        q.qualityOfService = .utility
+        return q
+    }()
+
     private struct CachedFolderData {
         let imageKeys: [String]
         let isComplete: Bool
@@ -56,7 +64,12 @@ public enum FolderStatsCalculator {
     private static var folderStatsCache = [String: CachedFolderData]()
     private static let cacheLock = NSLock()
 
+    public static func cancelPendingCountCalculations() {
+        statsQueue.cancelAllOperations()
+    }
+
     public static func clearCache() {
+        cancelPendingCountCalculations()
         cacheLock.lock()
         folderStatsCache.removeAll()
         cacheLock.unlock()
@@ -87,10 +100,12 @@ public enum FolderStatsCalculator {
         return FolderStats(totalImages: total, isComplete: cached.isComplete, viewedPercentage: percentage, favoriteCount: favCount)
     }
 
-    public static func stats(for item: FileItem) -> FolderStats? {
+    public static func stats(for item: FileItem, isCancelled: (() -> Bool)? = nil) -> FolderStats? {
         if let fast = cachedStats(for: item) {
             return fast
         }
+
+        if isCancelled?() == true { return nil }
 
         guard item.isDirectory || item.type == .archiveZip || item.type == .archiveRar else {
             return nil
@@ -100,11 +115,11 @@ public enum FolderStatsCalculator {
         var isComplete = true
 
         if item.type == .archiveZip {
-            let entries = ArchiveReader.listAllZipImages(archivePath: item.path)
+            let entries = ArchiveReader.listAllZipImages(archivePath: item.path, isCancelled: isCancelled)
             imageKeys = entries.map { "\(item.path)#\($0.id)" }
             isComplete = true
         } else if item.type == .archiveRar {
-            let entries = ArchiveReader.listAllRarImages(archivePath: item.path)
+            let entries = ArchiveReader.listAllRarImages(archivePath: item.path, isCancelled: isCancelled)
             imageKeys = entries.map { "\(item.path)#\($0.id)" }
             isComplete = true
         } else if item.isDirectory {
