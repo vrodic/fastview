@@ -22,6 +22,10 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     public func applicationDidFinishLaunching(_ notification: Notification) {
+        let appIcon = AppIconGenerator.generateAppIcon()
+        NSApp.applicationIconImage = appIcon
+        AppIconGenerator.saveAppIconPNG(to: "AppIcon.png")
+
         setupMenuBar()
 
         let initialPath = getInitialPath()
