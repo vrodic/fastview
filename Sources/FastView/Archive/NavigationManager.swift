@@ -55,7 +55,9 @@ public class NavigationManager {
         }
     }
 
-    public func contents(isCancelled: (() -> Bool)? = nil) -> [FileItem] {
+    /// `progress` reports archive listing progress (from the background
+    /// thread); `isCancelled` aborts an in-flight archive scan.
+    public func contents(progress: LoadProgressHandler? = nil, isCancelled: (() -> Bool)? = nil) -> [FileItem] {
         if isCancelled?() == true { return [] }
 
         let key = currentLocation.cacheKey
@@ -74,10 +76,12 @@ public class NavigationManager {
             let subfolder = currentLocation.archiveSubfolder ?? ""
             let archiveItems: [FileItem]
             if currentLocation.archiveType == .archiveZip {
-                archiveItems = ArchiveReader.listZipContents(archivePath: currentLocation.physicalPath, subfolder: subfolder, isCancelled: isCancelled)
+                archiveItems = ArchiveReader.listZipContents(archivePath: currentLocation.physicalPath, subfolder: subfolder, progress: progress, isCancelled: isCancelled)
             } else {
-                archiveItems = ArchiveReader.listRarContents(archivePath: currentLocation.physicalPath, subfolder: subfolder, isCancelled: isCancelled)
+                archiveItems = ArchiveReader.listRarContents(archivePath: currentLocation.physicalPath, subfolder: subfolder, progress: progress, isCancelled: isCancelled)
             }
+            // A cancelled scan returns a partial (empty) list; don't cache it.
+            if isCancelled?() == true { return results }
             results.append(contentsOf: archiveItems)
         } else {
             let fm = FileManager.default

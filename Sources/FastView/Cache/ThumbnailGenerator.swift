@@ -1,6 +1,7 @@
 import Foundation
 import AppKit
 import ImageIO
+import FastViewArchiveCore
 
 public class ThumbnailGenerator {
     public static let shared = ThumbnailGenerator()
@@ -30,6 +31,9 @@ public class ThumbnailGenerator {
 
     // Tracks in-flight ops by their opKey so duplicates can be cancelled.
     private var activeOperations = [String: Operation]()
+    // Requester group of each thumbnail op (one per sidebar), so a sidebar
+    // can drop the work for rows it no longer shows.
+    private var thumbnailGroups = [String: String]()
     private let lock = NSLock()
     public private(set) var isLoadingMainImage: Bool = false
 
@@ -39,6 +43,7 @@ public class ThumbnailGenerator {
         priorityQueue.cancelAllOperations()
         thumbnailQueue.cancelAllOperations()
         activeOperations.removeAll()
+        thumbnailGroups.removeAll()
         isLoadingMainImage = false
         lock.unlock()
     }
@@ -61,6 +66,7 @@ public class ThumbnailGenerator {
         // Remove thumbnail keys from the tracking dict so stale completions
         // are never delivered.
         activeOperations = activeOperations.filter { $0.key.hasPrefix("full_") }
+        thumbnailGroups.removeAll()
         lock.unlock()
     }
 
@@ -76,7 +82,22 @@ public class ThumbnailGenerator {
         }
     }
 
-    public func generateThumbnailWithStats(for item: FileItem, targetSize: CGSize = CGSize(width: 256, height: 256), completion: @escaping (NSImage?, FolderStats?) -> Void) {
+    /// Cancels queued and running thumbnail ops requested by `group` except
+    /// those for `keepIDs`.  A running archive read is killed; the bytes it
+    /// already read are kept, so a later request for it resumes.
+    public func cancelThumbnailTasks(inGroup group: String, keeping keepIDs: Set<String>) {
+        lock.lock()
+        defer { lock.unlock() }
+        let dropped = thumbnailGroups.filter { opKey, opGroup in
+            opGroup == group && !keepIDs.contains(String(opKey.dropFirst("thumb_".count)))
+        }.keys
+        for opKey in dropped {
+            activeOperations.removeValue(forKey: opKey)?.cancel()
+            thumbnailGroups.removeValue(forKey: opKey)
+        }
+    }
+
+    public func generateThumbnailWithStats(for item: FileItem, targetSize: CGSize = CGSize(width: 256, height: 256), group: String? = nil, completion: @escaping (NSImage?, FolderStats?) -> Void) {
         let cacheKey = "thumb_\(item.id)_\(targetSize.width)x\(targetSize.height)"
 
         let cachedImg = MemoryLRUCache.shared.object(forKey: cacheKey)
@@ -97,49 +118,117 @@ public class ThumbnailGenerator {
 
         let op = BlockOperation()
         op.addExecutionBlock { [weak self, weak op] in
-            guard let self = self, let currentOp = op, !currentOp.isCancelled else { return }
+            // Thumbnails yield to interactive I/O and never run alongside it.
+            DiskIOGate.shared.perform(.background, label: item.path) {
+                guard let self = self, let currentOp = op, !currentOp.isCancelled else { return }
 
-            let startTime = CFAbsoluteTimeGetCurrent()
-            FileLogger.shared.log("THUMB_GENERATE_START", path: item.path)
+                // Stop as soon as foreground I/O is waiting; the visible
+                // thumbnails are requested again once it has finished.
+                let shouldStop = { currentOp.isCancelled || DiskIOGate.shared.hasInteractiveWaiting }
 
-            var stats: FolderStats? = cachedStats
-            if stats == nil && (item.isDirectory || item.type == .archiveZip || item.type == .archiveRar) {
-                let statsStart = CFAbsoluteTimeGetCurrent()
-                FileLogger.shared.log("COUNT_GENERATE_START", path: item.path)
-                stats = FolderStatsCalculator.stats(for: item, isCancelled: { currentOp.isCancelled })
-                let statsDuration = (CFAbsoluteTimeGetCurrent() - statsStart) * 1000.0
-                FileLogger.shared.log("COUNT_GENERATE_END", path: item.path, durationMs: statsDuration)
-            }
+                let startTime = CFAbsoluteTimeGetCurrent()
 
-            if currentOp.isCancelled { return }
+                // An archive's thumbnail and image count come from one
+                // helper request: it lists the archive (for the count),
+                // extracts the preview image and downscales it.
+                var archiveThumbnail: CGImage?
+                let isArchive = item.type == .archiveZip || item.type == .archiveRar
+                if isArchive {
+                    let thumbnailSize = Int(max(targetSize.width, targetSize.height))
+                    // The local thumbnail cache saves reading the archive at all.
+                    if let cached = ArchiveThumbCache.load(archivePath: item.path, thumbnailSize: thumbnailSize) {
+                        archiveThumbnail = cached.thumbnail
+                        if FolderStatsCalculator.cachedStats(for: item) == nil {
+                            FolderStatsCalculator.store(imageIDs: cached.imageIDs, for: item)
+                        }
+                        FileLogger.shared.log("THUMBS_CACHE_HIT", path: item.path, durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000.0)
+                    } else {
+                        FileLogger.shared.log("THUMB_GENERATE_START", path: item.path)
+                        let preview = ArchiveReader.loadArchivePreview(archivePath: item.path, type: item.type,
+                                                                       maxPixelSize: thumbnailSize, isCancelled: shouldStop)
+                        archiveThumbnail = preview?.thumbnail
+                        // Saved even if we are about to yield: the work is done.
+                        if preview != nil {
+                            self.saveArchiveThumbnail(for: item, thumbnail: archiveThumbnail, thumbnailSize: thumbnailSize)
+                        }
+                        if shouldStop() { return }
+                    }
+                } else {
+                    FileLogger.shared.log("THUMB_GENERATE_START", path: item.path)
+                }
 
-            guard let cgImage = self.loadAndScaleCGImage(for: item, targetSize: targetSize, isCancelled: { currentOp.isCancelled }) else {
+                var stats: FolderStats? = cachedStats
+                if stats == nil && (item.isDirectory || isArchive) {
+                    let statsStart = CFAbsoluteTimeGetCurrent()
+                    FileLogger.shared.log("COUNT_GENERATE_START", path: item.path)
+                    stats = FolderStatsCalculator.stats(for: item, isCancelled: shouldStop)
+                    let statsDuration = (CFAbsoluteTimeGetCurrent() - statsStart) * 1000.0
+                    FileLogger.shared.log("COUNT_GENERATE_END", path: item.path, durationMs: statsDuration)
+                }
+
+                if shouldStop() { return }
+
+                guard let cgImage = isArchive
+                        ? archiveThumbnail
+                        : self.loadAndScaleCGImage(for: item, targetSize: targetSize, isCancelled: shouldStop) else {
+                    let duration = (CFAbsoluteTimeGetCurrent() - startTime) * 1000.0
+                    FileLogger.shared.log("THUMB_GENERATE_END", path: item.path, durationMs: duration)
+                    DispatchQueue.main.async {
+                        if !currentOp.isCancelled { completion(nil, stats) }
+                    }
+                    return
+                }
+
+                if currentOp.isCancelled { return }
+
                 let duration = (CFAbsoluteTimeGetCurrent() - startTime) * 1000.0
                 FileLogger.shared.log("THUMB_GENERATE_END", path: item.path, durationMs: duration)
+
                 DispatchQueue.main.async {
-                    if !currentOp.isCancelled { completion(nil, stats) }
-                }
-                return
-            }
-
-            if currentOp.isCancelled { return }
-
-            let duration = (CFAbsoluteTimeGetCurrent() - startTime) * 1000.0
-            FileLogger.shared.log("THUMB_GENERATE_END", path: item.path, durationMs: duration)
-
-            DispatchQueue.main.async {
-                if !currentOp.isCancelled {
-                    let image = NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
-                    let cost = Int(cgImage.width * cgImage.height * 4)
-                    MemoryLRUCache.shared.setObject(image, forKey: cacheKey, cost: cost)
-                    completion(image, stats)
+                    if !currentOp.isCancelled {
+                        let image = NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
+                        let cost = Int(cgImage.width * cgImage.height * 4)
+                        MemoryLRUCache.shared.setObject(image, forKey: cacheKey, cost: cost)
+                        completion(image, stats)
+                    }
                 }
             }
         }
 
         activeOperations[opKey] = op
+        thumbnailGroups[opKey] = group
         lock.unlock()
 
+        thumbnailQueue.addOperation(op)
+    }
+
+    /// Writes `item`'s thumbnail and image ids to the local thumbnail
+    /// cache (`ArchiveThumbCache`).  The listing is already cached from the preview request, so
+    /// this needs no archive request.
+    private func saveArchiveThumbnail(for item: FileItem, thumbnail: CGImage?, thumbnailSize: Int) {
+        let images = item.type == .archiveZip
+            ? ArchiveReader.listAllZipImages(archivePath: item.path)
+            : ArchiveReader.listAllRarImages(archivePath: item.path)
+        ArchiveThumbCache.save(archivePath: item.path, thumbnailSize: thumbnailSize,
+                               thumbnail: thumbnail, imageIDs: images.map(\.id))
+    }
+
+    /// Reads ahead, in the helper, the images that follow `item` in its ZIP
+    /// archive, so viewing them next needs no disk access.  Runs on the
+    /// background queue behind thumbnail work, yields to interactive I/O and
+    /// is dropped by the next selection (`cancelAllThumbnailTasks`).
+    public func prefetchFollowingImages(after item: FileItem) {
+        guard item.type == .image, let archivePath = item.archivePath,
+              (archivePath as NSString).pathExtension.lowercased() == "zip" else { return }
+
+        let op = BlockOperation()
+        op.addExecutionBlock { [weak op] in
+            DiskIOGate.shared.perform(.background, label: archivePath) {
+                guard let currentOp = op, !currentOp.isCancelled else { return }
+                _ = ArchiveHelper.shared.prefetch(archivePath: archivePath, kind: .zip, after: item.path,
+                                                  isCancelled: { currentOp.isCancelled || DiskIOGate.shared.hasInteractiveWaiting })
+            }
+        }
         thumbnailQueue.addOperation(op)
     }
 
@@ -192,29 +281,10 @@ public class ThumbnailGenerator {
         return nil
     }
 
+    // Same choice as the helper makes for archive previews (ArchivePreview).
     private func findPreferredArchiveImage(in items: [FileItem]) -> FileItem? {
-        var imageItems: [FileItem] = []
-        for item in items {
-            if item.type == .parentDirectory { continue }
-            if item.type == .image {
-                imageItems.append(item)
-            }
-        }
-
-        let nonCSImages = imageItems.filter { item in
-            let stem = (item.name as NSString).pathExtension == "" ? item.name : (item.name as NSString).deletingPathExtension
-            return !stem.lowercased().hasSuffix("_cs")
-        }
-
-        if nonCSImages.count >= 2 {
-            return nonCSImages[1]
-        } else if let firstNonCS = nonCSImages.first {
-            return firstNonCS
-        } else if imageItems.count >= 2 {
-            return imageItems[1]
-        } else {
-            return imageItems.first
-        }
+        let imageItems = items.filter { $0.type == .image }
+        return ArchivePreview.preferredIndex(names: imageItems.map(\.name)).map { imageItems[$0] }
     }
 
     public func loadAndScaleCGImage(for item: FileItem, targetSize: CGSize, isCancelled: (() -> Bool)? = nil) -> CGImage? {
@@ -256,7 +326,11 @@ public class ThumbnailGenerator {
         return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
     }
 
-    public func loadFullImage(for item: FileItem, completion: @escaping (NSImage?) -> Void) {
+    /// For archives and folders the preview pass computes the folder stats
+    /// (image count) from the same listing used to pick the preview image.
+    /// `progress` receives, on the main queue, the progress of slow archive
+    /// work: that listing, or the first read of the archive holding an image.
+    public func loadFullImage(for item: FileItem, progress: LoadProgressHandler? = nil, completion: @escaping (NSImage?) -> Void) {
         let cacheKey = "full_\(item.id)"
 
         if let cached = MemoryLRUCache.shared.object(forKey: cacheKey) {
@@ -283,64 +357,106 @@ public class ThumbnailGenerator {
 
         let op = BlockOperation()
         op.addExecutionBlock { [weak self, weak op] in
-            guard let self = self, let currentOp = op, !currentOp.isCancelled else { return }
+            // Admitted ahead of queued thumbnail I/O; never runs alongside it.
+            DiskIOGate.shared.perform(.interactive, label: item.path) {
+                guard let self = self, let currentOp = op, !currentOp.isCancelled else { return }
 
-            let startTime = CFAbsoluteTimeGetCurrent()
-            FileLogger.shared.log("FULL_IMAGE_LOAD_START", path: item.path)
+                let startTime = CFAbsoluteTimeGetCurrent()
+                FileLogger.shared.log("FULL_IMAGE_LOAD_START", path: item.path)
 
-            var targetItem = item
-            if item.type == .archiveZip || item.type == .archiveRar || item.isDirectory {
-                if let peeked = self.peekFirstImage(in: item) {
-                    targetItem = peeked
+                let mainQueueProgress: LoadProgressHandler? = progress.map { handler in
+                    return { [weak currentOp] update in
+                        DispatchQueue.main.async {
+                            guard let op = currentOp, !op.isCancelled else { return }
+                            handler(update)
+                        }
+                    }
+                }
+
+                var targetItem = item
+                var imageData: Data?
+                if item.type == .archiveZip || item.type == .archiveRar {
+                    // One helper request lists the archive (for the count),
+                    // picks the preview image and extracts it.
+                    let preview = ArchiveReader.loadArchivePreview(archivePath: item.path, type: item.type, maxPixelSize: nil,
+                                                                   progress: mainQueueProgress, isCancelled: { currentOp.isCancelled })
+                    _ = FolderStatsCalculator.stats(for: item, isCancelled: { currentOp.isCancelled })
+                    // The sidebar shows this image as the archive's thumbnail
+                    // (it is not generated separately), so cache it too.
+                    if let preview = preview {
+                        let thumbnailSize = 256
+                        let thumbnail = preview.imageData.flatMap { ArchivePreview.thumbnail(from: $0, maxPixelSize: thumbnailSize) }
+                        if ArchiveThumbCache.load(archivePath: item.path, thumbnailSize: thumbnailSize) == nil {
+                            self.saveArchiveThumbnail(for: item, thumbnail: thumbnail, thumbnailSize: thumbnailSize)
+                        }
+                    }
+                    guard let data = preview?.imageData else {
+                        DispatchQueue.main.async {
+                            self.setMainImageLoading(false)
+                            completion(nil)
+                        }
+                        return
+                    }
+                    imageData = data
+                } else if item.isDirectory {
+                    // Count and preview share one listing (cached by
+                    // DirectoryCache), so computing the stats here is what makes
+                    // the subsequent peek cheap.
+                    _ = FolderStatsCalculator.stats(for: item, progress: mainQueueProgress, isCancelled: { currentOp.isCancelled })
+
+                    if let peeked = self.peekFirstImage(in: item) {
+                        targetItem = peeked
+                    } else {
+                        DispatchQueue.main.async {
+                            self.setMainImageLoading(false)
+                            completion(nil)
+                        }
+                        return
+                    }
+                }
+
+                if currentOp.isCancelled {
+                    self.setMainImageLoading(false)
+                    return
+                }
+
+                if imageData != nil {
+                    // Already extracted with the archive preview.
+                } else if let archivePath = targetItem.archivePath {
+                    let ext = (archivePath as NSString).pathExtension.lowercased()
+                    if ext == "zip" {
+                        imageData = ArchiveReader.loadZipData(archivePath: archivePath, entryPath: targetItem.path, progress: mainQueueProgress, isCancelled: { currentOp.isCancelled })
+                    } else if ext == "rar" {
+                        imageData = ArchiveReader.loadRarData(archivePath: archivePath, entryPath: targetItem.path, progress: mainQueueProgress, isCancelled: { currentOp.isCancelled })
+                    }
                 } else {
+                    imageData = try? Data(contentsOf: URL(fileURLWithPath: targetItem.path))
+                }
+
+                guard let data = imageData, !currentOp.isCancelled else {
+                    let duration = (CFAbsoluteTimeGetCurrent() - startTime) * 1000.0
+                    FileLogger.shared.log("FULL_IMAGE_LOAD_END", path: item.path, durationMs: duration)
                     DispatchQueue.main.async {
                         self.setMainImageLoading(false)
                         completion(nil)
                     }
                     return
                 }
-            }
 
-            if currentOp.isCancelled {
-                self.setMainImageLoading(false)
-                return
-            }
-
-            var imageData: Data?
-            if let archivePath = targetItem.archivePath {
-                let ext = (archivePath as NSString).pathExtension.lowercased()
-                if ext == "zip" {
-                    imageData = ArchiveReader.loadZipData(archivePath: archivePath, entryPath: targetItem.path, isCancelled: { currentOp.isCancelled })
-                } else if ext == "rar" {
-                    imageData = ArchiveReader.loadRarData(archivePath: archivePath, entryPath: targetItem.path, isCancelled: { currentOp.isCancelled })
-                }
-            } else {
-                imageData = try? Data(contentsOf: URL(fileURLWithPath: targetItem.path))
-            }
-
-            guard let data = imageData, !currentOp.isCancelled else {
                 let duration = (CFAbsoluteTimeGetCurrent() - startTime) * 1000.0
                 FileLogger.shared.log("FULL_IMAGE_LOAD_END", path: item.path, durationMs: duration)
+
                 DispatchQueue.main.async {
                     self.setMainImageLoading(false)
-                    completion(nil)
+                    if currentOp.isCancelled { return }
+                    guard let image = NSImage(data: data) else {
+                        completion(nil)
+                        return
+                    }
+                    let cost = Int(image.size.width * image.size.height * 4)
+                    MemoryLRUCache.shared.setObject(image, forKey: cacheKey, cost: cost)
+                    completion(image)
                 }
-                return
-            }
-
-            let duration = (CFAbsoluteTimeGetCurrent() - startTime) * 1000.0
-            FileLogger.shared.log("FULL_IMAGE_LOAD_END", path: item.path, durationMs: duration)
-
-            DispatchQueue.main.async {
-                self.setMainImageLoading(false)
-                if currentOp.isCancelled { return }
-                guard let image = NSImage(data: data) else {
-                    completion(nil)
-                    return
-                }
-                let cost = Int(image.size.width * image.size.height * 4)
-                MemoryLRUCache.shared.setObject(image, forKey: cacheKey, cost: cost)
-                completion(image)
             }
         }
 

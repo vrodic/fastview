@@ -4,6 +4,11 @@ public class StatusBarView: NSView {
     private let leftLabel = NSTextField(labelWithString: "")
     private let rightLabel = NSTextField(labelWithString: "")
 
+    // File sizes not known up front are looked up off the main thread: a
+    // stat() on a network volume can stall behind in-flight archive reads.
+    private static let sizeLookupQueue = DispatchQueue(label: "com.fastview.statusbar.sizelookup", qos: .utility)
+    private var sizeLookupToken = 0
+
     override public init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         setupUI()
@@ -42,6 +47,34 @@ public class StatusBarView: NSView {
             rightLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
             rightLabel.leadingAnchor.constraint(greaterThanOrEqualTo: leftLabel.trailingAnchor, constant: 8)
         ])
+    }
+
+    /// Shows `before` + size + `after` in the right label.  When `sizeBytes`
+    /// is 0 and `statPath` is given, the size is filled in once a background
+    /// stat() returns, unless the label has been updated again meanwhile.
+    private func setRightLabel(before: [String], sizeBytes: UInt64, statPath: String?, after: [String] = []) {
+        sizeLookupToken += 1
+        let token = sizeLookupToken
+
+        let render: (UInt64) -> Void = { [weak self] size in
+            var parts = before
+            if size > 0 {
+                parts.append(ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file))
+            }
+            parts.append(contentsOf: after)
+            self?.rightLabel.stringValue = parts.joined(separator: "  |  ")
+        }
+        render(sizeBytes)
+
+        guard sizeBytes == 0, let path = statPath else { return }
+        StatusBarView.sizeLookupQueue.async { [weak self] in
+            guard let size = (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? NSNumber)?.uint64Value,
+                  size > 0 else { return }
+            DispatchQueue.main.async {
+                guard let self = self, self.sizeLookupToken == token else { return }
+                render(size)
+            }
+        }
     }
 
     public func updateDirectoryStats(imageCount: Int, totalSizeBytes: UInt64, locationName: String? = nil) {
@@ -100,27 +133,11 @@ public class StatusBarView: NSView {
             parts.append("\(count) images")
         }
 
-        var sizeBytes = item.fileSize
-        if sizeBytes == 0 {
-            if let archivePath = item.archivePath {
-                let ext = (archivePath as NSString).pathExtension.lowercased()
-                if ext == "zip", let data = ArchiveReader.loadZipData(archivePath: archivePath, entryPath: item.path) {
-                    sizeBytes = UInt64(data.count)
-                } else if ext == "rar", let data = ArchiveReader.loadRarData(archivePath: archivePath, entryPath: item.path) {
-                    sizeBytes = UInt64(data.count)
-                }
-            } else if let attrs = try? FileManager.default.attributesOfItem(atPath: item.path),
-                      let size = attrs[.size] as? UInt64 {
-                sizeBytes = size
-            }
-        }
-
-        if sizeBytes > 0 {
-            let sizeStr = ByteCountFormatter.string(fromByteCount: Int64(sizeBytes), countStyle: .file)
-            parts.append(sizeStr)
-        }
-
-        rightLabel.stringValue = parts.joined(separator: "  |  ")
+        // Entries inside an archive with no recorded size are folders; they
+        // have no size of their own (and must never be extracted on the main
+        // thread to find out).
+        let statPath = item.archivePath == nil ? item.path : nil
+        setRightLabel(before: parts, sizeBytes: item.fileSize, statPath: statPath)
     }
 
     public func updateImageInfo(item: FileItem, image: NSImage?, currentIndex: Int? = nil, totalImages: Int? = nil, parentName: String? = nil) {
@@ -132,20 +149,7 @@ public class StatusBarView: NSView {
             infoParts.append("\(index) / \(total)")
         }
 
-        var sizeBytes = item.fileSize
-        if sizeBytes == 0 {
-            let path = item.archivePath ?? item.path
-            if let attrs = try? FileManager.default.attributesOfItem(atPath: path),
-               let size = attrs[.size] as? UInt64 {
-                sizeBytes = size
-            }
-        }
-
-        if sizeBytes > 0 {
-            let sizeStr = ByteCountFormatter.string(fromByteCount: Int64(sizeBytes), countStyle: .file)
-            infoParts.append(sizeStr)
-        }
-
+        var afterSize: [String] = []
         if let img = image {
             var width = Int(img.size.width)
             var height = Int(img.size.height)
@@ -155,10 +159,10 @@ public class StatusBarView: NSView {
                     height = rep.pixelsHigh
                 }
             }
-            infoParts.append("\(width) × \(height) px")
+            afterSize.append("\(width) × \(height) px")
         }
 
-        rightLabel.stringValue = infoParts.joined(separator: "  |  ")
+        setRightLabel(before: infoParts, sizeBytes: item.fileSize, statPath: item.archivePath ?? item.path, after: afterSize)
     }
 
     public func updateForegroundObjectInfo(pane: Int, object: ForegroundObject) {
@@ -169,10 +173,12 @@ public class StatusBarView: NSView {
         let rot = Int(object.rotationDegrees)
         let scale = Int(object.scale * 100)
 
+        sizeLookupToken += 1
         rightLabel.stringValue = "FG Object \(pane): \(w)×\(h) px  |  Pos: (\(x), \(y))  |  Scale: \(scale)%  |  Rot: \(rot)°"
     }
 
     public func clearImageInfo() {
+        sizeLookupToken += 1
         rightLabel.stringValue = ""
     }
 }

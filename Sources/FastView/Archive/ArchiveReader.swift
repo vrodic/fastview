@@ -1,162 +1,110 @@
 import Foundation
-import ZIPFoundation
-import Unrar
+import CoreGraphics
+import FastViewArchiveCore
 #if os(macOS)
 import Darwin
 #endif
 
-// MARK: - ZipArchiveCache
+// MARK: - Load progress
 
-/// Keeps a small pool of open ZIPFoundation Archive handles so that the
-/// central directory (located at the end of every ZIP file) is read from
-/// disk only once per archive, regardless of how many individual entries are
-/// subsequently extracted.
+/// Real progress of a long-running archive or file operation, measured from
+/// the I/O loop itself (bytes read/decompressed or archive entries scanned).
+public struct LoadProgress {
+    public enum Unit {
+        case bytes
+        case entries
+    }
+
+    public let completed: Int64
+    public let total: Int64
+    public let unit: Unit
+
+    public var fraction: Double {
+        guard total > 0 else { return 0 }
+        return min(1, max(0, Double(completed) / Double(total)))
+    }
+}
+
+/// Invoked from the background I/O thread; callers hop to the main queue.
+public typealias LoadProgressHandler = (LoadProgress) -> Void
+
+/// Rate-limits progress callbacks coming from tight per-chunk / per-entry
+/// loops so at most ~30 updates per second reach the handler.  The final
+/// update (completed == total) is always delivered.
+final class ProgressThrottle {
+    private let handler: LoadProgressHandler
+    private let unit: LoadProgress.Unit
+    private let minInterval: CFAbsoluteTime = 1.0 / 30.0
+    private var lastReportTime: CFAbsoluteTime = 0
+
+    init(_ handler: @escaping LoadProgressHandler, unit: LoadProgress.Unit) {
+        self.handler = handler
+        self.unit = unit
+    }
+
+    func report(_ completed: Int64, of total: Int64) {
+        guard total > 0 else { return }
+        let now = CFAbsoluteTimeGetCurrent()
+        guard completed >= total || now - lastReportTime >= minInterval else { return }
+        lastReportTime = now
+        handler(LoadProgress(completed: min(completed, total), total: total, unit: unit))
+    }
+}
+
+// MARK: - ArchiveIndexCache
+
+/// Entry lists of recently listed archives.  The archives themselves stay in
+/// the FastViewReader helper (see `ArchiveHelper`); FastView only keeps this
+/// metadata, so listing a subfolder or matching an entry path needs no
+/// request.
 ///
-/// On a remote/network-backed disk each Archive init costs at least two
-/// round-trips (backward seek to EOCD + forward seek + read of the central
-/// directory).  Caching the handle reduces all thumbnail and full-image reads
-/// for the same archive to a single seek + decompress per entry.
-///
-/// Thread-safety: all mutations are protected by `lock`.  ZIPFoundation's
-/// Archive itself is not thread-safe, so callers must use `withArchive` which
-/// serialises access through the same lock.
-private final class ZipArchiveCache {
-    static let shared = ZipArchiveCache()
+/// Thread-safety: all access goes through `withEntries`, serialised by `lock`.
+private final class ArchiveIndexCache {
+    static let shared = ArchiveIndexCache()
 
     private struct CacheEntry {
-        let archive: ZIPFoundation.Archive
+        let entries: [ArchiveEntryRecord]
         var lastUsed: Date
     }
 
     private var cache: [String: CacheEntry] = [:]
     private let lock = NSLock()
-    // Evict least-recently-used handle once we hold more than this many open.
-    private let maxOpenArchives = 4
+    private let maxArchives = 64
 
-    /// Executes `block` with a cached (or freshly opened) Archive for
-    /// `archivePath`.  Returns `nil` if the archive cannot be opened.
-    func withArchive<T>(at archivePath: String, block: (ZIPFoundation.Archive) -> T?) -> T? {
+    /// Executes `block` with the entry list of `archivePath`, asking the
+    /// helper for it on a cache miss (with progress).  Returns `nil` if the
+    /// archive cannot be listed or listing was cancelled.
+    func withEntries<T>(at archivePath: String, kind: ArchiveRequest.Kind,
+                        progress: LoadProgressHandler? = nil,
+                        isCancelled: (() -> Bool)? = nil,
+                        block: (_ entries: [ArchiveEntryRecord]) -> T?) -> T? {
         lock.lock()
         defer { lock.unlock() }
 
         if cache[archivePath] != nil {
             cache[archivePath]!.lastUsed = Date()
         } else {
-            let url = URL(fileURLWithPath: archivePath)
-            guard let data = try? Data(contentsOf: url, options: .mappedIfSafe),
-                  let archive = ZIPFoundation.Archive(data: data, accessMode: .read) else {
-                return nil
+            guard let entries = ArchiveHelper.shared.list(archivePath: archivePath, kind: kind,
+                                                          progress: progress, isCancelled: isCancelled) else { return nil }
+            while cache.count >= maxArchives,
+                  let lruKey = cache.min(by: { $0.value.lastUsed < $1.value.lastUsed })?.key {
+                cache.removeValue(forKey: lruKey)
             }
-            evictIfNeeded()
-            cache[archivePath] = CacheEntry(archive: archive, lastUsed: Date())
+            cache[archivePath] = CacheEntry(entries: entries, lastUsed: Date())
         }
-
-        return block(cache[archivePath]!.archive)
+        return block(cache[archivePath]!.entries)
     }
 
-    /// Removes the cached handle for `archivePath`, forcing the next call to
-    /// re-open the file.  Call this if the underlying file may have changed.
-    func invalidate(archivePath: String) {
-        lock.lock()
-        cache.removeValue(forKey: archivePath)
-        lock.unlock()
-    }
-
-    func invalidateAll() {
-        lock.lock()
-        cache.removeAll()
-        lock.unlock()
-    }
-
-    private func evictIfNeeded() {
-        // lock is already held by the caller
-        while cache.count >= maxOpenArchives {
-            guard let lruKey = cache.min(by: { $0.value.lastUsed < $1.value.lastUsed })?.key else { break }
-            cache.removeValue(forKey: lruKey)
-        }
-    }
-}
-
-// MARK: - RarArchiveCache
-
-/// Caches open Unrar.Archive handles, memory-mapped file Data, and parsed entry lists to prevent repeated
-/// disk opens and full header scans on every thumbnail and full-image extraction.
-/// Uses mmap (Data.options.mappedIfSafe) and posix_madvise (POSIX_MADV_WILLNEED / POSIX_MADV_SEQUENTIAL)
-/// to force the macOS kernel to prefetch file pages into RAM at full memory/disk bus speed (>100 MB/s).
-private final class RarArchiveCache {
-    static let shared = RarArchiveCache()
-
-    private struct CacheEntry {
-        let mappedData: Data
-        let archive: Unrar.Archive
-        let entries: [Unrar.Entry]
-        var lastUsed: Date
-    }
-
-    private var cache: [String: CacheEntry] = [:]
-    private let lock = NSLock()
-    private let maxOpenArchives = 4
-
-    private func applyMemoryMapAdvisories(to data: Data) {
-        data.withUnsafeBytes { rawBuffer in
-            if let baseAddress = rawBuffer.baseAddress {
-                #if os(macOS)
-                let ptr = UnsafeMutableRawPointer(mutating: baseAddress)
-                _ = posix_madvise(ptr, rawBuffer.count, POSIX_MADV_WILLNEED)
-                _ = posix_madvise(ptr, rawBuffer.count, POSIX_MADV_SEQUENTIAL)
-                #endif
-            }
-        }
-    }
-
-    func withArchive<T>(at archivePath: String, block: (Unrar.Archive, [Unrar.Entry]) -> T?) -> T? {
+    func contains(_ archivePath: String) -> Bool {
         lock.lock()
         defer { lock.unlock() }
-
-        if let existing = cache[archivePath] {
-            cache[archivePath]!.lastUsed = Date()
-            applyMemoryMapAdvisories(to: existing.mappedData)
-            return block(existing.archive, existing.entries)
-        } else {
-            let url = URL(fileURLWithPath: archivePath).standardized
-            guard let mappedData = try? Data(contentsOf: url, options: .mappedIfSafe) else {
-                return nil
-            }
-            applyMemoryMapAdvisories(to: mappedData)
-
-            guard let archive = try? Unrar.Archive(fileURL: url),
-                  let entries = try? archive.entries() else {
-                return nil
-            }
-
-            evictIfNeeded()
-            cache[archivePath] = CacheEntry(
-                mappedData: mappedData,
-                archive: archive,
-                entries: entries,
-                lastUsed: Date()
-            )
-            return block(archive, entries)
-        }
+        return cache[archivePath] != nil
     }
 
-    func invalidate(archivePath: String) {
+    func store(_ entries: [ArchiveEntryRecord], for archivePath: String) {
         lock.lock()
-        cache.removeValue(forKey: archivePath)
-        lock.unlock()
-    }
-
-    func invalidateAll() {
-        lock.lock()
-        cache.removeAll()
-        lock.unlock()
-    }
-
-    private func evictIfNeeded() {
-        while cache.count >= maxOpenArchives {
-            guard let lruKey = cache.min(by: { $0.value.lastUsed < $1.value.lastUsed })?.key else { break }
-            cache.removeValue(forKey: lruKey)
-        }
+        defer { lock.unlock() }
+        cache[archivePath] = CacheEntry(entries: entries, lastUsed: Date())
     }
 }
 
@@ -204,9 +152,7 @@ public struct FileItem: Identifiable, Hashable {
 public class ArchiveReader {
     public static var archiveBufferSize: Int = 4 * 1024 * 1024
 
-    public static let supportedImageExtensions: Set<String> = [
-        "jpg", "jpeg", "png", "gif", "webp", "heic", "heif", "tiff", "tif", "bmp", "ico"
-    ]
+    public static let supportedImageExtensions: Set<String> = ArchivePreview.imageExtensions
 
     public static let supportedArchiveExtensions: Set<String> = [
         "zip", "rar"
@@ -237,34 +183,23 @@ public class ArchiveReader {
         return supportedArchiveExtensions.contains(ext.lowercased())
     }
 
-    public static func loadZipData(archivePath: String, entryPath: String, isCancelled: (() -> Bool)? = nil) -> Data? {
+    /// `progress` reports a slow first read of the archive (e.g. a large
+    /// archive opened at launch); extracting from an open archive is quick.
+    public static func loadZipData(archivePath: String, entryPath: String, progress: LoadProgressHandler? = nil, isCancelled: (() -> Bool)? = nil) -> Data? {
         let startTime = CFAbsoluteTimeGetCurrent()
         FileLogger.shared.log("READ_ZIP_ENTRY_START", path: "\(archivePath) -> \(entryPath)")
 
-        let result = ZipArchiveCache.shared.withArchive(at: archivePath) { archive -> Data? in
+        let result = ArchiveIndexCache.shared.withEntries(at: archivePath, kind: .zip, progress: progress, isCancelled: isCancelled) { entries -> Data? in
             let normEntryPath = entryPath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-            guard let entry = archive[entryPath] ?? archive[normEntryPath] ?? archive.first(where: {
-                let p = $0.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-                return p == normEntryPath || p.hasSuffix("/" + normEntryPath) || normEntryPath.hasSuffix("/" + p)
-            }) else { return nil }
+            guard let entry = entries.first(where: { $0.path == entryPath })
+                    ?? entries.first(where: { $0.path == normEntryPath })
+                    ?? entries.first(where: {
+                        let p = $0.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+                        return p == normEntryPath || p.hasSuffix("/" + normEntryPath) || normEntryPath.hasSuffix("/" + p)
+                    }) else { return nil }
 
-            var data = Data()
-            var aborted = false
-
-            _ = try? archive.extract(entry, bufferSize: ArchiveReader.archiveBufferSize, consumer: { chunk in
-                if isCancelled?() == true {
-                    aborted = true
-                    struct ZipCancelledError: Error {}
-                    throw ZipCancelledError()
-                }
-                data.append(chunk)
-            })
-
-            if aborted {
-                FileLogger.shared.log("READ_ZIP_ENTRY_CANCELLED", path: "\(archivePath) -> \(entryPath)")
-                return nil
-            }
-            return data
+            return ArchiveHelper.shared.extract(archivePath: archivePath, kind: .zip, entryPath: entry.path,
+                                                entrySize: entry.uncompressedSize, progress: progress, isCancelled: isCancelled)
         }
 
         guard let data = result else { return nil }
@@ -273,31 +208,54 @@ public class ArchiveReader {
         return data
     }
 
-    public static func loadRarData(archivePath: String, entryPath: String, isCancelled: (() -> Bool)? = nil) -> Data? {
+    public static func loadRarData(archivePath: String, entryPath: String, progress: LoadProgressHandler? = nil, isCancelled: (() -> Bool)? = nil) -> Data? {
         if isCancelled?() == true { return nil }
         let startTime = CFAbsoluteTimeGetCurrent()
         FileLogger.shared.log("READ_RAR_ENTRY_START", path: "\(archivePath) -> \(entryPath)")
 
-        let result = RarArchiveCache.shared.withArchive(at: archivePath) { archive, entries -> Data? in
+        let result = ArchiveIndexCache.shared.withEntries(at: archivePath, kind: .rar, progress: progress, isCancelled: isCancelled) { entries -> Data? in
             if isCancelled?() == true { return nil }
 
             let normEntryPath = entryPath.replacingOccurrences(of: "\\", with: "/").trimmingCharacters(in: CharacterSet(charactersIn: "/"))
             guard let entry = entries.first(where: {
-                let norm = $0.fileName.replacingOccurrences(of: "\\", with: "/").trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+                let norm = $0.path.replacingOccurrences(of: "\\", with: "/").trimmingCharacters(in: CharacterSet(charactersIn: "/"))
                 return norm == normEntryPath || norm.hasSuffix("/" + normEntryPath) || normEntryPath.hasSuffix("/" + norm)
             }) ?? entries.first(where: {
-                ($0.fileName as NSString).lastPathComponent == (entryPath as NSString).lastPathComponent
+                ($0.path as NSString).lastPathComponent == (entryPath as NSString).lastPathComponent
             }) else {
                 return nil
             }
 
-            return try? archive.extract(entry)
+            return ArchiveHelper.shared.extract(archivePath: archivePath, kind: .rar, entryPath: entry.path,
+                                                entrySize: entry.uncompressedSize, progress: progress, isCancelled: isCancelled)
         }
 
         guard let data = result else { return nil }
         let duration = (CFAbsoluteTimeGetCurrent() - startTime) * 1000.0
         FileLogger.shared.log("READ_RAR_ENTRY_END", path: "\(archivePath) -> \(entryPath)", durationMs: duration)
         return data
+    }
+
+    /// The preview image of an archive and, if not cached yet, its entry list
+    /// (so the image count that follows needs no request), from a single
+    /// helper request.  A thumbnail when `maxPixelSize` is set, else the
+    /// image file.  `nil` if the archive cannot be read or the request was
+    /// cancelled; an empty result if it has no images.
+    public static func loadArchivePreview(archivePath: String, type: FileType, maxPixelSize: Int?,
+                                          progress: LoadProgressHandler? = nil,
+                                          isCancelled: (() -> Bool)? = nil) -> (thumbnail: CGImage?, imageData: Data?)? {
+        guard type == .archiveZip || type == .archiveRar else { return nil }
+        let startTime = CFAbsoluteTimeGetCurrent()
+        let needsEntries = !ArchiveIndexCache.shared.contains(archivePath)
+
+        guard let preview = ArchiveHelper.shared.preview(archivePath: archivePath, kind: type == .archiveZip ? .zip : .rar,
+                                                         maxPixelSize: maxPixelSize, includeEntries: needsEntries,
+                                                         progress: progress, isCancelled: isCancelled) else { return nil }
+        if let entries = preview.entries {
+            ArchiveIndexCache.shared.store(entries, for: archivePath)
+        }
+        FileLogger.shared.log("ARCHIVE_PREVIEW_END", path: archivePath, durationMs: (CFAbsoluteTimeGetCurrent() - startTime) * 1000.0)
+        return (preview.thumbnail, preview.imageData)
     }
 
     public static var flattenArchiveDirectories: Bool {
@@ -309,14 +267,14 @@ public class ArchiveReader {
         }
     }
 
-    public static func listZipContents(archivePath: String, subfolder: String = "", isCancelled: (() -> Bool)? = nil) -> [FileItem] {
+    public static func listZipContents(archivePath: String, subfolder: String = "", progress: LoadProgressHandler? = nil, isCancelled: (() -> Bool)? = nil) -> [FileItem] {
         let cacheKey = "zip_\(archivePath)_\(subfolder)"
         if let cached = DirectoryCache.shared.get(key: cacheKey) {
             return cached
         }
 
         if flattenArchiveDirectories {
-            return listAllZipImages(archivePath: archivePath, isCancelled: isCancelled)
+            return listAllZipImages(archivePath: archivePath, progress: progress, isCancelled: isCancelled)
         }
 
         if isCancelled?() == true { return [] }
@@ -329,10 +287,10 @@ public class ArchiveReader {
 
         var items: [FileItem] = []
 
-        let ok = ZipArchiveCache.shared.withArchive(at: archivePath) { archive -> Bool in
+        let ok = ArchiveIndexCache.shared.withEntries(at: archivePath, kind: .zip, progress: progress, isCancelled: isCancelled) { entries -> Bool in
             var seenFolders = Set<String>()
 
-            for entry in archive {
+            for entry in entries {
                 if isCancelled?() == true {
                     FileLogger.shared.log("LIST_ZIP_CANCELLED", path: archivePath)
                     return false
@@ -351,7 +309,7 @@ public class ArchiveReader {
                 guard let firstComponent = components.first else { continue }
 
                 let itemName = String(firstComponent)
-                let isSubDir = components.count > 1 || entry.type == .directory
+                let isSubDir = components.count > 1 || entry.kind == .directory
 
                 if isSubDir {
                     if !seenFolders.contains(itemName) {
@@ -377,7 +335,7 @@ public class ArchiveReader {
                             type: .image,
                             archivePath: archivePath,
                             isDirectory: false,
-                            fileSize: UInt64(entry.uncompressedSize),
+                            fileSize: entry.uncompressedSize,
                             entryParentDir: innerParent
                         ))
                     }
@@ -398,7 +356,7 @@ public class ArchiveReader {
         return sorted
     }
 
-    public static func listAllZipImages(archivePath: String, isCancelled: (() -> Bool)? = nil) -> [FileItem] {
+    public static func listAllZipImages(archivePath: String, progress: LoadProgressHandler? = nil, isCancelled: (() -> Bool)? = nil) -> [FileItem] {
         let cacheKey = "zip_all_\(archivePath)"
         if let cached = DirectoryCache.shared.get(key: cacheKey) {
             return cached
@@ -411,10 +369,10 @@ public class ArchiveReader {
 
         var items: [FileItem] = []
 
-        let ok = ZipArchiveCache.shared.withArchive(at: archivePath) { archive -> Bool in
-            for entry in archive {
+        let ok = ArchiveIndexCache.shared.withEntries(at: archivePath, kind: .zip, progress: progress, isCancelled: isCancelled) { entries -> Bool in
+            for entry in entries {
                 if isCancelled?() == true { return false }
-                guard entry.type == .file else { continue }
+                guard entry.kind == .file else { continue }
                 let path = entry.path
                 let ext = (path as NSString).pathExtension.lowercased()
                 if isImageExtension(ext) {
@@ -427,7 +385,7 @@ public class ArchiveReader {
                         type: .image,
                         archivePath: archivePath,
                         isDirectory: false,
-                        fileSize: UInt64(entry.uncompressedSize),
+                        fileSize: entry.uncompressedSize,
                         entryParentDir: innerParent
                     ))
                 }
@@ -446,14 +404,14 @@ public class ArchiveReader {
         return sorted
     }
 
-    public static func listRarContents(archivePath: String, subfolder: String = "", isCancelled: (() -> Bool)? = nil) -> [FileItem] {
+    public static func listRarContents(archivePath: String, subfolder: String = "", progress: LoadProgressHandler? = nil, isCancelled: (() -> Bool)? = nil) -> [FileItem] {
         let cacheKey = "rar_\(archivePath)_\(subfolder)"
         if let cached = DirectoryCache.shared.get(key: cacheKey) {
             return cached
         }
 
         if flattenArchiveDirectories {
-            return listAllRarImages(archivePath: archivePath, isCancelled: isCancelled)
+            return listAllRarImages(archivePath: archivePath, progress: progress, isCancelled: isCancelled)
         }
 
         if isCancelled?() == true { return [] }
@@ -464,14 +422,14 @@ public class ArchiveReader {
         let cleanSubfolder = subfolder.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         let prefix = cleanSubfolder.isEmpty ? "" : cleanSubfolder + "/"
 
-        let result = RarArchiveCache.shared.withArchive(at: archivePath) { archive, entries -> [FileItem]? in
+        let result = ArchiveIndexCache.shared.withEntries(at: archivePath, kind: .rar, progress: progress, isCancelled: isCancelled) { entries -> [FileItem]? in
             var seenFolders = Set<String>()
             var list: [FileItem] = []
 
             for entry in entries {
                 if isCancelled?() == true { return nil }
 
-                let path = entry.fileName.replacingOccurrences(of: "\\", with: "/")
+                let path = entry.path.replacingOccurrences(of: "\\", with: "/")
                 guard !path.isEmpty && path != cleanSubfolder && path != cleanSubfolder + "/" else { continue }
 
                 if !prefix.isEmpty && !path.hasPrefix(prefix) {
@@ -483,7 +441,7 @@ public class ArchiveReader {
 
                 guard let firstComponent = components.first else { continue }
                 let itemName = String(firstComponent)
-                let isSubDir = components.count > 1 || entry.directory
+                let isSubDir = components.count > 1 || entry.kind == .directory
 
                 if isSubDir {
                     if !seenFolders.contains(itemName) {
@@ -540,7 +498,7 @@ public class ArchiveReader {
         return sorted
     }
 
-    public static func listAllRarImages(archivePath: String, isCancelled: (() -> Bool)? = nil) -> [FileItem] {
+    public static func listAllRarImages(archivePath: String, progress: LoadProgressHandler? = nil, isCancelled: (() -> Bool)? = nil) -> [FileItem] {
         let cacheKey = "rar_all_\(archivePath)"
         if let cached = DirectoryCache.shared.get(key: cacheKey) {
             return cached
@@ -551,14 +509,14 @@ public class ArchiveReader {
         let startTime = CFAbsoluteTimeGetCurrent()
         FileLogger.shared.log("LIST_RAR_IMAGES_START", path: archivePath)
 
-        let result = RarArchiveCache.shared.withArchive(at: archivePath) { archive, entries -> [FileItem]? in
+        let result = ArchiveIndexCache.shared.withEntries(at: archivePath, kind: .rar, progress: progress, isCancelled: isCancelled) { entries -> [FileItem]? in
             var list: [FileItem] = []
 
             for entry in entries {
                 if isCancelled?() == true { return nil }
-                if entry.directory { continue }
+                if entry.kind == .directory { continue }
 
-                let path = entry.fileName.replacingOccurrences(of: "\\", with: "/")
+                let path = entry.path.replacingOccurrences(of: "\\", with: "/")
                 let ext = (path as NSString).pathExtension.lowercased()
                 if isImageExtension(ext) {
                     let name = (path as NSString).lastPathComponent

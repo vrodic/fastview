@@ -99,9 +99,14 @@ public class MainImageView: NSView {
     private let progressBar = NSProgressIndicator()
     private let speedLabel = NSTextField(labelWithString: "")
 
-    private var progressTimer: Timer?
-    private var estimatedDuration: Double = 0
-    private var elapsedProgressTime: Double = 0
+    // The overlay is armed by `beginLoading` but only revealed once real
+    // progress shows the operation is slow, so cached or quick operations
+    // never flash it.
+    private let overlayRevealDelay: CFAbsoluteTime = 0.3
+    private var pendingLoad: (statusText: String, startTime: CFAbsoluteTime)?
+    private var progressSampleStart: (time: CFAbsoluteTime, completed: Int64, total: Int64)?
+    private var lastProgressFraction: Double?
+    private var revealTimer: Timer?
 
     override public init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -155,6 +160,7 @@ public class MainImageView: NSView {
         speedLabel.font = NSFont.systemFont(ofSize: 14, weight: .semibold)
         speedLabel.textColor = NSColor.white
         speedLabel.alignment = .center
+        speedLabel.lineBreakMode = .byTruncatingMiddle
 
         let clipView = scrollView.contentView
         clipView.documentView = imageView
@@ -202,47 +208,113 @@ public class MainImageView: NSView {
         selectionOverlayView.needsDisplay = true
     }
 
-    public func showLoading(fileSizeBytes: UInt64, pastSpeedMBs: Double, statusText: String? = nil) {
+    /// Arms the loading overlay for a potentially slow operation.  If it is
+    /// still running after `overlayRevealDelay`, the overlay appears: with a
+    /// percentage once `updateLoadingProgress` reports progress, as an
+    /// indeterminate bar until then.  A `beginLoading` while another load is
+    /// pending only updates the text, so a chain of steps (finding a sibling
+    /// archive, opening it, loading its first image) is timed from the first
+    /// step, until `hideLoading`.
+    public func beginLoading(statusText: String) {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
+            if let pending = self.pendingLoad {
+                self.pendingLoad = (statusText, pending.startTime)
+                if !self.loadingContainerView.isHidden && self.progressBar.isIndeterminate {
+                    self.speedLabel.stringValue = statusText
+                }
+                return
+            }
 
-            self.progressTimer?.invalidate()
-            self.elapsedProgressTime = 0
-
-            let sizeBytes = max(100 * 1024, fileSizeBytes)
-            let speed = max(0.5, pastSpeedMBs)
-            let sizeMB = Double(sizeBytes) / (1024.0 * 1024.0)
-            self.estimatedDuration = max(0.5, sizeMB / speed)
-
-            self.loadingContainerView.isHidden = false
-
-            self.loadingIndicator.isHidden = false
-            self.loadingIndicator.startAnimation(nil)
-
-            self.progressBar.isIndeterminate = false
-            self.progressBar.doubleValue = 0
-            self.progressBar.isHidden = false
-            self.progressBar.startAnimation(nil)
-
-            let text = statusText ?? String(format: "Loading... (%.1f MB/s)", speed)
-            self.speedLabel.stringValue = text
-            self.speedLabel.isHidden = false
-
-            self.progressTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
-                guard let self = self else { return }
-                self.elapsedProgressTime += 0.05
-                let progress = min(95.0, (self.elapsedProgressTime / self.estimatedDuration) * 100.0)
-                self.progressBar.doubleValue = progress
+            self.pendingLoad = (statusText, CFAbsoluteTimeGetCurrent())
+            self.progressSampleStart = nil
+            self.lastProgressFraction = nil
+            self.revealTimer?.invalidate()
+            self.revealTimer = Timer.scheduledTimer(withTimeInterval: self.overlayRevealDelay, repeats: false) { [weak self] _ in
+                guard let self = self, let pending = self.pendingLoad, self.loadingContainerView.isHidden,
+                      (self.lastProgressFraction ?? 0) < 0.9 else { return }
+                self.revealOverlay()
+                if self.lastProgressFraction == nil {
+                    self.progressBar.isIndeterminate = true
+                    self.progressBar.startAnimation(nil)
+                    self.speedLabel.stringValue = pending.statusText
+                }
             }
         }
+    }
+
+    private func revealOverlay() {
+        loadingContainerView.isHidden = false
+        loadingIndicator.isHidden = false
+        loadingIndicator.startAnimation(nil)
+        progressBar.isHidden = false
+        speedLabel.isHidden = false
+    }
+
+    /// Applies real progress reported by the I/O layer.  Must be called on the
+    /// main queue after `beginLoading`.  The overlay appears only when the
+    /// operation is still running after `overlayRevealDelay` and is not
+    /// nearly done; updates arriving after `hideLoading` are ignored.
+    public func updateLoadingProgress(_ progress: LoadProgress) {
+        guard let pending = pendingLoad else { return }
+
+        let now = CFAbsoluteTimeGetCurrent()
+        // A new phase (another total) restarts the throughput measurement.
+        if progressSampleStart == nil || progressSampleStart?.total != progress.total {
+            progressSampleStart = (now, progress.completed, progress.total)
+        }
+        lastProgressFraction = progress.fraction
+
+        if loadingContainerView.isHidden {
+            guard now - pending.startTime >= overlayRevealDelay, progress.fraction < 0.9 else { return }
+            revealOverlay()
+        }
+        if progressBar.isIndeterminate {
+            progressBar.stopAnimation(nil)
+            progressBar.isIndeterminate = false
+        }
+
+        progressBar.doubleValue = progress.fraction * 100.0
+
+        var parts = [String(format: "%@  %.0f%%", pending.statusText, progress.fraction * 100.0)]
+        switch progress.unit {
+        case .bytes:
+            let formatter = ByteCountFormatter()
+            formatter.countStyle = .file
+            parts.append("\(formatter.string(fromByteCount: progress.completed)) of \(formatter.string(fromByteCount: progress.total))")
+        case .entries:
+            parts.append("\(progress.completed.formatted()) of \(progress.total.formatted()) entries")
+        }
+
+        // Throughput and ETA come from what this operation has actually done
+        // so far, measured from its first progress sample.
+        if let start = progressSampleStart {
+            let elapsed = now - start.time
+            let done = Double(progress.completed - start.completed)
+            if elapsed >= 0.25 && done > 0 {
+                let rate = done / elapsed
+                if progress.unit == .bytes {
+                    parts.append(String(format: "%.1f MB/s", rate / (1024.0 * 1024.0)))
+                }
+                let remaining = Double(progress.total - progress.completed) / rate
+                if elapsed >= 1.0 && remaining >= 1.0 {
+                    parts.append(String(format: "~%.0fs left", remaining.rounded(.up)))
+                }
+            }
+        }
+
+        speedLabel.stringValue = parts.joined(separator: " · ")
     }
 
     public func hideLoading() {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
 
-            self.progressTimer?.invalidate()
-            self.progressTimer = nil
+            self.revealTimer?.invalidate()
+            self.revealTimer = nil
+            self.pendingLoad = nil
+            self.progressSampleStart = nil
+            self.lastProgressFraction = nil
 
             self.loadingContainerView.isHidden = true
 
@@ -250,7 +322,8 @@ public class MainImageView: NSView {
             self.loadingIndicator.isHidden = true
 
             self.progressBar.stopAnimation(nil)
-            self.progressBar.doubleValue = 100
+            self.progressBar.isIndeterminate = false
+            self.progressBar.doubleValue = 0
             self.progressBar.isHidden = true
 
             self.speedLabel.isHidden = true

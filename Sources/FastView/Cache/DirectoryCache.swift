@@ -100,7 +100,17 @@ public enum FolderStatsCalculator {
         return FolderStats(totalImages: total, isComplete: cached.isComplete, viewedPercentage: percentage, favoriteCount: favCount)
     }
 
-    public static func stats(for item: FileItem, isCancelled: (() -> Bool)? = nil) -> FolderStats? {
+    /// `progress` reports the archive listing progress when `item` is an
+    /// archive that has not been listed yet.
+    /// Records the image ids of an archive known without listing it (from
+    /// the thumbnail cache), so `cachedStats` can answer for it.
+    public static func store(imageIDs: [String], for item: FileItem) {
+        cacheLock.lock()
+        folderStatsCache[item.path] = CachedFolderData(imageKeys: imageIDs.map { "\(item.path)#\($0)" }, isComplete: true)
+        cacheLock.unlock()
+    }
+
+    public static func stats(for item: FileItem, progress: LoadProgressHandler? = nil, isCancelled: (() -> Bool)? = nil) -> FolderStats? {
         if let fast = cachedStats(for: item) {
             return fast
         }
@@ -115,11 +125,11 @@ public enum FolderStatsCalculator {
         var isComplete = true
 
         if item.type == .archiveZip {
-            let entries = ArchiveReader.listAllZipImages(archivePath: item.path, isCancelled: isCancelled)
+            let entries = ArchiveReader.listAllZipImages(archivePath: item.path, progress: progress, isCancelled: isCancelled)
             imageKeys = entries.map { "\(item.path)#\($0.id)" }
             isComplete = true
         } else if item.type == .archiveRar {
-            let entries = ArchiveReader.listAllRarImages(archivePath: item.path, isCancelled: isCancelled)
+            let entries = ArchiveReader.listAllRarImages(archivePath: item.path, progress: progress, isCancelled: isCancelled)
             imageKeys = entries.map { "\(item.path)#\($0.id)" }
             isComplete = true
         } else if item.isDirectory {
@@ -164,6 +174,10 @@ public enum FolderStatsCalculator {
                 }
             }
         }
+
+        // A cancelled listing returns no entries; caching it would pin the
+        // count at 0 until the cache is cleared.
+        if isCancelled?() == true { return nil }
 
         cacheLock.lock()
         folderStatsCache[item.path] = CachedFolderData(imageKeys: imageKeys, isComplete: isComplete)
