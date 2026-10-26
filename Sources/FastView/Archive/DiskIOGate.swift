@@ -31,7 +31,7 @@ public final class DiskIOGate {
     /// can be told apart from operations queued behind them.
     /// True while an interactive request is waiting for the gate.  Background
     /// work checks it as part of its cancellation so it gets out of the way
-    /// (a helper read is killed and later resumes where it stopped).
+    /// (it stops at its next read).
     public var hasInteractiveWaiting: Bool {
         condition.lock()
         defer { condition.unlock() }

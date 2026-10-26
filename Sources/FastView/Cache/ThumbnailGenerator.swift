@@ -1,7 +1,6 @@
 import Foundation
 import AppKit
 import ImageIO
-import FastViewArchiveCore
 
 public class ThumbnailGenerator {
     public static let shared = ThumbnailGenerator()
@@ -83,8 +82,8 @@ public class ThumbnailGenerator {
     }
 
     /// Cancels queued and running thumbnail ops requested by `group` except
-    /// those for `keepIDs`.  A running archive read is killed; the bytes it
-    /// already read are kept, so a later request for it resumes.
+    /// those for `keepIDs`.  A running archive read stops at its next read; a
+    /// whole-file RAR read keeps what it read, so a later request resumes.
     public func cancelThumbnailTasks(inGroup group: String, keeping keepIDs: Set<String>) {
         lock.lock()
         defer { lock.unlock() }
@@ -129,14 +128,15 @@ public class ThumbnailGenerator {
                 let startTime = CFAbsoluteTimeGetCurrent()
 
                 // An archive's thumbnail and image count come from one
-                // helper request: it lists the archive (for the count),
+                // archive request: it lists the archive (for the count),
                 // extracts the preview image and downscales it.
                 var archiveThumbnail: CGImage?
                 let isArchive = item.type == .archiveZip || item.type == .archiveRar
                 if isArchive {
                     let thumbnailSize = Int(max(targetSize.width, targetSize.height))
                     // The local thumbnail cache saves reading the archive at all.
-                    if let cached = ArchiveThumbCache.load(archivePath: item.path, thumbnailSize: thumbnailSize) {
+                    if ArchiveThumbCache.isUsed(for: item.type),
+                       let cached = ArchiveThumbCache.load(archivePath: item.path, thumbnailSize: thumbnailSize) {
                         archiveThumbnail = cached.thumbnail
                         if FolderStatsCalculator.cachedStats(for: item) == nil {
                             FolderStatsCalculator.store(imageIDs: cached.imageIDs, for: item)
@@ -148,7 +148,7 @@ public class ThumbnailGenerator {
                                                                        maxPixelSize: thumbnailSize, isCancelled: shouldStop)
                         archiveThumbnail = preview?.thumbnail
                         // Saved even if we are about to yield: the work is done.
-                        if preview != nil {
+                        if preview != nil && ArchiveThumbCache.isUsed(for: item.type) {
                             self.saveArchiveThumbnail(for: item, thumbnail: archiveThumbnail, thumbnailSize: thumbnailSize)
                         }
                         if shouldStop() { return }
@@ -213,7 +213,7 @@ public class ThumbnailGenerator {
                                thumbnail: thumbnail, imageIDs: images.map(\.id))
     }
 
-    /// Reads ahead, in the helper, the images that follow `item` in its ZIP
+    /// Reads ahead the images that follow `item` in its ZIP
     /// archive, so viewing them next needs no disk access.  Runs on the
     /// background queue behind thumbnail work, yields to interactive I/O and
     /// is dropped by the next selection (`cancelAllThumbnailTasks`).
@@ -225,8 +225,8 @@ public class ThumbnailGenerator {
         op.addExecutionBlock { [weak op] in
             DiskIOGate.shared.perform(.background, label: archivePath) {
                 guard let currentOp = op, !currentOp.isCancelled else { return }
-                _ = ArchiveHelper.shared.prefetch(archivePath: archivePath, kind: .zip, after: item.path,
-                                                  isCancelled: { currentOp.isCancelled || DiskIOGate.shared.hasInteractiveWaiting })
+                _ = ArchiveService.shared.prefetch(zipPath: archivePath, after: item.path,
+                                                   isCancelled: { currentOp.isCancelled || DiskIOGate.shared.hasInteractiveWaiting })
             }
         }
         thumbnailQueue.addOperation(op)
@@ -281,7 +281,7 @@ public class ThumbnailGenerator {
         return nil
     }
 
-    // Same choice as the helper makes for archive previews (ArchivePreview).
+    // Same choice as the archive service makes for previews (ArchivePreview).
     private func findPreferredArchiveImage(in items: [FileItem]) -> FileItem? {
         let imageItems = items.filter { $0.type == .image }
         return ArchivePreview.preferredIndex(names: imageItems.map(\.name)).map { imageItems[$0] }
@@ -376,14 +376,14 @@ public class ThumbnailGenerator {
                 var targetItem = item
                 var imageData: Data?
                 if item.type == .archiveZip || item.type == .archiveRar {
-                    // One helper request lists the archive (for the count),
+                    // One archive request lists the archive (for the count),
                     // picks the preview image and extracts it.
                     let preview = ArchiveReader.loadArchivePreview(archivePath: item.path, type: item.type, maxPixelSize: nil,
                                                                    progress: mainQueueProgress, isCancelled: { currentOp.isCancelled })
                     _ = FolderStatsCalculator.stats(for: item, isCancelled: { currentOp.isCancelled })
                     // The sidebar shows this image as the archive's thumbnail
                     // (it is not generated separately), so cache it too.
-                    if let preview = preview {
+                    if let preview = preview, ArchiveThumbCache.isUsed(for: item.type) {
                         let thumbnailSize = 256
                         let thumbnail = preview.imageData.flatMap { ArchivePreview.thumbnail(from: $0, maxPixelSize: thumbnailSize) }
                         if ArchiveThumbCache.load(archivePath: item.path, thumbnailSize: thumbnailSize) == nil {

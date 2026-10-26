@@ -3,8 +3,13 @@ import CoreGraphics
 import CryptoKit
 import ImageIO
 
-/// On-disk cache of archive thumbnails and image lists, in
+/// On-disk cache of RAR archive thumbnails and image lists, in
 /// `~/Library/Caches/FastView/ArchiveThumbs`.
+///
+/// Only RAR archives are cached (`isUsed(for:)`): listing one scans every
+/// header (and, on a network volume, reads the whole file), while a ZIP
+/// archive is listed from its central directory and its preview read by
+/// range, which is about as quick as reading the cache.
 ///
 /// For each archive it holds `<key>.jpg`, the sidebar thumbnail, and
 /// `<key>.json`: the archive's path, size and modification date, the
@@ -89,15 +94,12 @@ enum ArchiveThumbCache {
         return Entry(thumbnail: thumbnail, imageIDs: record.imageIDs)
     }
 
-    /// Options > Save Archive Thumbnails.  Off: nothing new is written;
-    /// entries already in the cache are still used.
-    static var isSavingEnabled: Bool {
-        get { UserDefaults.standard.object(forKey: "FastViewSaveArchiveThumbnails") as? Bool ?? true }
-        set { UserDefaults.standard.set(newValue, forKey: "FastViewSaveArchiveThumbnails") }
+    /// Whether thumbnails of archives of `type` are cached.
+    static func isUsed(for type: FileType) -> Bool {
+        type == .archiveRar
     }
 
     static func save(archivePath: String, thumbnailSize: Int, thumbnail: CGImage?, imageIDs: [String]) {
-        guard isSavingEnabled else { return }
         let files = files(for: archivePath)
         guard let stamp = archiveStamp(archivePath) else { return }
 

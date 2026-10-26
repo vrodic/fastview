@@ -1,6 +1,5 @@
 import Foundation
 import CoreGraphics
-import FastViewArchiveCore
 #if os(macOS)
 import Darwin
 #endif
@@ -53,10 +52,9 @@ final class ProgressThrottle {
 
 // MARK: - ArchiveIndexCache
 
-/// Entry lists of recently listed archives.  The archives themselves stay in
-/// the FastViewReader helper (see `ArchiveHelper`); FastView only keeps this
-/// metadata, so listing a subfolder or matching an entry path needs no
-/// request.
+/// Entry lists of recently listed archives.  `ArchiveService` keeps only a
+/// few archives open; this metadata outlives them, so listing a subfolder or
+/// matching an entry path needs no archive request.
 ///
 /// Thread-safety: all access goes through `withEntries`, serialised by `lock`.
 private final class ArchiveIndexCache {
@@ -71,10 +69,10 @@ private final class ArchiveIndexCache {
     private let lock = NSLock()
     private let maxArchives = 64
 
-    /// Executes `block` with the entry list of `archivePath`, asking the
-    /// helper for it on a cache miss (with progress).  Returns `nil` if the
+    /// Executes `block` with the entry list of `archivePath`, listing the
+    /// archive on a cache miss (with progress).  Returns `nil` if the
     /// archive cannot be listed or listing was cancelled.
-    func withEntries<T>(at archivePath: String, kind: ArchiveRequest.Kind,
+    func withEntries<T>(at archivePath: String, kind: ArchiveService.Kind,
                         progress: LoadProgressHandler? = nil,
                         isCancelled: (() -> Bool)? = nil,
                         block: (_ entries: [ArchiveEntryRecord]) -> T?) -> T? {
@@ -84,8 +82,8 @@ private final class ArchiveIndexCache {
         if cache[archivePath] != nil {
             cache[archivePath]!.lastUsed = Date()
         } else {
-            guard let entries = ArchiveHelper.shared.list(archivePath: archivePath, kind: kind,
-                                                          progress: progress, isCancelled: isCancelled) else { return nil }
+            guard let entries = ArchiveService.shared.list(kind, archivePath: archivePath,
+                                                           progress: progress, isCancelled: isCancelled) else { return nil }
             while cache.count >= maxArchives,
                   let lruKey = cache.min(by: { $0.value.lastUsed < $1.value.lastUsed })?.key {
                 cache.removeValue(forKey: lruKey)
@@ -198,8 +196,8 @@ public class ArchiveReader {
                         return p == normEntryPath || p.hasSuffix("/" + normEntryPath) || normEntryPath.hasSuffix("/" + p)
                     }) else { return nil }
 
-            return ArchiveHelper.shared.extract(archivePath: archivePath, kind: .zip, entryPath: entry.path,
-                                                entrySize: entry.uncompressedSize, progress: progress, isCancelled: isCancelled)
+            return ArchiveService.shared.extract(.zip, archivePath: archivePath, entryPath: entry.path,
+                                                 progress: progress, isCancelled: isCancelled)
         }
 
         guard let data = result else { return nil }
@@ -226,8 +224,8 @@ public class ArchiveReader {
                 return nil
             }
 
-            return ArchiveHelper.shared.extract(archivePath: archivePath, kind: .rar, entryPath: entry.path,
-                                                entrySize: entry.uncompressedSize, progress: progress, isCancelled: isCancelled)
+            return ArchiveService.shared.extract(.rar, archivePath: archivePath, entryPath: entry.path,
+                                                 progress: progress, isCancelled: isCancelled)
         }
 
         guard let data = result else { return nil }
@@ -238,7 +236,7 @@ public class ArchiveReader {
 
     /// The preview image of an archive and, if not cached yet, its entry list
     /// (so the image count that follows needs no request), from a single
-    /// helper request.  A thumbnail when `maxPixelSize` is set, else the
+    /// archive request.  A thumbnail when `maxPixelSize` is set, else the
     /// image file.  `nil` if the archive cannot be read or the request was
     /// cancelled; an empty result if it has no images.
     public static func loadArchivePreview(archivePath: String, type: FileType, maxPixelSize: Int?,
@@ -248,9 +246,9 @@ public class ArchiveReader {
         let startTime = CFAbsoluteTimeGetCurrent()
         let needsEntries = !ArchiveIndexCache.shared.contains(archivePath)
 
-        guard let preview = ArchiveHelper.shared.preview(archivePath: archivePath, kind: type == .archiveZip ? .zip : .rar,
-                                                         maxPixelSize: maxPixelSize, includeEntries: needsEntries,
-                                                         progress: progress, isCancelled: isCancelled) else { return nil }
+        guard let preview = ArchiveService.shared.preview(type == .archiveZip ? .zip : .rar, archivePath: archivePath,
+                                                          maxPixelSize: maxPixelSize, includeEntries: needsEntries,
+                                                          progress: progress, isCancelled: isCancelled) else { return nil }
         if let entries = preview.entries {
             ArchiveIndexCache.shared.store(entries, for: archivePath)
         }

@@ -84,7 +84,6 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     public func applicationWillTerminate(_ notification: Notification) {
-        ArchiveHelper.shared.shutdown()
         saveCurrentSelectionState()
     }
 
@@ -241,10 +240,6 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         lowMemItem.state = MemoryLRUCache.shared.isLowMemoryMode ? .on : .off
         optionsMenu.addItem(lowMemItem)
 
-        let saveThumbsItem = NSMenuItem(title: "Save Archive Thumbnails", action: #selector(toggleSaveArchiveThumbnailsAction(_:)), keyEquivalent: "")
-        saveThumbsItem.state = ArchiveThumbCache.isSavingEnabled ? .on : .off
-        optionsMenu.addItem(saveThumbsItem)
-
         // 5. Controls Menu
         let controlsMenuItem = NSMenuItem()
         mainMenu.addItem(controlsMenuItem)
@@ -379,12 +374,6 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         sender.state = newState ? .on : .off
         FolderStatsCalculator.clearCache()
         windowController?.splitVC.reloadDirectoryContentsPublic()
-    }
-
-    @objc private func toggleSaveArchiveThumbnailsAction(_ sender: NSMenuItem) {
-        let newState = !ArchiveThumbCache.isSavingEnabled
-        ArchiveThumbCache.isSavingEnabled = newState
-        sender.state = newState ? .on : .off
     }
 
     @objc private func toggleLowMemoryModeAction(_ sender: NSMenuItem) {
@@ -595,10 +584,6 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         }
         if menuItem.action == #selector(toggleLowMemoryModeAction(_:)) {
             menuItem.state = MemoryLRUCache.shared.isLowMemoryMode ? .on : .off
-            return true
-        }
-        if menuItem.action == #selector(toggleSaveArchiveThumbnailsAction(_:)) {
-            menuItem.state = ArchiveThumbCache.isSavingEnabled ? .on : .off
             return true
         }
         if menuItem.action == #selector(toggleCombiningControlsAction(_:)) ||

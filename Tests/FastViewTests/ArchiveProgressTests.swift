@@ -1,7 +1,6 @@
 import XCTest
 import ImageIO
 import ZIPFoundation
-import FastViewArchiveCore
 @testable import FastView
 
 final class ArchiveProgressTests: XCTestCase {
@@ -41,13 +40,18 @@ final class ArchiveProgressTests: XCTestCase {
         XCTAssertEqual(process.terminationStatus, 0, "\(tool) failed")
     }
 
+    private let rarTool = "/opt/homebrew/bin/rar"
+
     private func makeRar(solid: Bool) throws -> String {
-        let rar = "/opt/homebrew/bin/rar"
-        guard FileManager.default.isExecutableFile(atPath: rar) else {
+        try makeRar(solid ? "solid.rar" : "plain.rar", files: sourceFiles, solid: solid)
+    }
+
+    private func makeRar(_ name: String, files: [URL], solid: Bool = false) throws -> String {
+        guard FileManager.default.isExecutableFile(atPath: rarTool) else {
             throw XCTSkip("rar is not installed")
         }
-        let path = workDir.appendingPathComponent(solid ? "solid.rar" : "plain.rar").path
-        try run(rar, ["a", "-ep", solid ? "-s" : "-s-", path] + sourceFiles.map { $0.lastPathComponent })
+        let path = workDir.appendingPathComponent(name).path
+        try run(rarTool, ["a", "-ep", solid ? "-s" : "-s-", path] + files.map { $0.lastPathComponent })
         return path
     }
 
@@ -109,8 +113,8 @@ final class ArchiveProgressTests: XCTestCase {
         let rarPath = try makeRar(solid: true)
         let item = FileItem(id: rarPath, name: "solid.rar", path: rarPath, type: .archiveRar)
 
-        // Cancel while the (stalled) helper is scanning: no count may be cached.
-        withHelperEnvironment(["FASTVIEW_READER_TEST_START_DELAY_US": "2000000"]) {
+        // Cancel while the (slowed) archive read runs: no count may be cached.
+        withSlowReads {
             let start = Date()
             let cancelledStats = FolderStatsCalculator.stats(for: item, isCancelled: { Date().timeIntervalSince(start) > 0.1 })
             XCTAssertNil(cancelledStats)
@@ -156,14 +160,16 @@ final class ArchiveProgressTests: XCTestCase {
         XCTAssertEqual(order.dropFirst().first, "interactive")
     }
 
-    /// Runs `body` with a fresh helper that sees `environment`, then restarts
-    /// it without, since a running helper keeps the environment it began with.
-    private func withHelperEnvironment(_ environment: [String: String], _ body: () throws -> Void) rethrows {
-        ArchiveHelper.shared.stopHelper()
-        environment.forEach { setenv($0.key, $0.value, 1) }
+    /// Runs `body` with the archive service reading as from a slow network
+    /// volume: RAR archives are read whole, 256 KiB every 20 ms.
+    private func withSlowReads(_ body: () throws -> Void) rethrows {
+        let saved = ArchiveService.shared.config
+        ArchiveService.shared.config.readChunkSize = 256 * 1024
+        ArchiveService.shared.config.readChunkDelay = 20_000
+        ArchiveService.treatLocalVolumesAsRemote = true
         defer {
-            environment.keys.forEach { unsetenv($0) }
-            ArchiveHelper.shared.stopHelper()
+            ArchiveService.shared.config = saved
+            ArchiveService.treatLocalVolumesAsRemote = false
         }
         try body()
     }
@@ -175,20 +181,19 @@ final class ArchiveProgressTests: XCTestCase {
     }
 
     func testZipOpensWithoutReadingTheWholeArchive() throws {
-        try XCTSkipIf(ArchiveHelper.helperURL == nil, "FastViewReader helper not built")
-        ArchiveHelper.treatLocalVolumesAsRemote = true
-        defer { ArchiveHelper.treatLocalVolumesAsRemote = false }
+        ArchiveService.treatLocalVolumesAsRemote = true
+        defer { ArchiveService.treatLocalVolumesAsRemote = false }
         let zipPath = try makeZip("network.zip", files: sourceFiles)
         let zipSize = try XCTUnwrap(FileManager.default.attributesOfItem(atPath: zipPath)[.size] as? NSNumber).int64Value
 
         let recorder = Recorder()
         let items = ArchiveReader.listAllZipImages(archivePath: zipPath, progress: recorder.handler)
         XCTAssertEqual(items.count, 3)
-        // Only the central directory is read to list it; no whole-file region.
+        // Only the central directory is read to list it, never the whole file.
         recorder.assertCompleted(unit: .bytes)
         XCTAssertLessThan(try XCTUnwrap(recorder.updates.last).total, 4096)
         XCTAssertLessThan(try XCTUnwrap(recorder.updates.last).total, zipSize)
-        XCTAssertNil(ArchiveHelper.shared.partialReadOffset(for: zipPath))
+        XCTAssertNil(ArchiveService.shared.partialReadOffset(for: zipPath))
 
         let data = ArchiveReader.loadZipData(archivePath: zipPath, entryPath: "image2.jpg")
         XCTAssertEqual(data, try Data(contentsOf: sourceFiles[1]))
@@ -238,70 +243,49 @@ final class ArchiveProgressTests: XCTestCase {
         }
     }
 
-    func testHelperStaysRunningBetweenRequests() throws {
-        try XCTSkipIf(ArchiveHelper.helperURL == nil, "FastViewReader helper not built")
-        let first = try makeZip("first.zip", files: [sourceFiles[0]])
-        let second = try makeZip("second.zip", files: [sourceFiles[1]])
-
-        XCTAssertNotNil(ArchiveReader.loadZipData(archivePath: first, entryPath: "image1.jpg"))
-        let pid = try XCTUnwrap(ArchiveHelper.shared.helperProcessIdentifier)
-        XCTAssertNotNil(ArchiveReader.loadZipData(archivePath: second, entryPath: "image2.jpg"))
-        XCTAssertNotNil(ArchiveReader.loadZipData(archivePath: first, entryPath: "image1.jpg"))
-        XCTAssertEqual(ArchiveHelper.shared.helperProcessIdentifier, pid)
-    }
-
     func testStoppedArchiveReadResumesWhereItStopped() throws {
-        try XCTSkipIf(ArchiveHelper.helperURL == nil, "FastViewReader helper not built")
         let rarPath = try makeRar(solid: false)
-        ArchiveHelper.treatLocalVolumesAsRemote = true
-        defer { ArchiveHelper.treatLocalVolumesAsRemote = false }
         let rarSize = try XCTUnwrap(FileManager.default.attributesOfItem(atPath: rarPath)[.size] as? NSNumber).intValue
 
-        // 256 KiB chunks, 20 ms apart: reading the ~9 MiB archive takes ~0.7 s.
-        try withHelperEnvironment(["FASTVIEW_READER_TEST_CHUNK_SIZE": "262144",
-                                   "FASTVIEW_READER_TEST_CHUNK_DELAY_US": "20000"]) {
+        // Reading the ~9 MiB archive takes ~0.7 s.
+        try withSlowReads {
             var readSoFar: Int64 = 0
             let stopped = ArchiveReader.listAllRarImages(archivePath: rarPath,
                                                          progress: { readSoFar = $0.completed },
                                                          isCancelled: { readSoFar >= 1024 * 1024 })
             XCTAssertTrue(stopped.isEmpty)
-            // Asked to stop between reads, the helper stopped by itself.
-            XCTAssertNotNil(ArchiveHelper.shared.helperProcessIdentifier)
 
-            let offset = try XCTUnwrap(ArchiveHelper.shared.partialReadOffset(for: rarPath))
+            let offset = try XCTUnwrap(ArchiveService.shared.partialReadOffset(for: rarPath))
             XCTAssertGreaterThanOrEqual(offset, 1024 * 1024)
             XCTAssertLessThan(offset, rarSize)
-        }
 
-        // A new helper adopts the region and reads only the rest.
-        let items = ArchiveReader.listAllRarImages(archivePath: rarPath)
-        XCTAssertEqual(items.count, 3)
-        XCTAssertEqual(ArchiveHelper.shared.partialReadOffset(for: rarPath), rarSize)
+            // The next request reads only the rest.
+            let resumed = Recorder()
+            let items = ArchiveReader.listAllRarImages(archivePath: rarPath, progress: resumed.handler)
+            XCTAssertEqual(items.count, 3)
+            XCTAssertGreaterThan(try XCTUnwrap(resumed.updates.first).completed, Int64(offset))
+            resumed.assertCompleted(unit: .bytes, total: Int64(rarSize))
+            XCTAssertNil(ArchiveService.shared.partialReadOffset(for: rarPath))
+        }
         XCTAssertEqual(ArchiveReader.loadRarData(archivePath: rarPath, entryPath: "image1.jpg"),
                        try Data(contentsOf: sourceFiles[0]))
     }
 
     func testPrefetchServesNextImageFromMemoryAndStopsCooperatively() throws {
-        try XCTSkipIf(ArchiveHelper.helperURL == nil, "FastViewReader helper not built")
         let zipPath = try makeZip("prefetch.zip", files: sourceFiles)
 
-        // Every 256 KiB read takes 20 ms: a 3 MiB image takes ~240 ms from "disk".
-        try withHelperEnvironment(["FASTVIEW_READER_TEST_CHUNK_SIZE": "262144",
-                                   "FASTVIEW_READER_TEST_CHUNK_DELAY_US": "20000"]) {
+        // A 3 MiB image takes ~240 ms from "disk".
+        try withSlowReads {
             XCTAssertNotNil(ArchiveReader.loadZipData(archivePath: zipPath, entryPath: "image1.jpg"))
-            let pid = try XCTUnwrap(ArchiveHelper.shared.helperProcessIdentifier)
 
-            // Stopped part-way it reports what it finished, and the helper
-            // keeps running (with its archive open).
+            // Stopped part-way it reports what it finished.
             let start = Date()
-            let stopped = ArchiveHelper.shared.prefetch(archivePath: zipPath, kind: .zip, after: "image1.jpg",
-                                                        isCancelled: { Date().timeIntervalSince(start) > 0.1 })
+            let stopped = ArchiveService.shared.prefetch(zipPath: zipPath, after: "image1.jpg",
+                                                         isCancelled: { Date().timeIntervalSince(start) > 0.1 })
             XCTAssertLessThan(stopped ?? 0, 2)
             XCTAssertLessThan(Date().timeIntervalSince(start), 0.5)
-            XCTAssertEqual(ArchiveHelper.shared.helperProcessIdentifier, pid)
 
-            XCTAssertEqual(ArchiveHelper.shared.prefetch(archivePath: zipPath, kind: .zip, after: "image1.jpg",
-                                                         isCancelled: nil), 2)
+            XCTAssertEqual(ArchiveService.shared.prefetch(zipPath: zipPath, after: "image1.jpg", isCancelled: nil), 2)
             let readStart = Date()
             XCTAssertEqual(ArchiveReader.loadZipData(archivePath: zipPath, entryPath: "image2.jpg"),
                            try Data(contentsOf: sourceFiles[1]))
@@ -350,11 +334,10 @@ final class ArchiveProgressTests: XCTestCase {
         XCTAssertNil(ArchiveThumbCache.load(archivePath: zipPath, thumbnailSize: 256)?.thumbnail)
     }
 
-    func testArchiveThumbnailIsWrittenToThumbsCache() throws {
-        try XCTSkipIf(ArchiveHelper.helperURL == nil, "FastViewReader helper not built")
+    func testRarThumbnailIsWrittenToThumbsCache() throws {
         let images = [try writePNG("t1.png", width: 120, height: 80), try writePNG("t2.png", width: 80, height: 120)]
-        let zipPath = try makeZip("thumbed.zip", files: images)
-        let item = FileItem(id: zipPath, name: "thumbed.zip", path: zipPath, type: .archiveZip)
+        let rarPath = try makeRar("thumbed.rar", files: images)
+        let item = FileItem(id: rarPath, name: "thumbed.rar", path: rarPath, type: .archiveRar)
 
         let done = expectation(description: "thumbnail")
         ThumbnailGenerator.shared.generateThumbnailWithStats(for: item) { image, stats in
@@ -364,14 +347,14 @@ final class ArchiveProgressTests: XCTestCase {
         }
         wait(for: [done], timeout: 10)
 
-        let cached = try XCTUnwrap(ArchiveThumbCache.load(archivePath: zipPath, thumbnailSize: 256))
+        let cached = try XCTUnwrap(ArchiveThumbCache.load(archivePath: rarPath, thumbnailSize: 256))
         XCTAssertEqual(cached.imageIDs.sorted(), ["t1.png", "t2.png"])
         XCTAssertNotNil(cached.thumbnail)
         // As after a restart: nothing in memory.  The thumbnail and count must
         // come from the thumbnail cache, without any archive request.
         MemoryLRUCache.shared.clear()
         FolderStatsCalculator.clearCache()
-        let before = ArchiveHelper.shared.requestCount
+        let before = ArchiveService.shared.requestCount
         let again = expectation(description: "cached thumbnail")
         ThumbnailGenerator.shared.generateThumbnailWithStats(for: item) { image, stats in
             XCTAssertNotNil(image)
@@ -379,7 +362,22 @@ final class ArchiveProgressTests: XCTestCase {
             again.fulfill()
         }
         wait(for: [again], timeout: 10)
-        XCTAssertEqual(ArchiveHelper.shared.requestCount, before)
+        XCTAssertEqual(ArchiveService.shared.requestCount, before)
+    }
+
+    func testZipThumbnailIsNotWrittenToThumbsCache() throws {
+        let images = [try writePNG("z1.png", width: 120, height: 80), try writePNG("z2.png", width: 80, height: 120)]
+        let zipPath = try makeZip("unthumbed.zip", files: images)
+        let item = FileItem(id: zipPath, name: "unthumbed.zip", path: zipPath, type: .archiveZip)
+
+        let done = expectation(description: "thumbnail")
+        ThumbnailGenerator.shared.generateThumbnailWithStats(for: item) { image, stats in
+            XCTAssertNotNil(image)
+            XCTAssertEqual(stats?.totalImages, 2)
+            done.fulfill()
+        }
+        wait(for: [done], timeout: 10)
+        XCTAssertNil(ArchiveThumbCache.load(archivePath: zipPath, thumbnailSize: 256))
     }
 
     func testScrollCancellationDropsOnlyRowsNoLongerVisibleInThatSidebar() throws {
@@ -423,21 +421,6 @@ final class ArchiveProgressTests: XCTestCase {
         XCTAssertEqual(Set(completed), ["thumbs3.zip", "thumbs4.zip"])
     }
 
-    func testCancellingHelperRequestKillsItPromptly() throws {
-        try XCTSkipIf(ArchiveHelper.helperURL == nil, "FastViewReader helper not built")
-        let zipPath = try makeZip("slow.zip", files: [sourceFiles[0]])
-
-        // The helper stalls for 5 s per request, like a stuck network read.
-        withHelperEnvironment(["FASTVIEW_READER_TEST_START_DELAY_US": "5000000"]) {
-            let start = Date()
-            let result = ArchiveHelper.shared.list(archivePath: zipPath, kind: .zip, progress: nil,
-                                                   isCancelled: { Date().timeIntervalSince(start) > 0.2 })
-            XCTAssertNil(result)
-            XCTAssertLessThan(Date().timeIntervalSince(start), 1.0)
-            XCTAssertNil(ArchiveHelper.shared.helperProcessIdentifier)
-        }
-    }
-
     /// Writes a solid-colour PNG of the given size.
     private func writePNG(_ name: String, width: Int, height: Int) throws -> URL {
         let url = workDir.appendingPathComponent("src").appendingPathComponent(name)
@@ -454,12 +437,10 @@ final class ArchiveProgressTests: XCTestCase {
     }
 
     func testArchivePreviewIsOneRequestAndFeedsTheImageCount() throws {
-        try XCTSkipIf(ArchiveHelper.helperURL == nil, "FastViewReader helper not built")
         // The sidebar previews the second image: b.png, the only wide one.
         let images = [try writePNG("a.png", width: 300, height: 300),
                       try writePNG("b.png", width: 400, height: 200),
                       try writePNG("c.png", width: 300, height: 300)]
-        let rarTool = "/opt/homebrew/bin/rar"
         var archives = [(try makeZip("preview.zip", files: images), FileType.archiveZip)]
         if FileManager.default.isExecutableFile(atPath: rarTool) {
             let rarPath = workDir.appendingPathComponent("preview.rar").path
@@ -468,7 +449,7 @@ final class ArchiveProgressTests: XCTestCase {
         }
 
         for (path, type) in archives {
-            let before = ArchiveHelper.shared.requestCount
+            let before = ArchiveService.shared.requestCount
             let preview = try XCTUnwrap(ArchiveReader.loadArchivePreview(archivePath: path, type: type, maxPixelSize: 64))
             let thumbnail = try XCTUnwrap(preview.thumbnail, "no thumbnail for \(path)")
             XCTAssertEqual(thumbnail.width, 64)
@@ -477,7 +458,7 @@ final class ArchiveProgressTests: XCTestCase {
             // The count is served from the listing that came with the preview.
             let item = FileItem(id: path, name: (path as NSString).lastPathComponent, path: path, type: type)
             XCTAssertEqual(FolderStatsCalculator.stats(for: item)?.totalImages, 3)
-            XCTAssertEqual(ArchiveHelper.shared.requestCount - before, 1, "\(path)")
+            XCTAssertEqual(ArchiveService.shared.requestCount - before, 1, "\(path)")
 
             // Full size: the image file itself, still one request.
             let full = try XCTUnwrap(ArchiveReader.loadArchivePreview(archivePath: path, type: type, maxPixelSize: nil))
@@ -485,11 +466,10 @@ final class ArchiveProgressTests: XCTestCase {
         }
     }
 
-    func testSelectingAnArchiveWritesItsThumbsEntry() throws {
-        try XCTSkipIf(ArchiveHelper.helperURL == nil, "FastViewReader helper not built")
+    func testSelectingARarArchiveWritesItsThumbsEntry() throws {
         let images = [try writePNG("s1.png", width: 90, height: 60), try writePNG("s2.png", width: 60, height: 90)]
-        let zipPath = try makeZip("selected.zip", files: images)
-        let item = FileItem(id: zipPath, name: "selected.zip", path: zipPath, type: .archiveZip)
+        let rarPath = try makeRar("selected.rar", files: images)
+        let item = FileItem(id: rarPath, name: "selected.rar", path: rarPath, type: .archiveRar)
 
         let done = expectation(description: "full preview")
         ThumbnailGenerator.shared.loadFullImage(for: item) { image in
@@ -498,22 +478,8 @@ final class ArchiveProgressTests: XCTestCase {
         }
         wait(for: [done], timeout: 10)
 
-        let cached = try XCTUnwrap(ArchiveThumbCache.load(archivePath: zipPath, thumbnailSize: 256))
+        let cached = try XCTUnwrap(ArchiveThumbCache.load(archivePath: rarPath, thumbnailSize: 256))
         XCTAssertEqual(cached.imageIDs.sorted(), ["s1.png", "s2.png"])
         XCTAssertNotNil(cached.thumbnail)
-    }
-
-    func testTurningOffThumbnailSavingWritesNothing() throws {
-        let zipPath = try makeZip("unsaved.zip", files: [sourceFiles[0]])
-        let saved = ArchiveThumbCache.isSavingEnabled
-        defer { ArchiveThumbCache.isSavingEnabled = saved }
-
-        ArchiveThumbCache.isSavingEnabled = false
-        ArchiveThumbCache.save(archivePath: zipPath, thumbnailSize: 256, thumbnail: nil, imageIDs: ["image1.jpg"])
-        XCTAssertNil(ArchiveThumbCache.load(archivePath: zipPath, thumbnailSize: 256))
-
-        ArchiveThumbCache.isSavingEnabled = true
-        ArchiveThumbCache.save(archivePath: zipPath, thumbnailSize: 256, thumbnail: nil, imageIDs: ["image1.jpg"])
-        XCTAssertNotNil(ArchiveThumbCache.load(archivePath: zipPath, thumbnailSize: 256))
     }
 }

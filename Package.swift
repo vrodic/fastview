@@ -17,9 +17,6 @@ let package = Package(
         .target(
             name: "FastView",
             dependencies: [
-                "ZIPFoundation",
-                "CFastViewShm",
-                "FastViewArchiveCore",
                 .product(name: "Unrar", package: "Unrar.swift")
             ],
             path: "Sources/FastView",
@@ -30,26 +27,10 @@ let package = Package(
                 .linkedLibrary("sqlite3")
             ]
         ),
-        // Shared-memory helpers for FastView and FastViewReader.
-        .target(name: "CFastViewShm"),
-        // Archive listing/extraction and shared-memory regions, used by both
-        // FastView and FastViewReader.
-        .target(
-            name: "FastViewArchiveCore",
-            dependencies: [
-                "CFastViewShm",
-                .product(name: "Unrar", package: "Unrar.swift")
-            ]
-        ),
-        // Killable helper process that does all archive I/O and exchanges
-        // data through shared memory; built next to the FastView executable.
-        .executableTarget(
-            name: "FastViewReader",
-            dependencies: ["CFastViewShm", "FastViewArchiveCore"]
-        ),
         .testTarget(
             name: "FastViewTests",
-            dependencies: ["FastView", "FastViewReader", "FastViewArchiveCore", "ZIPFoundation"],
+            // ZIPFoundation is the reference the ZIP directory parser is checked against.
+            dependencies: ["FastView", "ZIPFoundation"],
             path: "Tests/FastViewTests"
         )
     ]
