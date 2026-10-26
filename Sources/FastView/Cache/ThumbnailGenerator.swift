@@ -91,7 +91,12 @@ public class ThumbnailGenerator {
         op.addExecutionBlock { [weak self, weak op] in
             guard let self = self, let currentOp = op, !currentOp.isCancelled else { return }
 
+            let startTime = CFAbsoluteTimeGetCurrent()
+            FileLogger.shared.log("THUMB_GENERATE_START", path: item.path)
+
             guard let cgImage = self.loadAndScaleCGImage(for: item, targetSize: targetSize, isCancelled: { currentOp.isCancelled }) else {
+                let duration = (CFAbsoluteTimeGetCurrent() - startTime) * 1000.0
+                FileLogger.shared.log("THUMB_GENERATE_END", path: item.path, durationMs: duration)
                 DispatchQueue.main.async {
                     if !currentOp.isCancelled { completion(nil) }
                 }
@@ -99,6 +104,9 @@ public class ThumbnailGenerator {
             }
 
             if currentOp.isCancelled { return }
+
+            let duration = (CFAbsoluteTimeGetCurrent() - startTime) * 1000.0
+            FileLogger.shared.log("THUMB_GENERATE_END", path: item.path, durationMs: duration)
 
             DispatchQueue.main.async {
                 if !currentOp.isCancelled {
@@ -260,6 +268,9 @@ public class ThumbnailGenerator {
         op.addExecutionBlock { [weak self, weak op] in
             guard let self = self, let currentOp = op, !currentOp.isCancelled else { return }
 
+            let startTime = CFAbsoluteTimeGetCurrent()
+            FileLogger.shared.log("FULL_IMAGE_LOAD_START", path: item.path)
+
             var targetItem = item
             if item.type == .archiveZip || item.type == .archiveRar || item.isDirectory {
                 if let peeked = self.peekFirstImage(in: item) {
@@ -291,12 +302,17 @@ public class ThumbnailGenerator {
             }
 
             guard let data = imageData, !currentOp.isCancelled else {
+                let duration = (CFAbsoluteTimeGetCurrent() - startTime) * 1000.0
+                FileLogger.shared.log("FULL_IMAGE_LOAD_END", path: item.path, durationMs: duration)
                 DispatchQueue.main.async {
                     self.setMainImageLoading(false)
                     completion(nil)
                 }
                 return
             }
+
+            let duration = (CFAbsoluteTimeGetCurrent() - startTime) * 1000.0
+            FileLogger.shared.log("FULL_IMAGE_LOAD_END", path: item.path, durationMs: duration)
 
             DispatchQueue.main.async {
                 self.setMainImageLoading(false)

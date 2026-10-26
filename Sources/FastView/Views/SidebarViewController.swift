@@ -700,7 +700,6 @@ public class SidebarTableCellView: NSTableCellView {
 
         let isFav = SQLiteCache.shared.isFavorite(path: item.id) || SQLiteCache.shared.isFavorite(path: item.path)
         favoriteBadge.isHidden = !isFav
-        print("[SidebarCell] configure item '\(item.name)' (id: \(item.id)), isFav: \(isFav)")
 
         let cacheKey = "thumb_\(item.id)_256.0x256.0"
         if let cached = MemoryLRUCache.shared.object(forKey: cacheKey) {
@@ -800,7 +799,6 @@ public class SidebarTableCellView: NSTableCellView {
 
         let isFav = currentItem.map { SQLiteCache.shared.isFavorite(path: $0.id) || SQLiteCache.shared.isFavorite(path: $0.path) } ?? false
         favoriteBadge.isHidden = !isFav
-        print("[SidebarCell] setThumbnailLoaded item '\(currentItem?.name ?? "")', isFav: \(isFav)")
     }
 
     private func showFilenameTextOnly() {
