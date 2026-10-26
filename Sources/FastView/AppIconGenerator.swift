@@ -145,7 +145,7 @@ public enum AppIconGenerator {
         return image
     }
 
-    public func saveAppIconPNG(to path: String) {
+    public static func saveAppIconPNG(to path: String) {
         let icon = generateAppIcon()
         if let tiff = icon.tiffRepresentation,
            let rep = NSBitmapImageRep(data: tiff),
