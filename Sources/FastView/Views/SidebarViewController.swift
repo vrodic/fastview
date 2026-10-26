@@ -323,6 +323,8 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
 
     public func setItems(_ items: [FileItem], selectFirst: Bool = true) {
         self.items = items
+        // One query for the whole list instead of one per configured row.
+        _ = SQLiteCache.shared.getViewedCount(keys: items.filter { $0.type == .image }.map(SidebarTableCellView.viewedKey))
         tableView.reloadData()
 
         if selectFirst && !items.isEmpty {
@@ -663,6 +665,16 @@ public class SidebarTableCellView: NSTableCellView {
     private let archiveNameContainer = NSView()
     private let archiveNameLabel = NSTextField(labelWithString: "")
     private var currentItem: FileItem?
+    private var isViewed = false
+
+    /// Muted green behind viewed images; light enough to keep thumbnails and
+    /// badges the focus.  `systemGreen` adapts to light and dark mode.
+    private static let viewedTint = NSColor.systemGreen.withAlphaComponent(0.16)
+
+    /// The viewed-images key of an image row.
+    static func viewedKey(for item: FileItem) -> String {
+        item.archivePath.map { "\($0)#\(item.id)" } ?? item.id
+    }
 
     override public init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -676,6 +688,7 @@ public class SidebarTableCellView: NSTableCellView {
 
     private func setupUI() {
         self.wantsLayer = true
+        layer?.cornerRadius = 6
 
         thumbnailImageView.translatesAutoresizingMaskIntoConstraints = false
         thumbnailImageView.imageScaling = .scaleProportionallyUpOrDown
@@ -835,6 +848,7 @@ public class SidebarTableCellView: NSTableCellView {
 
         let isFav = SQLiteCache.shared.isFavorite(path: item.id) || SQLiteCache.shared.isFavorite(path: item.path)
         favoriteBadge.isHidden = !isFav
+        updateViewedState()
 
         let cacheKey = "thumb_\(item.id)_256.0x256.0"
         if let cached = MemoryLRUCache.shared.object(forKey: cacheKey) {
@@ -910,6 +924,31 @@ public class SidebarTableCellView: NSTableCellView {
 
         let isFav = currentItem.map { SQLiteCache.shared.isFavorite(path: $0.id) || SQLiteCache.shared.isFavorite(path: $0.path) } ?? false
         favoriteBadge.isHidden = !isFav
+        // The selected image is marked viewed just before its image is set.
+        updateViewedState()
+    }
+
+    private func updateViewedState() {
+        isViewed = currentItem.map { $0.type == .image && SQLiteCache.shared.isImageViewed(key: Self.viewedKey(for: $0)) } ?? false
+        updateViewedBackground()
+    }
+
+    // Selected rows keep the plain selection highlight.
+    override public var backgroundStyle: NSView.BackgroundStyle {
+        didSet { updateViewedBackground() }
+    }
+
+    override public func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        updateViewedBackground()
+    }
+
+    private func updateViewedBackground() {
+        let isSelected = (superview as? NSTableRowView)?.isSelected ?? false
+        let tinted = isViewed && !isSelected && backgroundStyle != .emphasized
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            layer?.backgroundColor = tinted ? Self.viewedTint.cgColor : nil
+        }
     }
 
     private func showFilenameTextOnly() {
