@@ -12,10 +12,21 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
     // Sibling navigations waiting for their parent listing, by pane: the
     // accumulated step (left/right presses made meanwhile).
     private var pendingSiblingSteps: [Int: Int] = [:]
+    // Listings as last shown, by pane and location cache key, so sibling
+    // steps follow the order on screen even when the sort key (viewed,
+    // favorites) has changed since.  Main thread only.
+    private var shownOrders: [Int: [String: (options: ListSortOptions, items: [FileItem])]] = [:]
+    private var shownOrderKeys: [Int: [String]] = [:]
+    private static let shownOrdersLimit = 16
     private var currentDirectoryLoadItem1: DispatchWorkItem?
     private var currentDirectoryLoadItem2: DispatchWorkItem?
     private let lock = NSLock()
-    private static let sidebarWidthKey = "FastViewSidebarWidth"
+    // The old "FastViewSidebarWidth" key could hold the image area's width
+    // (it measured splitView.subviews[0], which is not the sidebar).
+    private static let sidebarWidthKey = "FastViewSidebarWidthV2"
+    private static let splitAutosaveFramesKey = "NSSplitView Subview Frames FastMainSplitView"
+    // Widths reported during the first layout are defaults, not the user's.
+    private var hasRestoredSidebarWidth = false
 
     public var activePane: Int = 1 {
         didSet {
@@ -129,17 +140,35 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
     }
 
     private func restoreSidebarWidth() {
-        let savedWidth = UserDefaults.standard.double(forKey: MainSplitViewController.sidebarWidthKey)
-        if savedWidth >= 120 {
-            splitViewItems[0].preferredThicknessFraction = 0
-            splitView.setPosition(CGFloat(savedWidth), ofDividerAt: 0)
-        }
+        defer { hasRestoredSidebarWidth = true }
+        guard let savedWidth = savedSidebarWidth() else { return }
+        // Leave the image area its minimum width in a smaller window.
+        let maxWidth = splitView.bounds.width - splitView.dividerThickness - splitViewItems[1].minimumThickness
+        splitViewItems[0].preferredThicknessFraction = 0
+        splitView.setPosition(max(120, min(savedWidth, maxWidth)), ofDividerAt: 0)
+    }
+
+    /// The saved sidebar width; before it was first saved, the width the
+    /// split view's own autosave recorded for the sidebar.
+    private func savedSidebarWidth() -> CGFloat? {
+        let defaults = UserDefaults.standard
+        let saved = defaults.double(forKey: MainSplitViewController.sidebarWidthKey)
+        if saved >= 120 { return CGFloat(saved) }
+        guard let frames = defaults.array(forKey: MainSplitViewController.splitAutosaveFramesKey) as? [String],
+              let sidebarFrame = frames.first else { return nil }
+        let parts = sidebarFrame.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+        guard parts.count >= 3, let width = Double(parts[2]), width >= 120 else { return nil }
+        return CGFloat(width)
     }
 
     override public func splitViewDidResizeSubviews(_ notification: Notification) {
         super.splitViewDidResizeSubviews(notification)
-        guard splitView.subviews.count > 0 else { return }
-        let currentWidth = splitView.subviews[0].frame.width
+        // splitView.subviews also holds AppKit's own views, so measure the
+        // sidebar itself.  A collapsed sidebar (also in full screen) keeps
+        // the width it had.
+        guard hasRestoredSidebarWidth, !splitViewItems[0].isCollapsed,
+              view.window?.styleMask.contains(.fullScreen) != true else { return }
+        let currentWidth = sidebarContainerVC.view.frame.width
         if currentWidth >= 120 {
             UserDefaults.standard.set(Double(currentWidth), forKey: MainSplitViewController.sidebarWidthKey)
         }
@@ -149,8 +178,6 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         sidebarContainerVC.sidebarVC1.delegate = self
         sidebarContainerVC.sidebarVC2.delegate = self
         activePane = 1
-
-        splitView.autosaveName = NSSplitView.AutosaveName("FastMainSplitView")
 
         dualCanvasVC.combiningCanvasView.onSelectedObjectChanged = { [weak self] pane, fgObj in
             self?.statusBarView.updateForegroundObjectInfo(pane: pane, object: fgObj)
@@ -680,48 +707,27 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
 
         let startTime = CFAbsoluteTimeGetCurrent()
 
-        if showFavoritesOnly && pane == 1 {
-            let favorites = SQLiteCache.shared.getAllFavorites()
-            targetSidebar.setHeaderTitle("Favorites")
-            targetSidebar.setItems(favorites, selectFirst: targetSelectedItemPath == nil)
-            statusBarView.updateDirectoryStats(imageCount: favorites.count, totalSizeBytes: 0, locationName: "Favorites")
+        let sortOptions = targetSidebar.sortOptions
 
-            if let targetPath = targetSelectedItemPath,
-               let idx = favorites.firstIndex(where: {
-                   $0.id == targetPath ||
-                   $0.path == targetPath ||
-                   $0.name == targetPath ||
-                   (targetPath as NSString).lastPathComponent == $0.name ||
-                   $0.path.hasSuffix(targetPath) ||
-                   targetPath.hasSuffix($0.path)
-               }) {
-                targetSidebar.selectRow(idx)
-                displayItem(favorites[idx], pane: pane)
-            } else if targetSelectedItemPath == nil, let first = favorites.first {
-                displayItem(first, pane: pane)
+        if (showFavoritesOnly && pane == 1) || (pane == 2 && showFavoritesOnlyPane2) {
+            // Sorting may stat files, so it runs on the load queue.
+            var workItem: DispatchWorkItem!
+            workItem = DispatchWorkItem { [weak self] in
+                guard self != nil, !workItem.isCancelled else { return }
+                let favorites = ListSorter.sort(SQLiteCache.shared.getAllFavorites(), options: sortOptions, refreshDates: true)
+                DispatchQueue.main.async {
+                    guard let self = self, !workItem.isCancelled else { return }
+                    self.showFavorites(favorites, pane: pane, targetSelectedItemPath: targetSelectedItemPath)
+                }
             }
-            return
-        }
-
-        if pane == 2 && showFavoritesOnlyPane2 {
-            let favorites = SQLiteCache.shared.getAllFavorites()
-            targetSidebar.setHeaderTitle("Pane 2: Favorites")
-            targetSidebar.setItems(favorites, selectFirst: targetSelectedItemPath == nil)
-
-            if let targetPath = targetSelectedItemPath,
-               let idx = favorites.firstIndex(where: {
-                   $0.id == targetPath ||
-                   $0.path == targetPath ||
-                   $0.name == targetPath ||
-                   (targetPath as NSString).lastPathComponent == $0.name ||
-                   $0.path.hasSuffix(targetPath) ||
-                   targetPath.hasSuffix($0.path)
-               }) {
-                targetSidebar.selectRow(idx)
-                displayItem(favorites[idx], pane: 2)
-            } else if targetSelectedItemPath == nil, let first = favorites.first {
-                displayItem(first, pane: 2)
+            lock.lock()
+            if pane == 1 {
+                currentDirectoryLoadItem1 = workItem
+            } else {
+                currentDirectoryLoadItem2 = workItem
             }
+            lock.unlock()
+            loadQueue.async(execute: workItem)
             return
         }
 
@@ -783,9 +789,11 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
                 }
             } : nil
 
-            let items = DiskIOGate.shared.perform(.interactive, label: path) {
+            let listed = DiskIOGate.shared.perform(.interactive, label: path) {
                 navMgr.contents(progress: listingProgress, isCancelled: { workItem.isCancelled })
             }
+            if workItem.isCancelled { return }
+            let items = ListSorter.sort(listed, options: sortOptions, refreshDates: true)
             if workItem.isCancelled { return }
 
             let elapsedTime = (CFAbsoluteTimeGetCurrent() - startTime) * 1000.0
@@ -796,6 +804,7 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
             DispatchQueue.main.async {
                 if workItem.isCancelled { return }
                 targetSidebar.setItems(items, selectFirst: targetSelectedItemPath == nil)
+                self.rememberShownOrder(items, options: sortOptions, location: navMgr.currentLocation, pane: pane)
 
                 if let targetPath = targetSelectedItemPath,
                    let idx = items.firstIndex(where: {
@@ -836,6 +845,62 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         lock.unlock()
 
         loadQueue.async(execute: workItem)
+    }
+
+    private func showFavorites(_ favorites: [FileItem], pane: Int, targetSelectedItemPath: String?) {
+        let targetSidebar = (pane == 2) ? sidebarContainerVC.sidebarVC2 : sidebarContainerVC.sidebarVC1
+        targetSidebar.setHeaderTitle(pane == 2 ? "Pane 2: Favorites" : "Favorites")
+        targetSidebar.setItems(favorites, selectFirst: targetSelectedItemPath == nil)
+        if pane == 1 {
+            statusBarView.updateDirectoryStats(imageCount: favorites.count, totalSizeBytes: 0, locationName: "Favorites")
+        }
+
+        if let targetPath = targetSelectedItemPath,
+           let idx = favorites.firstIndex(where: {
+               $0.id == targetPath ||
+               $0.path == targetPath ||
+               $0.name == targetPath ||
+               (targetPath as NSString).lastPathComponent == $0.name ||
+               $0.path.hasSuffix(targetPath) ||
+               targetPath.hasSuffix($0.path)
+           }) {
+            targetSidebar.selectRow(idx)
+            displayItem(favorites[idx], pane: pane)
+        } else if targetSelectedItemPath == nil, let first = favorites.first {
+            displayItem(first, pane: pane)
+        }
+    }
+
+    public func sidebar(_ sidebar: SidebarViewController, didChangeSort options: ListSortOptions) {
+        let items = sidebar.items
+        loadQueue.async { [weak self] in
+            let sorted = ListSorter.sort(items, options: options)
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                // Drop the result if the list was replaced or re-sorted meanwhile.
+                guard sidebar.items.map({ $0.id }) == items.map({ $0.id }),
+                      sidebar.sortOptions == options else { return }
+                sidebar.setReorderedItems(sorted)
+                let pane = sidebar.paneIndex
+                let isFavoritesList = (pane == 1 && self.showFavoritesOnly) || (pane == 2 && self.showFavoritesOnlyPane2)
+                if !isFavoritesList, let navMgr = (pane == 2) ? self.navigationManager2 : self.navigationManager1 {
+                    self.rememberShownOrder(sorted, options: options, location: navMgr.currentLocation, pane: pane)
+                }
+            }
+        }
+    }
+
+    private func rememberShownOrder(_ items: [FileItem], options: ListSortOptions, location: NavigationLocation, pane: Int) {
+        let key = location.cacheKey
+        var keys = shownOrderKeys[pane, default: []].filter { $0 != key }
+        keys.append(key)
+        var orders = shownOrders[pane, default: [:]]
+        orders[key] = (options, items)
+        while keys.count > MainSplitViewController.shownOrdersLimit {
+            orders.removeValue(forKey: keys.removeFirst())
+        }
+        shownOrderKeys[pane] = keys
+        shownOrders[pane] = orders
     }
 
     public func switchToCurrentItemLocationMode() {
@@ -1129,14 +1194,24 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         cancelAllIOOperations()
         let result = navMgr.navigateUp()
         let parentLocation = navMgr.currentLocation
+        let sortOptions = ((p == 2) ? sidebarContainerVC.sidebarVC2 : sidebarContainerVC.sidebarVC1).sortOptions
+        let shownOrder = shownOrders[p]?[parentLocation.cacheKey]
         pendingSiblingSteps[p] = step
         if p == 1 {
             dualCanvasVC.imageView1.beginLoading(statusText: step > 0 ? "Opening next..." : "Opening previous...")
         }
 
         loadQueue.async { [weak self] in
-            let parentItems = DiskIOGate.shared.perform(.interactive, label: parentLocation.physicalPath) {
-                NavigationManager(initialLocation: parentLocation).contents()
+            // Step through the parent as it was last shown in this sort mode;
+            // otherwise list and sort it now.
+            let parentItems: [FileItem]
+            if let shown = shownOrder, shown.options == sortOptions {
+                parentItems = shown.items
+            } else {
+                let listed = DiskIOGate.shared.perform(.interactive, label: parentLocation.physicalPath) {
+                    NavigationManager(initialLocation: parentLocation).contents()
+                }
+                parentItems = ListSorter.sort(listed, options: sortOptions)
             }
             DispatchQueue.main.async {
                 guard let self = self, let steps = self.pendingSiblingSteps.removeValue(forKey: p) else { return }

@@ -79,33 +79,25 @@ public class SQLiteCache {
     }
 
     private var viewedCache = [String: Bool]()
-    private var favoritePathsSet = Set<String>()
+    // Favorite images per containing location: every enclosing folder and
+    // archive by path, and every folder inside an archive as
+    // "<archive path>#<folder>".
+    private var favoriteCountsByContainer = [String: Int]()
 
     private func loadFavoritePaths() {
-        favoritePathsSet.removeAll()
+        favoriteCountsByContainer.removeAll()
         guard db != nil else { return }
-        let query = "SELECT path, item_json FROM favorites;"
+        let query = "SELECT item_json FROM favorites;"
         var statement: OpaquePointer?
         if sqlite3_prepare_v2(db, query, -1, &statement, nil) == SQLITE_OK {
             while sqlite3_step(statement) == SQLITE_ROW {
-                if let cPath = sqlite3_column_text(statement, 0) {
-                    let path = String(cString: cPath)
-                    favoritePathsSet.insert(path)
-                    favoritePathsSet.insert((path as NSString).lastPathComponent)
-                }
-                if let cJson = sqlite3_column_text(statement, 1) {
+                if let cJson = sqlite3_column_text(statement, 0) {
                     let jsonStr = String(cString: cJson)
                     if let data = jsonStr.data(using: .utf8),
                        let decoded = try? JSONDecoder().decode(CodableFileItem.self, from: data) {
                         let item = decoded.toFileItem()
-                        favoritePathsSet.insert(item.id)
-                        favoritePathsSet.insert(item.path)
-                        favoritePathsSet.insert(item.name)
-                        favoritePathsSet.insert((item.id as NSString).lastPathComponent)
-                        favoritePathsSet.insert((item.path as NSString).lastPathComponent)
-                        if let archivePath = item.archivePath {
-                            favoritePathsSet.insert("\(archivePath)#\(item.id)")
-                            favoritePathsSet.insert("\(archivePath)#\(item.path)")
+                        if item.type == .image {
+                            countFavoriteInContainers(item)
                         }
                     }
                 }
@@ -114,29 +106,43 @@ public class SQLiteCache {
         sqlite3_finalize(statement)
     }
 
-    public func getFavoriteCount(keys: [String]) -> Int {
+    private func countFavoriteInContainers(_ item: FileItem) {
+        for key in SQLiteCache.containerKeys(enclosing: item) {
+            favoriteCountsByContainer[key, default: 0] += 1
+        }
+    }
+
+    /// Keys of every folder and archive enclosing `item`, in the form
+    /// `favoriteCount(inContainer:)` looks up.
+    static func containerKeys(enclosing item: FileItem) -> [String] {
+        var keys: [String] = []
+        var physical = item.path
+        if let archivePath = item.archivePath {
+            var entryDir = (item.path as NSString).deletingLastPathComponent
+            while !entryDir.isEmpty && entryDir != "/" {
+                keys.append("\(archivePath)#\(entryDir)")
+                entryDir = (entryDir as NSString).deletingLastPathComponent
+            }
+            keys.append(archivePath)
+            physical = archivePath
+        }
+        physical = (physical as NSString).deletingLastPathComponent
+        while !physical.isEmpty && physical != "/" {
+            keys.append(physical)
+            physical = (physical as NSString).deletingLastPathComponent
+        }
+        return keys
+    }
+
+    /// Number of favorite images inside a folder or archive (including
+    /// nested ones), known without listing it.
+    public func favoriteCount(inContainer item: FileItem) -> Int {
         lock.lock()
         defer { lock.unlock() }
-
-        var count = 0
-        for key in keys {
-            var matched = favoritePathsSet.contains(key)
-            if !matched {
-                let lastComp = (key as NSString).lastPathComponent
-                matched = favoritePathsSet.contains(lastComp)
-            }
-            if !matched, key.contains("#") {
-                let parts = key.components(separatedBy: "#")
-                if parts.count >= 2 {
-                    let entryId = parts.suffix(from: 1).joined(separator: "#")
-                    matched = favoritePathsSet.contains(entryId) || favoritePathsSet.contains((entryId as NSString).lastPathComponent)
-                }
-            }
-            if matched {
-                count += 1
-            }
+        if let archivePath = item.archivePath {
+            return favoriteCountsByContainer["\(archivePath)#\(item.path)"] ?? 0
         }
-        return count
+        return favoriteCountsByContainer[item.path] ?? 0
     }
 
     public var isTrackingViewedImagesEnabled: Bool {
@@ -216,6 +222,49 @@ public class SQLiteCache {
         return keys.filter { viewedCache[$0] == true }.count
     }
 
+    /// Number of viewed images whose key starts with `prefix`: "<archive>#"
+    /// for an archive, "<folder>/" for a folder (including archives in it).
+    public func viewedCount(withPrefix prefix: String) -> Int {
+        guard isTrackingViewedImagesEnabled else { return 0 }
+        lock.lock()
+        defer { lock.unlock() }
+        guard db != nil else { return 0 }
+
+        // A key range rather than LIKE, so the primary key index is used.
+        let query = "SELECT COUNT(*) FROM viewed_images WHERE path >= ? AND path < ?;"
+        var statement: OpaquePointer?
+        var count = 0
+        if sqlite3_prepare_v2(db, query, -1, &statement, nil) == SQLITE_OK {
+            sqlite3_bind_text(statement, 1, prefix, -1, SQLITE_TRANSIENT)
+            sqlite3_bind_text(statement, 2, prefix + "\u{10FFFF}", -1, SQLITE_TRANSIENT)
+            if sqlite3_step(statement) == SQLITE_ROW {
+                count = Int(sqlite3_column_int64(statement, 0))
+            }
+        }
+        sqlite3_finalize(statement)
+        return count
+    }
+
+    /// The ids of every image in an archive, from its listings cached here
+    /// when it was opened (subfolder listings too, unless it was opened
+    /// flattened).  Nil if any listing needed is not cached.
+    public func cachedArchiveImageIDs(archivePath: String) -> [String]? {
+        var imageIDs: [String] = []
+        var pendingSubfolders = [""]
+        while let subfolder = pendingSubfolders.popLast() {
+            let key = NavigationLocation(physicalPath: archivePath, archiveSubfolder: subfolder, isArchive: true).cacheKey
+            guard let listing = getDirectoryContents(key: key) else { return nil }
+            for item in listing where item.archivePath == archivePath {
+                if item.type == .image {
+                    imageIDs.append(item.id)
+                } else if item.isDirectory {
+                    pendingSubfolders.append(item.path)
+                }
+            }
+        }
+        return imageIDs
+    }
+
     public func isFavorite(path: String) -> Bool {
         lock.lock()
         defer { lock.unlock() }
@@ -250,7 +299,6 @@ public class SQLiteCache {
             }
             sqlite3_finalize(statement)
             loadFavoritePaths()
-            FolderStatsCalculator.clearCache()
             return false
         } else {
             let codable = CodableFileItem(from: item)
@@ -284,7 +332,6 @@ public class SQLiteCache {
             }
             sqlite3_finalize(statement)
             loadFavoritePaths()
-            FolderStatsCalculator.clearCache()
             return true
         }
     }

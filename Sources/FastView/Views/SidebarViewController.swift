@@ -4,12 +4,22 @@ public protocol SidebarDelegate: AnyObject {
     func sidebar(_ sidebar: SidebarViewController, didSelectItem item: FileItem)
     func sidebar(_ sidebar: SidebarViewController, didActivateItem item: FileItem)
     func sidebarDidBecomeActive(_ sidebar: SidebarViewController)
+    func sidebar(_ sidebar: SidebarViewController, didChangeSort options: ListSortOptions)
 }
 
 public class SidebarViewController: NSViewController, NSTableViewDataSource, NSTableViewDelegate {
     public weak var delegate: SidebarDelegate?
 
-    public var paneIndex: Int = 1
+    public var paneIndex: Int = 1 {
+        didSet {
+            sortOptions = ListSortOptions.load(pane: paneIndex)
+        }
+    }
+    public private(set) var sortOptions = ListSortOptions.default {
+        didSet {
+            updateSortControls()
+        }
+    }
     public var isActivePane: Bool = false {
         didSet {
             updateHeaderFocusStyle()
@@ -27,6 +37,14 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
     private let headerTitleLabel = NSTextField(labelWithString: "")
     private let headerAccentIndicator = NSView()
     private var headerHeightConstraint: NSLayoutConstraint?
+    private let sortBarView = NSView()
+    private let sortKeyPopUp = NSPopUpButton(frame: .zero, pullsDown: false)
+    private let sortDirectionButton = NSButton(title: "", target: nil, action: nil)
+    private var isRestoringSelection = false
+    private var headerTitleLeadingConstraint: NSLayoutConstraint?
+    private var sortLabelLeadingConstraint: NSLayoutConstraint?
+    private let headerTitleLeadingPadding: CGFloat = 6
+    private let sortLabelLeadingPadding: CGFloat = 8
 
     private let scrollView = NSScrollView()
     private let tableView = CustomTableView()
@@ -70,7 +88,89 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
         }
     }
 
+    private func setupSortBar() {
+        sortBarView.translatesAutoresizingMaskIntoConstraints = false
+        sortBarView.wantsLayer = true
+        sortBarView.layer?.backgroundColor = NSColor.windowBackgroundColor.withAlphaComponent(0.5).cgColor
+
+        let sortLabel = NSTextField(labelWithString: "Sort:")
+        sortLabel.translatesAutoresizingMaskIntoConstraints = false
+        sortLabel.font = NSFont.systemFont(ofSize: 11)
+        sortLabel.textColor = NSColor.secondaryLabelColor
+
+        sortKeyPopUp.translatesAutoresizingMaskIntoConstraints = false
+        sortKeyPopUp.controlSize = .small
+        sortKeyPopUp.font = NSFont.systemFont(ofSize: 11)
+        for key in ListSortKey.allCases {
+            sortKeyPopUp.addItem(withTitle: key.title)
+            sortKeyPopUp.lastItem?.representedObject = key.rawValue
+        }
+        sortKeyPopUp.target = self
+        sortKeyPopUp.action = #selector(sortKeyChanged(_:))
+        sortKeyPopUp.refusesFirstResponder = true
+
+        sortDirectionButton.translatesAutoresizingMaskIntoConstraints = false
+        sortDirectionButton.bezelStyle = .recessed
+        sortDirectionButton.controlSize = .small
+        sortDirectionButton.font = NSFont.systemFont(ofSize: 11)
+        sortDirectionButton.imagePosition = .imageLeading
+        sortDirectionButton.target = self
+        sortDirectionButton.action = #selector(sortDirectionToggled(_:))
+        sortDirectionButton.refusesFirstResponder = true
+        sortDirectionButton.toolTip = "Reverse sort order"
+
+        sortBarView.addSubview(sortLabel)
+        sortBarView.addSubview(sortKeyPopUp)
+        sortBarView.addSubview(sortDirectionButton)
+
+        let sortLabelLeading = sortLabel.leadingAnchor.constraint(equalTo: sortBarView.leadingAnchor, constant: sortLabelLeadingPadding)
+        sortLabelLeadingConstraint = sortLabelLeading
+
+        NSLayoutConstraint.activate([
+            sortLabelLeading,
+            sortLabel.centerYAnchor.constraint(equalTo: sortBarView.centerYAnchor),
+
+            sortKeyPopUp.leadingAnchor.constraint(equalTo: sortLabel.trailingAnchor, constant: 4),
+            sortKeyPopUp.centerYAnchor.constraint(equalTo: sortBarView.centerYAnchor),
+
+            sortDirectionButton.leadingAnchor.constraint(equalTo: sortKeyPopUp.trailingAnchor, constant: 6),
+            sortDirectionButton.trailingAnchor.constraint(lessThanOrEqualTo: sortBarView.trailingAnchor, constant: -6),
+            sortDirectionButton.centerYAnchor.constraint(equalTo: sortBarView.centerYAnchor)
+        ])
+
+        updateSortControls()
+    }
+
+    private func updateSortControls() {
+        guard isViewLoaded else { return }
+        sortKeyPopUp.selectItem(withTitle: sortOptions.key.title)
+        sortDirectionButton.title = sortOptions.directionTitle
+        let symbol = sortOptions.ascending ? "arrow.up" : "arrow.down"
+        sortDirectionButton.image = NSImage(systemSymbolName: symbol, accessibilityDescription: sortOptions.directionTitle)
+    }
+
+    @objc private func sortKeyChanged(_ sender: NSPopUpButton) {
+        guard let raw = sender.selectedItem?.representedObject as? String,
+              let key = ListSortKey(rawValue: raw),
+              key != sortOptions.key else { return }
+        // Name reads A→Z; the others start with what is most useful on top:
+        // newest, favorites, viewed.
+        applySortOptions(ListSortOptions(key: key, ascending: key == .name))
+    }
+
+    @objc private func sortDirectionToggled(_ sender: NSButton) {
+        applySortOptions(ListSortOptions(key: sortOptions.key, ascending: !sortOptions.ascending))
+    }
+
+    private func applySortOptions(_ options: ListSortOptions) {
+        sortOptions = options
+        options.save(pane: paneIndex)
+        delegate?.sidebar(self, didChangeSort: options)
+    }
+
     private func setupUI() {
+        setupSortBar()
+
         headerContainerView.translatesAutoresizingMaskIntoConstraints = false
         headerContainerView.wantsLayer = true
         headerContainerView.isHidden = true
@@ -127,6 +227,7 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
         scrollView.documentView = tableView
 
         view.addSubview(headerContainerView)
+        view.addSubview(sortBarView)
         view.addSubview(scrollView)
 
         scrollView.contentView.postsBoundsChangedNotifications = true
@@ -139,6 +240,8 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
 
         let hHeight = headerContainerView.heightAnchor.constraint(equalToConstant: 0)
         self.headerHeightConstraint = hHeight
+        let titleLeading = headerTitleLabel.leadingAnchor.constraint(equalTo: headerAccentIndicator.trailingAnchor, constant: headerTitleLeadingPadding)
+        self.headerTitleLeadingConstraint = titleLeading
 
         NSLayoutConstraint.activate([
             headerContainerView.topAnchor.constraint(equalTo: view.topAnchor),
@@ -151,13 +254,18 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
             headerAccentIndicator.bottomAnchor.constraint(equalTo: headerContainerView.bottomAnchor),
             headerAccentIndicator.widthAnchor.constraint(equalToConstant: 4),
 
-            headerTitleLabel.leadingAnchor.constraint(equalTo: headerAccentIndicator.trailingAnchor, constant: 6),
+            titleLeading,
             headerTitleLabel.trailingAnchor.constraint(equalTo: headerContainerView.trailingAnchor, constant: -6),
             headerTitleLabel.centerYAnchor.constraint(equalTo: headerContainerView.centerYAnchor),
 
             scrollView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            scrollView.topAnchor.constraint(equalTo: headerContainerView.bottomAnchor),
+            sortBarView.topAnchor.constraint(equalTo: headerContainerView.bottomAnchor),
+            sortBarView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            sortBarView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            sortBarView.heightAnchor.constraint(equalToConstant: 26),
+
+            scrollView.topAnchor.constraint(equalTo: sortBarView.bottomAnchor),
             scrollView.bottomAnchor.constraint(equalTo: view.bottomAnchor)
         ])
 
@@ -175,8 +283,34 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
         }
     }
 
+    /// The window has a transparent, full-size title bar, so the pane at
+    /// the top left lies under the close/minimize/zoom buttons; its top bar
+    /// starts after them.
+    private func updateWindowControlsInsets() {
+        let titleInset = windowControlsInset(for: headerContainerView)
+        let sortInset = windowControlsInset(for: sortBarView)
+        if headerTitleLeadingConstraint?.constant != headerTitleLeadingPadding + titleInset {
+            headerTitleLeadingConstraint?.constant = headerTitleLeadingPadding + titleInset
+        }
+        if sortLabelLeadingConstraint?.constant != sortLabelLeadingPadding + sortInset {
+            sortLabelLeadingConstraint?.constant = sortLabelLeadingPadding + sortInset
+        }
+    }
+
+    private func windowControlsInset(for bar: NSView) -> CGFloat {
+        guard let window = view.window, !bar.isHidden, bar.frame.height > 0,
+              let zoomButton = window.standardWindowButton(.zoomButton),
+              zoomButton.window === window, !zoomButton.isHidden,
+              let buttonsContainer = zoomButton.superview else { return 0 }
+        let buttons = buttonsContainer.convert(zoomButton.frame, to: nil)
+        let barRect = bar.convert(bar.bounds, to: nil)
+        guard barRect.minY < buttons.maxY, barRect.maxY > buttons.minY, barRect.minX < buttons.maxX else { return 0 }
+        return buttons.maxX - barRect.minX
+    }
+
     override public func viewDidLayout() {
         super.viewDidLayout()
+        updateWindowControlsInsets()
         let width = view.bounds.width
         if width > 0 {
             let targetRowHeight = max(80, min(800, width * 0.75))
@@ -195,6 +329,22 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
             let defaultIndex = items.count > 1 && items[0].type == .parentDirectory ? 1 : 0
             selectRow(defaultIndex)
         }
+    }
+
+    /// Shows the same items in a new order, keeping the selected item
+    /// selected without reporting it as a new selection.
+    public func setReorderedItems(_ items: [FileItem]) {
+        let selectedID = selectedItem?.id
+        isRestoringSelection = true
+        defer { isRestoringSelection = false }
+        self.items = items
+        tableView.reloadData()
+        if let id = selectedID, let index = items.firstIndex(where: { $0.id == id }) {
+            selectRow(index)
+        } else {
+            tableView.deselectAll(nil)
+        }
+        loadVisibleThumbnailsIfIdle()
     }
 
     /// Drops thumbnail work for rows that are no longer visible (killing a
@@ -326,6 +476,7 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
         let selectedRow = tableView.selectedRow
         guard selectedRow >= 0 && selectedRow < items.count else { return }
         let selectedItem = items[selectedRow]
+        if isRestoringSelection { return }
 
         if let cell = tableView.view(atColumn: 0, row: selectedRow, makeIfNecessary: false) as? SidebarTableCellView {
             cell.loadThumbnailOnSelection(for: selectedItem, group: thumbnailGroup)

@@ -18,6 +18,7 @@ public class SidebarContainerViewController: NSSplitViewController {
             splitView.isVertical = newValue
             UserDefaults.standard.set(newValue, forKey: SidebarContainerViewController.previewSubSplitIsVerticalKey)
             if isDualView {
+                // A position saved along the other axis does not apply.
                 makeEvenSplit()
             }
         }
@@ -54,12 +55,16 @@ public class SidebarContainerViewController: NSSplitViewController {
         guard let i2 = item2 else { return }
 
         if isDual {
+            // Read before expanding: the resizes while pane 2 opens would
+            // overwrite it.
+            let savedPosition = UserDefaults.standard.double(forKey: SidebarContainerViewController.previewSubSplitPositionKey)
+            isRestoringSubSplit = true
             i2.isCollapsed = false
             sidebarVC1.showHeader = true
             sidebarVC2.showHeader = true
 
             DispatchQueue.main.async { [weak self] in
-                self?.makeEvenSplit()
+                self?.restoreSubSplit(savedPosition: CGFloat(savedPosition))
             }
         } else {
             if let window = view.window, let responder = window.firstResponder as? NSView {
@@ -69,6 +74,18 @@ public class SidebarContainerViewController: NSSplitViewController {
             }
             i2.isCollapsed = true
             sidebarVC1.showHeader = false
+        }
+    }
+
+    private var isRestoringSubSplit = false
+
+    private func restoreSubSplit(savedPosition: CGFloat) {
+        defer { isRestoringSubSplit = false }
+        let totalSpan = splitView.isVertical ? splitView.bounds.width : splitView.bounds.height
+        if savedPosition >= 80 && savedPosition <= totalSpan - 80 {
+            splitView.setPosition(savedPosition, ofDividerAt: 0)
+        } else {
+            makeEvenSplit()
         }
     }
 
@@ -82,8 +99,9 @@ public class SidebarContainerViewController: NSSplitViewController {
 
     override public func splitViewDidResizeSubviews(_ notification: Notification) {
         super.splitViewDidResizeSubviews(notification)
-        if isDualView && splitView.subviews.count > 0 {
-            let currentSpan = splitView.isVertical ? splitView.subviews[0].frame.width : splitView.subviews[0].frame.height
+        if isDualView && !isRestoringSubSplit {
+            let pane1Frame = sidebarVC1.view.frame
+            let currentSpan = splitView.isVertical ? pane1Frame.width : pane1Frame.height
             if currentSpan > 40 {
                 UserDefaults.standard.set(currentSpan, forKey: SidebarContainerViewController.previewSubSplitPositionKey)
             }

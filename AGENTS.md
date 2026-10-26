@@ -12,6 +12,7 @@ FastView is built using Swift, AppKit, and Swift Package Manager.
   - `MainSplitViewController.swift`: Core application coordinator, split view layout, and navigation state.
   - `SidebarViewController.swift`: Sidebar table view (`NSTableView`), cell configuration (`SidebarTableCellView`), custom keyboard input handling, and cell badge rendering.
   - `MainImageView.swift`: Image canvas, zooming, panning, and loading indicator overlay.
+  - `ListSorter.swift`: Per-pane list sort options (name, modified date, favorites, viewed; persisted in UserDefaults) and the sort itself, run off the main thread. The parent entry stays first and folders/archives stay ahead of images.
   - `StatusBarView.swift`: Status bar at bottom displaying location, index, count, and size metrics.
 - `Sources/FastView/Cache/`:
   - `MemoryLRUCache.swift`: In-memory image cache supporting Low Memory Mode (capped at 10 items when active).

@@ -85,19 +85,34 @@ public enum FolderStatsCalculator {
         cacheLock.unlock()
 
         guard let cached = existing else { return nil }
+        return makeStats(for: item, totalImages: cached.imageKeys.count, isComplete: cached.isComplete)
+    }
 
-        let total = cached.imageKeys.count
+    /// Only the image total is cached; the favorite and viewed counts are
+    /// read from SQLite on every call (an indexed lookup each), so they are
+    /// always current without invalidating anything.
+    private static func makeStats(for item: FileItem, totalImages total: Int, isComplete: Bool) -> FolderStats {
         var percentage = 0
         var favCount = 0
         if total > 0 {
-            favCount = SQLiteCache.shared.getFavoriteCount(keys: cached.imageKeys)
-            if SQLiteCache.shared.isTrackingViewedImagesEnabled {
-                let viewedCount = SQLiteCache.shared.getViewedCount(keys: cached.imageKeys)
-                percentage = Int(round(Double(viewedCount) / Double(total) * 100.0))
-            }
+            favCount = min(total, SQLiteCache.shared.favoriteCount(inContainer: item))
+            let viewedCount = min(total, SQLiteCache.shared.viewedCount(withPrefix: viewedKeyPrefix(for: item)))
+            percentage = Int(round(Double(viewedCount) / Double(total) * 100.0))
         }
+        return FolderStats(totalImages: total, isComplete: isComplete, viewedPercentage: percentage, favoriteCount: favCount)
+    }
 
-        return FolderStats(totalImages: total, isComplete: cached.isComplete, viewedPercentage: percentage, favoriteCount: favCount)
+    /// The prefix of the viewed-image keys of everything inside a folder or
+    /// archive: "<archive>#" for an archive, "<archive>#<folder>/" for a
+    /// folder inside one, "<folder>/" for a folder on disk.
+    public static func viewedKeyPrefix(for item: FileItem) -> String {
+        if let archivePath = item.archivePath {
+            return "\(archivePath)#\(item.path)/"
+        }
+        if item.type == .archiveZip || item.type == .archiveRar {
+            return "\(item.path)#"
+        }
+        return item.path.hasSuffix("/") ? item.path : item.path + "/"
     }
 
     /// `progress` reports the archive listing progress when `item` is an
@@ -187,17 +202,6 @@ public enum FolderStatsCalculator {
         }
         cacheLock.unlock()
 
-        let total = imageKeys.count
-        var percentage = 0
-        var favCount = 0
-        if total > 0 {
-            favCount = SQLiteCache.shared.getFavoriteCount(keys: imageKeys)
-            if SQLiteCache.shared.isTrackingViewedImagesEnabled {
-                let viewedCount = SQLiteCache.shared.getViewedCount(keys: imageKeys)
-                percentage = Int(round(Double(viewedCount) / Double(total) * 100.0))
-            }
-        }
-
-        return FolderStats(totalImages: total, isComplete: isComplete, viewedPercentage: percentage, favoriteCount: favCount)
+        return makeStats(for: item, totalImages: imageKeys.count, isComplete: isComplete)
     }
 }
