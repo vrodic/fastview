@@ -47,6 +47,18 @@ private class SelectionOverlayView: NSView {
     }
 }
 
+private class ZoomingScrollView: NSScrollView {
+    weak var ownerImageView: MainImageView?
+
+    override func scrollWheel(with event: NSEvent) {
+        if let owner = ownerImageView, owner.currentImage != nil {
+            owner.handleScrollWheel(with: event)
+        } else {
+            super.scrollWheel(with: event)
+        }
+    }
+}
+
 public class MainImageView: NSView {
     public private(set) var currentImage: NSImage?
     public private(set) var rawImage: NSImage?
@@ -79,7 +91,7 @@ public class MainImageView: NSView {
     private var lastDragLocation: NSPoint = .zero
 
     private let imageView = NSImageView()
-    private let scrollView = NSScrollView()
+    private let scrollView = ZoomingScrollView()
     private let selectionOverlayView = SelectionOverlayView()
 
     private let loadingContainerView = NSView()
@@ -105,6 +117,7 @@ public class MainImageView: NSView {
         wantsLayer = true
         layer?.backgroundColor = NSColor.black.cgColor
 
+        scrollView.ownerImageView = self
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         scrollView.hasVerticalScroller = true
         scrollView.hasHorizontalScroller = true
@@ -308,17 +321,11 @@ public class MainImageView: NSView {
         updateLayout()
     }
 
-    override public func scrollWheel(with event: NSEvent) {
-        guard currentImage != nil, bounds.width > 0 && bounds.height > 0 else {
-            super.scrollWheel(with: event)
-            return
-        }
+    public func handleScrollWheel(with event: NSEvent) {
+        guard currentImage != nil, bounds.width > 0 && bounds.height > 0 else { return }
 
         let deltaY = event.hasPreciseScrollingDeltas ? event.scrollingDeltaY : event.deltaY
-        guard abs(deltaY) > 0.01 else {
-            super.scrollWheel(with: event)
-            return
-        }
+        guard abs(deltaY) > 0.01 else { return }
 
         let currentMag = scrollView.magnification
         let factor: CGFloat = event.hasPreciseScrollingDeltas ? 0.008 : 0.04
