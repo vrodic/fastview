@@ -286,6 +286,14 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         addSplitViewItem(mainItem)
     }
 
+    /// Opens a folder or archive the user picked (File > Open, Open Recent)
+    /// in pane 1, leaving favorites mode: its list would replace the folder.
+    public func openLocation(_ location: NavigationLocation, targetSelectedItemPath: String? = nil) {
+        // The reload this starts is superseded by the load below.
+        if showFavoritesOnly { showFavoritesOnly = false }
+        loadLocation(location, pane: 1, targetSelectedItemPath: targetSelectedItemPath)
+    }
+
     /// `keepOtherPane` stops an archive location from cancelling the other pane's loading,
     /// for when both panes are being opened together.
     public func loadLocation(_ location: NavigationLocation, pane: Int = 1, targetSelectedItemPath: String? = nil, keepOtherPane: Bool = false) {
@@ -935,7 +943,7 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
             var workItem: DispatchWorkItem!
             workItem = DispatchWorkItem { [weak self] in
                 guard self != nil, !workItem.isCancelled else { return }
-                let favorites = ListSorter.sort(SQLiteCache.shared.getAllFavorites(), options: sortOptions, refreshDates: true)
+                let favorites = ListSorter.sortFavorites(SQLiteCache.shared.getAllFavorites(), options: sortOptions)
                 DispatchQueue.main.async {
                     guard let self = self, !workItem.isCancelled else { return }
                     self.directoryLoadFinished(workItem, pane: pane)
@@ -1099,16 +1107,18 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
 
     public func sidebar(_ sidebar: SidebarViewController, didChangeSort options: ListSortOptions) {
         let items = sidebar.items
+        let pane = sidebar.paneIndex
+        let isFavoritesList = (pane == 1 && showFavoritesOnly) || (pane == 2 && showFavoritesOnlyPane2)
         loadQueue.async { [weak self] in
-            let sorted = ListSorter.sort(items, options: options)
+            let sorted = isFavoritesList
+                ? ListSorter.sortFavorites(items, options: options)
+                : ListSorter.sort(items, options: options)
             DispatchQueue.main.async {
                 guard let self = self else { return }
                 // Drop the result if the list was replaced or re-sorted meanwhile.
                 guard sidebar.items.map({ $0.id }) == items.map({ $0.id }),
                       sidebar.sortOptions == options else { return }
                 sidebar.setReorderedItems(sorted)
-                let pane = sidebar.paneIndex
-                let isFavoritesList = (pane == 1 && self.showFavoritesOnly) || (pane == 2 && self.showFavoritesOnlyPane2)
                 if !isFavoritesList, let navMgr = (pane == 2) ? self.navigationManager2 : self.navigationManager1 {
                     self.rememberShownOrder(sorted, options: options, location: navMgr.currentLocation, pane: pane)
                 }

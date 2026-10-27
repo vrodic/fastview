@@ -37,6 +37,16 @@ final class ListSorterTests: XCTestCase {
         XCTAssertEqual(descending.map { $0.name }, ["(..)", "c.zip", "a.zip", "b10.jpg", "b2.jpg"])
     }
 
+    func testModifiedSortUsesDateOverrideInsteadOfFileDates() throws {
+        // Favorites sort by when they were favorited, not by file date.
+        let oldFile = try makeFile("old.jpg", modified: 1_000)
+        let newFile = try makeFile("new.jpg", modified: 9_000)
+        let favorited = [oldFile.id: 500.0, newFile.id: 100.0]
+        let sorted = ListSorter.sort([oldFile, newFile], options: ListSortOptions(key: .modified, ascending: false),
+                                     datesReadSince: nil, dateOverride: { favorited[$0.id] ?? 0 })
+        XCTAssertEqual(sorted.map { $0.name }, ["old.jpg", "new.jpg"])
+    }
+
     func testModifiedSortOrdersByDateAndRereadsDatesOnRefresh() throws {
         let old = try makeFile("old.jpg", modified: 1_000)
         let new = try makeFile("new.jpg", modified: 2_000)

@@ -7,12 +7,13 @@ Instructions and guidelines for AI agents developing and maintaining FastView.
 FastView is built using Swift, AppKit, and Swift Package Manager.
 
 ### Structure
-- `Sources/FastView/Main.swift`: Application entry point (`AppDelegate`), menu bar creation, and command-line launch handling.
+- `Sources/FastView/Main.swift`: Application entry point (`AppDelegate`), menu bar creation, and command-line launch handling. The Dock icon is `Resources/AppIcon.png`, a package resource set before the run loop starts.
+- `Sources/FastView/Resources/AppIcon.png`: Application icon (1024×1024).
 - `Sources/FastView/Views/`:
   - `MainSplitViewController.swift`: Core application coordinator, split view layout, and navigation state.
   - `SidebarViewController.swift`: Sidebar table view (`NSTableView`), cell configuration (`SidebarTableCellView`), custom keyboard input handling, and cell badge rendering.
   - `MainImageView.swift`: Image canvas, zooming, panning, and loading indicator overlay.
-  - `ListSorter.swift`: Per-pane list sort options (name, modified date, favorites, viewed; persisted in UserDefaults) and the sort itself, run off the main thread. Modification dates come in bulk with the directory listing (`NavigationManager.contents`); dates still missing are read by listing each parent folder once, never one network round trip per file. The parent entry stays first and folders/archives stay ahead of images.
+  - `ListSorter.swift`: Per-pane list sort options (name, modified date, favorites, viewed; persisted in UserDefaults; in the favorites list, modified means when each item was favorited) and the sort itself, run off the main thread. Modification dates come in bulk with the directory listing (`NavigationManager.contents`); dates still missing are read by listing each parent folder once, never one network round trip per file. The parent entry stays first and folders/archives stay ahead of images.
   - `CombinationStateManager.swift`: Saved combinations, one pretty-printed JSON `.fastview` file each in `~/Documents/FastView` (file I/O on a serial queue). Objects are stored in z order with normalized positions, region crop and colour adjustment; restoring re-runs detection on their source items through `ForegroundSource` (its own load queue, so pane image loads cannot cancel it). Preview thumbnails for the manager window are cached in `~/Library/Caches/FastView/CombinationPreviews`.
   - `CombinationStatesWindowController.swift`: Saved-combinations manager window (previews, search, rename, Show in Finder, Move to Trash).
   - `RestoreProgressView.swift`: Overlay with a progress bar shown over the canvas while a saved combination restores (pane images + objects; tracked in `MainSplitViewController`).

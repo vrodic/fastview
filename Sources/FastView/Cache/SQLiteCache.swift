@@ -336,6 +336,26 @@ public class SQLiteCache {
         }
     }
 
+    /// When each favorite was added (seconds since 1970), by favorite key
+    /// (the item's id).  Favorites saved before timestamps were recorded have 0.
+    public func favoriteTimestamps() -> [String: Double] {
+        lock.lock()
+        defer { lock.unlock() }
+
+        guard db != nil else { return [:] }
+
+        var result = [String: Double]()
+        var statement: OpaquePointer?
+        if sqlite3_prepare_v2(db, "SELECT path, timestamp FROM favorites;", -1, &statement, nil) == SQLITE_OK {
+            while sqlite3_step(statement) == SQLITE_ROW {
+                guard let cString = sqlite3_column_text(statement, 0) else { continue }
+                result[String(cString: cString)] = sqlite3_column_double(statement, 1)
+            }
+        }
+        sqlite3_finalize(statement)
+        return result
+    }
+
     public func getAllFavorites() -> [FileItem] {
         lock.lock()
         defer { lock.unlock() }

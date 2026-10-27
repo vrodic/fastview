@@ -15,17 +15,33 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     public static func main() {
         let app = NSApplication.shared
         app.setActivationPolicy(.regular)
+        // Set before the run loop starts, so the Dock shows it from launch.
+        if let icon = appIcon() {
+            app.applicationIconImage = icon
+        }
         let delegate = AppDelegate()
         globalAppDelegate = delegate
         app.delegate = delegate
         app.run()
     }
 
-    public func applicationDidFinishLaunching(_ notification: Notification) {
-        let appIcon = AppIconGenerator.generateAppIcon()
-        NSApp.applicationIconImage = appIcon
-        AppIconGenerator.saveAppIconPNG(to: "AppIcon.png")
+    /// AppIcon.png from the package's resource bundle.  Looked up by hand
+    /// rather than through `Bundle.module`, which stops the app when the
+    /// bundle is missing (an executable copied without it).
+    private static func appIcon() -> NSImage? {
+        let bundleName = "FastView_FastView.bundle"
+        let candidates = [Bundle.main.resourceURL, Bundle.main.bundleURL, Bundle.main.executableURL?.deletingLastPathComponent()]
+        for case let dir? in candidates {
+            if let bundle = Bundle(url: dir.appendingPathComponent(bundleName)),
+               let url = bundle.url(forResource: "AppIcon", withExtension: "png"),
+               let image = NSImage(contentsOf: url) {
+                return image
+            }
+        }
+        return nil
+    }
 
+    public func applicationDidFinishLaunching(_ notification: Notification) {
         setupMenuBar()
 
         let initialPath = getInitialPath()
@@ -366,7 +382,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
                 let loc = NavigationManager.locationForPath(path)
                 let lastSavedSelectedItem = UserDefaults.standard.string(forKey: AppDelegate.lastSelectedItemKey)
                 let lastSavedSelectedItemId = UserDefaults.standard.string(forKey: AppDelegate.lastSelectedItemIdKey)
-                self?.windowController?.splitVC.loadLocation(loc, targetSelectedItemPath: lastSavedSelectedItemId ?? lastSavedSelectedItem)
+                self?.windowController?.splitVC.openLocation(loc, targetSelectedItemPath: lastSavedSelectedItemId ?? lastSavedSelectedItem)
             }
         }
     }
@@ -569,7 +585,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
               FileManager.default.fileExists(atPath: path) else { return }
         saveLastOpenedPath(path)
         let loc = NavigationManager.locationForPath(path)
-        windowController?.splitVC.loadLocation(loc)
+        windowController?.splitVC.openLocation(loc)
     }
 
     @objc private func clearRecentDirsAction() {

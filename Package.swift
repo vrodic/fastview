@@ -20,6 +20,9 @@ let package = Package(
                 .product(name: "Unrar", package: "Unrar.swift")
             ],
             path: "Sources/FastView",
+            resources: [
+                .copy("Resources/AppIcon.png")
+            ],
             swiftSettings: [
                 .unsafeFlags(["-parse-as-library"])
             ],

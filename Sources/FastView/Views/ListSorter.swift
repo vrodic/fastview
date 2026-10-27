@@ -81,13 +81,27 @@ public enum ListSorter {
         return sort(items, options: options, datesReadSince: refreshDates ? CFAbsoluteTimeGetCurrent() : nil)
     }
 
+    /// Sorts the favorites list: by modified, it is ordered by when each
+    /// item became a favorite, and no file dates are read.
+    public static func sortFavorites(_ items: [FileItem], options: ListSortOptions) -> [FileItem] {
+        let timestamps = options.key == .modified ? SQLiteCache.shared.favoriteTimestamps() : [:]
+        return sort(items, options: options, datesReadSince: nil, dateOverride: { timestamps[$0.id] ?? timestamps[$0.path] ?? 0 })
+    }
+
     public static func sort(_ items: [FileItem], options: ListSortOptions, datesReadSince: CFAbsoluteTime?) -> [FileItem] {
+        return sort(items, options: options, datesReadSince: datesReadSince, dateOverride: nil)
+    }
+
+    /// `dateOverride`, when given, supplies the dates a modified sort uses
+    /// instead of the files' modification dates.
+    static func sort(_ items: [FileItem], options: ListSortOptions, datesReadSince: CFAbsoluteTime?,
+                     dateOverride: ((FileItem) -> Double)?) -> [FileItem] {
         let parents = items.filter { $0.type == .parentDirectory }
         let rest = items.filter { $0.type != .parentDirectory }
         let containers = rest.filter { isContainer($0) }
         let images = rest.filter { !isContainer($0) }
-        return parents + sortGroup(containers, options: options, datesReadSince: datesReadSince)
-            + sortGroup(images, options: options, datesReadSince: datesReadSince)
+        return parents + sortGroup(containers, options: options, datesReadSince: datesReadSince, dateOverride: dateOverride)
+            + sortGroup(images, options: options, datesReadSince: datesReadSince, dateOverride: dateOverride)
     }
 
     /// Records dates a directory listing already fetched, so sorting needs no reads of its own.
@@ -105,7 +119,8 @@ public enum ListSorter {
         return item.isDirectory || item.type == .archiveZip || item.type == .archiveRar
     }
 
-    private static func sortGroup(_ items: [FileItem], options: ListSortOptions, datesReadSince: CFAbsoluteTime?) -> [FileItem] {
+    private static func sortGroup(_ items: [FileItem], options: ListSortOptions, datesReadSince: CFAbsoluteTime?,
+                                  dateOverride: ((FileItem) -> Double)?) -> [FileItem] {
         guard items.count > 1 else { return items }
 
         let scores: [Double]
@@ -114,7 +129,7 @@ public enum ListSorter {
             let sorted = items.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
             return options.ascending ? sorted : sorted.reversed()
         case .modified:
-            scores = modificationDates(for: items, readSince: datesReadSince)
+            scores = dateOverride.map { items.map($0) } ?? modificationDates(for: items, readSince: datesReadSince)
         case .favorites:
             scores = items.map(favoriteScore)
         case .viewed:
