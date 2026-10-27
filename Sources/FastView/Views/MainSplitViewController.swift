@@ -224,6 +224,10 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
             self?.statusBarView.showMessage(message)
         }
 
+        dualCanvasVC.combiningCanvasView.onStatusMessage = { [weak self] message in
+            self?.statusBarView.showMessage(message)
+        }
+
         dualCanvasVC.imageView1.onRegionSelectedForDetection = { [weak self] croppedImg, crop, orientation in
             guard let self = self else { return }
             if !self.sidebarContainerVC.isDualView {
@@ -467,7 +471,8 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
                     detectionMode: fg.detectionMode.rawValue,
                     crop: fg.sourceCrop,
                     cropOrientation: fg.sourceOrientation,
-                    colorAdjustment: fg.colorAdjustment
+                    colorAdjustment: fg.colorAdjustment,
+                    carves: fg.carves
                 )
             }
             // Large enough to stand in for the canvas while the combination restores.
@@ -720,8 +725,8 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
             : "Restored “\(progress.name)”: " + problems.joined(separator: ", "))
     }
 
-    /// Re-detects the object from its source item, with its saved crop and colour
-    /// adjustment. Completes on the main thread.
+    /// Re-detects the object from its source item, with its saved crop, carves and
+    /// colour adjustment. Completes on the main thread.
     private static func loadObject(_ savedObj: SavedForegroundObjectState, archiveCandidates: [String], completion: @escaping (ForegroundObject?) -> Void) {
         guard let itemPath = savedObj.itemPath else {
             completion(nil)
@@ -730,7 +735,9 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         let mode = VisionDetectionMode(rawValue: savedObj.detectionMode) ?? .instanceMask
         ForegroundSource.detect(itemPath: itemPath, archiveCandidates: archiveCandidates, crop: savedObj.crop, orientation: savedObj.cropOrientation, mode: mode) { fg in
             guard let fg = fg else { return completion(nil) }
-            ForegroundSource.applyColorAdjustment(savedObj.colorAdjustment, to: fg, completion: completion)
+            ForegroundSource.applyCarves(savedObj.carves ?? [], to: fg) { fg, _ in
+                ForegroundSource.applyColorAdjustment(savedObj.colorAdjustment, to: fg, completion: completion)
+            }
         }
     }
 

@@ -26,6 +26,8 @@ public struct SavedForegroundObjectState: Codable {
     public var cropFlipH: Bool?
     public var cropFlipV: Bool?
     public var colorAdjustment: ColorAdjustment?
+    /// Carves applied to the detected object image, in order.
+    public var carves: [ObjectCarve]?
 
     public init(
         itemPath: String? = nil,
@@ -42,7 +44,8 @@ public struct SavedForegroundObjectState: Codable {
         detectionMode: String = "Instance Segmentation",
         crop: CGRect? = nil,
         cropOrientation: ImageOrientation? = nil,
-        colorAdjustment: ColorAdjustment? = nil
+        colorAdjustment: ColorAdjustment? = nil,
+        carves: [ObjectCarve] = []
     ) {
         self.itemPath = itemPath
         self.archivePath = archivePath
@@ -64,6 +67,7 @@ public struct SavedForegroundObjectState: Codable {
         self.cropFlipH = cropOrientation?.isFlippedHorizontal
         self.cropFlipV = cropOrientation?.isFlippedVertical
         self.colorAdjustment = colorAdjustment
+        self.carves = carves.isEmpty ? nil : carves
     }
 
     public var crop: CGRect? {

@@ -183,7 +183,35 @@ public class CombiningCanvasView: NSView {
     public var showBackground1: Bool = true { didSet { needsDisplay = true } }
     public var showBackground2: Bool = true { didSet { needsDisplay = true } }
 
-    public var combiningMode: CanvasCombiningMode = .split { didSet { needsDisplay = true } }
+    public var combiningMode: CanvasCombiningMode = .split {
+        didSet {
+            if combiningMode != .foregroundCombine { endCarving() }
+            needsDisplay = true
+        }
+    }
+
+    /// Shown in the status bar: instructions and results of carving.
+    public var onStatusMessage: ((String) -> Void)?
+
+    private enum CarveAction {
+        /// Keep only the foreground inside the outline.
+        case carveOut
+        /// Clear what is inside the outline.
+        case erase
+        /// Add the foreground inside the outline as a new object on top.
+        case newObject
+
+        var carve: (keepsInside: Bool, detectsForeground: Bool) {
+            return self == .erase ? (false, false) : (true, true)
+        }
+    }
+
+    // Carving: while set, a drag draws an outline over this object that then carves it.
+    private var carveObjectID: UUID?
+    private var carveAction: CarveAction = .carveOut
+    private var carvePath: [CGPoint] = []
+    private var isApplyingCarve = false
+    private var carveKeyMonitor: Any?
 
     /// Called with the object's index in `objects`.
     public var onRetuneDetector: ((Int, VisionDetectionMode) -> Void)?
@@ -430,6 +458,11 @@ public class CombiningCanvasView: NSView {
         if !isRenderingPreview, let selIdx = selectedObjectIndex, selIdx >= 0 && selIdx < objects.count {
             drawSelectedObjectHandles(objects[selIdx], in: rect, context: context)
         }
+
+        // 3. The carve outline being drawn
+        if !isRenderingPreview && carvePath.count > 1 {
+            drawCarvePath(in: context)
+        }
     }
 
     private func drawForegroundObjectBody(_ obj: ForegroundObject, in rect: CGRect, context: CGContext) {
@@ -534,6 +567,25 @@ public class CombiningCanvasView: NSView {
         context.setFillColor(NSColor.systemYellow.cgColor)
         context.fillEllipse(in: bottomRotateCircleRect)
 
+        context.restoreGState()
+    }
+
+    private func drawCarvePath(in context: CGContext) {
+        context.saveGState()
+        let cgPath = CGMutablePath()
+        cgPath.addLines(between: carvePath)
+        cgPath.closeSubpath()
+
+        let color: NSColor = carveAction == .erase ? .systemRed : .controlAccentColor
+        context.addPath(cgPath)
+        context.setFillColor(color.withAlphaComponent(0.25).cgColor)
+        context.fillPath()
+
+        context.addPath(cgPath)
+        context.setStrokeColor(color.cgColor)
+        context.setLineWidth(3.0)
+        context.setLineDash(phase: 0, lengths: [6.0, 3.0])
+        context.strokePath()
         context.restoreGState()
     }
 
@@ -698,6 +750,29 @@ public class CombiningCanvasView: NSView {
 
         menu.addItem(NSMenuItem.separator())
 
+        let carveItem = NSMenuItem(title: "Carve Out Object…", action: #selector(contextCarveOutAction(_:)), keyEquivalent: "")
+        carveItem.target = self
+        carveItem.representedObject = idx
+        menu.addItem(carveItem)
+
+        let eraseItem = NSMenuItem(title: "Erase Part of Object…", action: #selector(contextErasePartAction(_:)), keyEquivalent: "")
+        eraseItem.target = self
+        eraseItem.representedObject = idx
+        menu.addItem(eraseItem)
+
+        let newObjectItem = NSMenuItem(title: "New Object from Region…", action: #selector(contextNewObjectFromRegionAction(_:)), keyEquivalent: "")
+        newObjectItem.target = self
+        newObjectItem.representedObject = idx
+        menu.addItem(newObjectItem)
+
+        let undoCarveItem = NSMenuItem(title: "Undo Carving", action: #selector(contextUndoCarvingAction(_:)), keyEquivalent: "")
+        undoCarveItem.target = self
+        undoCarveItem.representedObject = idx
+        undoCarveItem.isEnabled = objects[idx].imageBeforeCarving != nil
+        menu.addItem(undoCarveItem)
+
+        menu.addItem(NSMenuItem.separator())
+
         let tuningItem = NSMenuItem(title: "Vision Detector Tuning", action: nil, keyEquivalent: "")
         let tuningMenu = NSMenu(title: "Vision Detector Tuning")
         let currentMode = objects[idx].detectionMode
@@ -791,6 +866,153 @@ public class CombiningCanvasView: NSView {
         removeSelectedObject()
     }
 
+    @objc private func contextCarveOutAction(_ sender: NSMenuItem) {
+        guard let idx = sender.representedObject as? Int, idx < objects.count else { return }
+        beginCarving(objectID: objects[idx].id, action: .carveOut)
+    }
+
+    @objc private func contextErasePartAction(_ sender: NSMenuItem) {
+        guard let idx = sender.representedObject as? Int, idx < objects.count else { return }
+        beginCarving(objectID: objects[idx].id, action: .erase)
+    }
+
+    @objc private func contextNewObjectFromRegionAction(_ sender: NSMenuItem) {
+        guard let idx = sender.representedObject as? Int, idx < objects.count else { return }
+        beginCarving(objectID: objects[idx].id, action: .newObject)
+    }
+
+    @objc private func contextUndoCarvingAction(_ sender: NSMenuItem) {
+        guard let idx = sender.representedObject as? Int, idx < objects.count else { return }
+        let id = objects[idx].id
+        ForegroundSource.undoCarves(of: objects[idx]) { [weak self] restored, rect in
+            guard let self = self, let i = self.objects.firstIndex(where: { $0.id == id }) else { return }
+            self.objects[i] = self.placed(restored, coveringRect: rect, of: self.objects[i])
+        }
+    }
+
+    // MARK: - Carving
+
+    private func beginCarving(objectID: UUID, action: CarveAction) {
+        endCarving()
+        carveObjectID = objectID
+        carveAction = action
+        NSCursor.crosshair.push()
+        carveKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self = self, self.carveObjectID != nil, event.keyCode == 53 else { return event } // Escape
+            self.endCarving()
+            self.onStatusMessage?("Cancelled")
+            return nil
+        }
+        switch action {
+        case .carveOut: onStatusMessage?("Draw around the part of the object to keep; it snaps to edges (hold ⌥ on release to not snap); Esc cancels")
+        case .erase: onStatusMessage?("Draw around the part of the object to erase; it snaps to edges (hold ⌥ on release to not snap); Esc cancels")
+        case .newObject: onStatusMessage?("Draw around the part to add as a new object; it snaps to edges (hold ⌥ on release to not snap); Esc cancels")
+        }
+    }
+
+    private func endCarving() {
+        guard carveObjectID != nil else { return }
+        carveObjectID = nil
+        carvePath = []
+        needsDisplay = true
+        NSCursor.pop()
+        if let monitor = carveKeyMonitor {
+            NSEvent.removeMonitor(monitor)
+            carveKeyMonitor = nil
+        }
+    }
+
+    /// The point as fractions of the object's image (bottom-left origin), undoing its placement,
+    /// rotation and flips; outside 0...1 when the point misses the object's frame.
+    private func normalizedPoint(_ pt: CGPoint, in fg: ForegroundObject) -> CGPoint {
+        let effectiveScale = defaultFitScale(for: fg)
+        let w = fg.image.size.width * effectiveScale
+        let h = fg.image.size.height * effectiveScale
+        let dx = pt.x - fg.position.x
+        let dy = pt.y - fg.position.y
+        let rad = -fg.rotationDegrees * .pi / 180.0
+        let localPt = CGPoint(
+            x: dx * cos(rad) - dy * sin(rad),
+            y: dx * sin(rad) + dy * cos(rad)
+        )
+        let xInRect = (fg.isFlippedHorizontal ? -localPt.x : localPt.x) + w / 2.0
+        let yInRect = (fg.isFlippedVertical ? -localPt.y : localPt.y) + h / 2.0
+        return CGPoint(x: xInRect / w, y: yInRect / h)
+    }
+
+    /// Applies the drawn outline, first snapped to the object's edges unless `snapsToEdges` is off.
+    private func finishCarvePath(snapsToEdges: Bool) {
+        guard let objectID = carveObjectID else { return }
+        let path = carvePath
+        let action = carveAction
+        endCarving()
+        guard path.count > 2, let idx = objects.firstIndex(where: { $0.id == objectID }) else { return }
+        let source = objects[idx]
+        let drawn = path.map { normalizedPoint($0, in: source) }
+        // A new object starts as a copy of its source that belongs to no pane.
+        var target = source
+        if action == .newObject {
+            target.id = UUID()
+            target.sourcePane = nil
+        }
+        isApplyingCarve = true
+        onStatusMessage?(action == .erase ? "Erasing…" : "Detecting the foreground in the outline…")
+        // The snapped outline is what gets saved, so restoring does not snap again.
+        let edgeImage = snapsToEdges ? (source.unadjustedImage ?? source.image).cgImage(forProposedRect: nil, context: nil, hints: nil) : nil
+        DispatchQueue.global(qos: .userInitiated).async {
+            let points = edgeImage.map { ObjectCarver.snapToEdges(drawn, in: $0) } ?? drawn
+            let carve = ObjectCarve(points: points, keepsInside: action.carve.keepsInside, detectsForeground: action.carve.detectsForeground)
+            DispatchQueue.main.async { [weak self] in
+                self?.applyCarve(carve, action: action, to: target, sourceID: objectID)
+            }
+        }
+    }
+
+    private func applyCarve(_ carve: ObjectCarve, action: CarveAction, to target: ForegroundObject, sourceID objectID: UUID) {
+        ForegroundSource.applyCarves([carve], to: target) { [weak self] updated, rect in
+            guard let self = self else { return }
+            self.isApplyingCarve = false
+            guard let rect = rect, let i = self.objects.firstIndex(where: { $0.id == objectID }) else {
+                NSSound.beep()
+                self.onStatusMessage?("Nothing of the object is inside the outline")
+                return
+            }
+            let result = self.placed(updated, coveringRect: rect, of: self.objects[i])
+            switch action {
+            case .carveOut:
+                self.objects[i] = result
+                self.onStatusMessage?("Carved out the object")
+            case .erase:
+                self.objects[i] = result
+                self.onStatusMessage?("Erased part of the object")
+            case .newObject:
+                self.objects.append(result)
+                self.selectedObjectIndex = self.objects.count - 1
+                self.onStatusMessage?("Added a new object on top; drag it where you want it")
+            }
+        }
+    }
+
+    /// `updated`, whose image covers `rect` of `old`'s image (fractions, bottom-left origin),
+    /// with its scale and position set so its pixels sit where they are in `old` on the canvas.
+    private func placed(_ updated: ForegroundObject, coveringRect rect: CGRect, of old: ForegroundObject) -> ForegroundObject {
+        var new = updated
+        let oldScale = defaultFitScale(for: old)
+        var unit = new
+        unit.scale = 1
+        let newFit = defaultFitScale(for: unit)
+        if newFit > 0 { new.scale = oldScale / newFit }
+
+        var dx = (rect.midX - 0.5) * old.image.size.width * oldScale
+        var dy = (rect.midY - 0.5) * old.image.size.height * oldScale
+        if old.isFlippedHorizontal { dx = -dx }
+        if old.isFlippedVertical { dy = -dy }
+        let rad = old.rotationDegrees * .pi / 180.0
+        new.position = CGPoint(x: old.position.x + dx * cos(rad) - dy * sin(rad),
+                               y: old.position.y + dx * sin(rad) + dy * cos(rad))
+        return new
+    }
+
     @objc private func contextSelectDetectionModeAction(_ sender: NSMenuItem) {
         guard let dict = sender.representedObject as? [String: Any],
               let idx = dict["index"] as? Int,
@@ -807,6 +1029,10 @@ public class CombiningCanvasView: NSView {
         }
 
         let pt = convert(event.locationInWindow, from: nil)
+        if carveObjectID != nil {
+            if !isApplyingCarve { carvePath = [pt] }
+            return
+        }
         dragStartPoint = pt
 
         // Phase 1: Check handles across ALL objects (reverse Z-order)
@@ -903,6 +1129,13 @@ public class CombiningCanvasView: NSView {
     }
 
     override public func mouseDragged(with event: NSEvent) {
+        if carveObjectID != nil {
+            if !carvePath.isEmpty {
+                carvePath.append(convert(event.locationInWindow, from: nil))
+                needsDisplay = true
+            }
+            return
+        }
         guard combiningMode == .foregroundCombine, let idx = selectedObjectIndex, idx < objects.count else {
             super.mouseDragged(with: event)
             return
@@ -930,6 +1163,10 @@ public class CombiningCanvasView: NSView {
     }
 
     override public func mouseUp(with event: NSEvent) {
+        if carveObjectID != nil && !carvePath.isEmpty {
+            finishCarvePath(snapsToEdges: !event.modifierFlags.contains(.option))
+            return
+        }
         isDraggingObject = false
         isResizingObject = false
         isRotatingObject = false

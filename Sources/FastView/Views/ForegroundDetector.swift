@@ -31,6 +31,12 @@ public struct ForegroundObject {
     /// Colour change applied to `image`; `unadjustedImage` is the image before it.
     public var colorAdjustment: ColorAdjustment? = nil
     public var unadjustedImage: NSImage? = nil
+    /// Carves applied to the detected image, in order.
+    public var carves: [ObjectCarve] = []
+    /// The uncoloured image before any carve, and where `image` lies in it
+    /// (fractions, bottom-left origin).
+    public var imageBeforeCarving: NSImage? = nil
+    public var carvedRect = CGRect(x: 0, y: 0, width: 1, height: 1)
 
     public init(
         id: UUID = UUID(),
@@ -277,6 +283,82 @@ public enum ForegroundSource {
                 }
             }
         }
+    }
+
+    /// Applies `carves` in turn to the uncoloured image (and the coloured one, if any) off the
+    /// main thread. Completes on the main thread with the object and where its new image lies
+    /// in its old one (fractions, bottom-left origin); nil when no carve left anything.
+    public static func applyCarves(_ carves: [ObjectCarve], to fg: ForegroundObject, completion: @escaping (ForegroundObject, CGRect?) -> Void) {
+        guard !carves.isEmpty else { return completion(fg, nil) }
+        let isAdjusted = fg.unadjustedImage != nil
+        // CGImages are taken here, so the work below does not share the NSImages the canvas draws.
+        guard let baseCG = (fg.unadjustedImage ?? fg.image).cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+            return completion(fg, nil)
+        }
+        let adjustedCG = isAdjusted ? fg.image.cgImage(forProposedRect: nil, context: nil, hints: nil) : nil
+        let startSize = fg.image.size
+        DispatchQueue.global(qos: .userInitiated).async {
+            var base: (cg: CGImage, image: NSImage)? = nil
+            var adjusted: NSImage? = nil
+            var size = startSize
+            var rect = CGRect(x: 0, y: 0, width: 1, height: 1)
+            var applied: [ObjectCarve] = []
+            for carve in carves {
+                guard let current = base?.cg ?? Optional(baseCG),
+                      let carved = ObjectCarver.apply(carve, to: current, size: size),
+                      var newCG = carved.image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { continue }
+                var newBase = carved.image
+                let r = carved.rect
+                var newAdjusted: NSImage?
+                if isAdjusted, let currentAdjusted = adjusted?.cgImage(forProposedRect: nil, context: nil, hints: nil) ?? adjustedCG {
+                    newAdjusted = ObjectCarver.apply(carve, to: currentAdjusted, size: size)?.image
+                }
+                // The mask comes from the uncoloured image and goes on both.
+                if carve.detectsForeground, let mask = ObjectCarver.foregroundMask(of: newCG),
+                   let masked = ObjectCarver.applyMask(mask, to: newCG, size: newBase.size),
+                   let maskedCG = masked.cgImage(forProposedRect: nil, context: nil, hints: nil) {
+                    newBase = masked
+                    newCG = maskedCG
+                    newAdjusted = newAdjusted.flatMap { a in
+                        a.cgImage(forProposedRect: nil, context: nil, hints: nil).flatMap { ObjectCarver.applyMask(mask, to: $0, size: a.size) }
+                    }
+                }
+                adjusted = newAdjusted
+                base = (newCG, newBase)
+                size = newBase.size
+                rect = CGRect(x: rect.minX + r.minX * rect.width, y: rect.minY + r.minY * rect.height,
+                              width: r.width * rect.width, height: r.height * rect.height)
+                applied.append(carve)
+            }
+            DispatchQueue.main.async {
+                guard let base = base else { return completion(fg, nil) }
+                var out = fg
+                out.imageBeforeCarving = fg.imageBeforeCarving ?? fg.unadjustedImage ?? fg.image
+                out.carves += applied
+                out.carvedRect = CGRect(x: fg.carvedRect.minX + rect.minX * fg.carvedRect.width,
+                                        y: fg.carvedRect.minY + rect.minY * fg.carvedRect.height,
+                                        width: rect.width * fg.carvedRect.width, height: rect.height * fg.carvedRect.height)
+                out.image = isAdjusted ? (adjusted ?? base.image) : base.image
+                out.unadjustedImage = isAdjusted ? base.image : nil
+                completion(out, rect)
+            }
+        }
+    }
+
+    /// Undoes every carve, keeping the object's colour adjustment. Completes on the main thread
+    /// with the object and where its new image lies relative to its carved one.
+    public static func undoCarves(of fg: ForegroundObject, completion: @escaping (ForegroundObject, CGRect) -> Void) {
+        guard let original = fg.imageBeforeCarving else { return completion(fg, CGRect(x: 0, y: 0, width: 1, height: 1)) }
+        let c = fg.carvedRect
+        let rect = CGRect(x: -c.minX / c.width, y: -c.minY / c.height, width: 1 / c.width, height: 1 / c.height)
+        var out = fg
+        out.image = original
+        out.unadjustedImage = nil
+        out.colorAdjustment = nil
+        out.carves = []
+        out.imageBeforeCarving = nil
+        out.carvedRect = CGRect(x: 0, y: 0, width: 1, height: 1)
+        applyColorAdjustment(fg.colorAdjustment, to: out) { completion($0, rect) }
     }
 
     /// Applies `adjustment` off the main thread. Completes on the main thread.
