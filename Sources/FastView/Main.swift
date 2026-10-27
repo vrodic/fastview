@@ -131,7 +131,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         mainMenu.addItem(appMenuItem)
         let appMenu = NSMenu(title: "FastView")
         appMenuItem.submenu = appMenu
-        appMenu.addItem(withTitle: "About FastView", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+        appMenu.addItem(withTitle: "About FastView", action: #selector(showAboutPanel(_:)), keyEquivalent: "")
         appMenu.addItem(NSMenuItem.separator())
         appMenu.addItem(withTitle: "Hide FastView", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
         appMenu.addItem(withTitle: "Hide Others", action: #selector(NSApplication.hideOtherApplications(_:)), keyEquivalent: "h")
@@ -311,6 +311,42 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
 
         NSApp.mainMenu = mainMenu
         NSApp.windowsMenu = windowMenu
+    }
+
+    /// The executable's modification time: when it was last linked, i.e.
+    /// built.  Swift has no __DATE__/__TIME__, and an SPM build has no
+    /// Info.plist to stamp.
+    private static let buildDate: Date? = {
+        let path = Bundle.main.executablePath ?? CommandLine.arguments[0]
+        return (try? FileManager.default.attributesOfItem(atPath: path))?[.modificationDate] as? Date
+    }()
+
+    @objc private func showAboutPanel(_ sender: Any?) {
+        var built = "unknown"
+        if let date = AppDelegate.buildDate {
+            let formatter = DateFormatter()
+            formatter.dateStyle = .long
+            formatter.timeStyle = .medium
+            built = formatter.string(from: date)
+        }
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = .center
+        let credits = NSAttributedString(string: "Built \(built)", attributes: [
+            .font: NSFont.systemFont(ofSize: 11),
+            .foregroundColor: NSColor.secondaryLabelColor,
+            .paragraphStyle: paragraph
+        ])
+        var options: [NSApplication.AboutPanelOptionKey: Any] = [
+            .applicationName: "FastView",
+            .credits: credits
+        ]
+        if Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") == nil {
+            // An unbundled build: without this the panel shows an empty version.
+            options[.applicationVersion] = "Development build"
+            options[.version] = ""
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        NSApp.orderFrontStandardAboutPanel(options: options)
     }
 
     @objc private func showInfoAction(_ sender: Any?) {

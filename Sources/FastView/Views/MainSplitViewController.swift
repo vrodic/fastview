@@ -76,7 +76,7 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
 
     private static let restoreTimeout: TimeInterval = 30
     private var restoreProgressTimer: Timer?
-    private var lastSelectedInfoPath: String?
+    private var fileInfoController: FileInfoWindowController?
 
     private var wasPreviewHiddenBeforeFullScreen: Bool = false
     private var wasStatusBarHiddenBeforeFullScreen: Bool = false
@@ -90,13 +90,6 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         } else {
             isPreviewPaneHidden = wasPreviewHiddenBeforeFullScreen
             statusBarView.isHidden = wasStatusBarHiddenBeforeFullScreen
-        }
-    }
-
-    @objc private func copyInfoPathAction() {
-        if let path = lastSelectedInfoPath {
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(path, forType: .string)
         }
     }
 
@@ -1211,6 +1204,11 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         let imageItems = targetSidebar.items.filter { $0.type == .image }
         let currentIndex = imageItems.firstIndex(where: { $0.id == item.id }).map { $0 + 1 }
         let totalImages = imageItems.count
+        let containerStats = pane == 1 ? StatusBarView.ContainerPosition(item: item, in: targetSidebar.items) : nil
+
+        if pane == activePane {
+            fileInfoController?.refreshIfVisible(item: item)
+        }
 
         if pane == 1 {
             if item.type == .image {
@@ -1222,7 +1220,7 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
                     dualCanvasVC.imageView1.beginLoading(statusText: "Opening \(archiveName)...")
                 }
             } else if item.type == .archiveZip || item.type == .archiveRar {
-                statusBarView.updateSelectedItemStats(item: item, containedImagesCount: nil, parentName: parentName)
+                statusBarView.updateSelectedItemStats(item: item, position: containerStats, parentName: parentName)
                 // Indexing an archive for the first time can be slow; the
                 // overlay appears only if the scan reports that it is.
                 dualCanvasVC.imageView1.beginLoading(statusText: "Indexing \(item.name)...")
@@ -1231,7 +1229,7 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
 
         if item.isDirectory || item.type == .parentDirectory {
             if pane == 1 {
-                statusBarView.updateSelectedItemStats(item: item, containedImagesCount: nil, parentName: parentName)
+                statusBarView.updateSelectedItemStats(item: item, position: containerStats, parentName: parentName)
                 dualCanvasVC.setImage(nil, pane: 1)
             }
             return
@@ -1272,6 +1270,9 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
             if isArchive {
                 // The preview pass also computed the image count.
                 targetSidebar.refreshStatsForSelectedItem()
+                if pane == 1 {
+                    self.statusBarView.updateSelectedItemStats(item: item, position: containerStats, parentName: parentName)
+                }
             }
 
             targetSidebar.loadVisibleThumbnailsIfIdle()
@@ -1496,149 +1497,9 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
     }
 
     public func showInfo(for item: FileItem) {
-        let alert = NSAlert()
-        alert.messageText = "File Information"
-        alert.alertStyle = .informational
-        alert.addButton(withTitle: "Close")
-
-        let fullPath = item.archivePath != nil ? "\(item.archivePath!) / \(item.path)" : item.path
-        self.lastSelectedInfoPath = fullPath
-        let fsPath = item.archivePath ?? item.path
-        let fileManager = FileManager.default
-
-        var createdStr = "N/A"
-        var modifiedStr = "N/A"
-        var sizeBytes = item.fileSize
-
-        if sizeBytes == 0, let archivePath = item.archivePath {
-            let ext = (archivePath as NSString).pathExtension.lowercased()
-            if ext == "zip", let data = ArchiveReader.loadZipData(archivePath: archivePath, entryPath: item.path) {
-                sizeBytes = UInt64(data.count)
-            } else if ext == "rar", let data = ArchiveReader.loadRarData(archivePath: archivePath, entryPath: item.path) {
-                sizeBytes = UInt64(data.count)
-            }
+        if fileInfoController == nil {
+            fileInfoController = FileInfoWindowController()
         }
-
-        var dimensionsStr = "N/A"
-
-        if let attrs = try? fileManager.attributesOfItem(atPath: fsPath) {
-            let dateFormatter = DateFormatter()
-            dateFormatter.dateStyle = .medium
-            dateFormatter.timeStyle = .medium
-
-            if let creationDate = attrs[.creationDate] as? Date {
-                createdStr = dateFormatter.string(from: creationDate)
-            }
-            if let modDate = attrs[.modificationDate] as? Date {
-                modifiedStr = dateFormatter.string(from: modDate)
-            }
-            if item.archivePath == nil, let sizeNum = attrs[.size] as? UInt64 {
-                sizeBytes = sizeNum
-            }
-        }
-
-        if let cachedImg = MemoryLRUCache.shared.object(forKey: "full_\(item.id)") {
-            var w = Int(cachedImg.size.width)
-            var h = Int(cachedImg.size.height)
-            if let rep = cachedImg.representations.first {
-                if rep.pixelsWide > 0 && rep.pixelsHigh > 0 {
-                    w = rep.pixelsWide
-                    h = rep.pixelsHigh
-                }
-            }
-            dimensionsStr = "\(w) × \(h) pixels"
-        } else if let archivePath = item.archivePath {
-            let ext = (archivePath as NSString).pathExtension.lowercased()
-            var data: Data? = nil
-            if ext == "zip" {
-                data = ArchiveReader.loadZipData(archivePath: archivePath, entryPath: item.path)
-            } else if ext == "rar" {
-                data = ArchiveReader.loadRarData(archivePath: archivePath, entryPath: item.path)
-            }
-            if let data = data {
-                if sizeBytes == 0 {
-                    sizeBytes = UInt64(data.count)
-                }
-                if let source = CGImageSourceCreateWithData(data as CFData, nil),
-                   let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any] {
-                    if let w = properties[kCGImagePropertyPixelWidth] as? Int,
-                       let h = properties[kCGImagePropertyPixelHeight] as? Int {
-                        dimensionsStr = "\(w) × \(h) pixels"
-                    }
-                }
-            }
-        } else {
-            if let imageSource = CGImageSourceCreateWithURL(URL(fileURLWithPath: item.path) as CFURL, nil),
-               let properties = CGImageSourceCopyPropertiesAtIndex(imageSource, 0, nil) as? [CFString: Any] {
-                if let w = properties[kCGImagePropertyPixelWidth] as? Int,
-                   let h = properties[kCGImagePropertyPixelHeight] as? Int {
-                    dimensionsStr = "\(w) × \(h) pixels"
-                }
-            }
-        }
-
-        let sizeStr = ByteCountFormatter.string(fromByteCount: Int64(sizeBytes), countStyle: .file)
-
-        let container = NSView(frame: NSRect(x: 0, y: 0, width: 550, height: 180))
-
-        let gridView = NSGridView(numberOfColumns: 2, rows: 0)
-        gridView.translatesAutoresizingMaskIntoConstraints = false
-        gridView.rowSpacing = 8
-        gridView.columnSpacing = 12
-
-        func makeLabel(_ text: String, bold: Bool = false) -> NSTextField {
-            let tf = NSTextField(labelWithString: text)
-            tf.font = bold ? NSFont.boldSystemFont(ofSize: 12) : NSFont.systemFont(ofSize: 12)
-            tf.textColor = NSColor.secondaryLabelColor
-            return tf
-        }
-
-        func makeValueField(_ text: String) -> NSTextField {
-            let tf = NSTextField(string: text)
-            tf.isEditable = false
-            tf.isSelectable = true
-            tf.drawsBackground = false
-            tf.isBezeled = false
-            tf.font = NSFont.systemFont(ofSize: 12)
-            tf.textColor = NSColor.labelColor
-            tf.lineBreakMode = .byCharWrapping
-            return tf
-        }
-
-        let pathContainer = NSStackView()
-        pathContainer.orientation = .horizontal
-        pathContainer.spacing = 8
-        pathContainer.alignment = .centerY
-
-        let pathField = makeValueField(fullPath)
-        pathContainer.addArrangedSubview(pathField)
-
-        let copyBtn = NSButton(title: "Copy Path", target: self, action: #selector(copyInfoPathAction))
-        copyBtn.bezelStyle = .inline
-        copyBtn.controlSize = .small
-        pathContainer.addArrangedSubview(copyBtn)
-
-        gridView.addRow(with: [makeLabel("Name:", bold: true), makeValueField(item.name)])
-        gridView.addRow(with: [makeLabel("Path:", bold: true), pathContainer])
-        gridView.addRow(with: [makeLabel("Resolution:", bold: true), makeValueField(dimensionsStr)])
-        gridView.addRow(with: [makeLabel("Size:", bold: true), makeValueField(sizeStr)])
-        gridView.addRow(with: [makeLabel("Created:", bold: true), makeValueField(createdStr)])
-        gridView.addRow(with: [makeLabel("Modified:", bold: true), makeValueField(modifiedStr)])
-
-        container.addSubview(gridView)
-        NSLayoutConstraint.activate([
-            gridView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            gridView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            gridView.topAnchor.constraint(equalTo: container.topAnchor, constant: 4),
-            gridView.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -4)
-        ])
-
-        alert.accessoryView = container
-
-        if let window = view.window {
-            alert.beginSheetModal(for: window, completionHandler: nil)
-        } else {
-            alert.runModal()
-        }
+        fileInfoController?.show(item: item, relativeTo: view.window)
     }
 }

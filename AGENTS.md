@@ -17,6 +17,7 @@ FastView is built using Swift, AppKit, and Swift Package Manager.
   - `CombinationStatesWindowController.swift`: Saved-combinations manager window (previews, search, rename, Show in Finder, Move to Trash).
   - `RestoreProgressView.swift`: Overlay with a progress bar shown over the canvas while a saved combination restores (pane images + objects; tracked in `MainSplitViewController`).
   - `ColorMatcher.swift`: Matches objects' colours to a reference object, led by skin tones (YCbCr skin test, grey-world retry for colour casts; per-channel gains match average skin colour), falling back to whole-object mean/spread matching.
+  - `FileInfoWindowController.swift`: Show Info panel (Cmd+I): thumbnail header, general/image/camera (EXIF)/contents/dates/library sections. Details are read off the main thread (archive entries through `DiskIOGate`) and the panel follows the selection while open.
   - `StatusBarView.swift`: Status bar at bottom displaying location, index, count, and size metrics.
 - `Sources/FastView/Cache/`:
   - `MemoryLRUCache.swift`: In-memory image cache supporting Low Memory Mode (capped at 10 items when active).

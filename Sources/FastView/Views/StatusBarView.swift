@@ -124,19 +124,56 @@ public class StatusBarView: NSView {
         return components.joined(separator: " / ")
     }
 
-    public func updateSelectedItemStats(item: FileItem, containedImagesCount: Int? = nil, parentName: String? = nil) {
+    /// Where a folder or archive sits among the folders and archives of the
+    /// list it is in, for "3 / 17" and the "12 folders, 5 archives" summary.
+    public struct ContainerPosition {
+        public let index: Int
+        public let total: Int
+        public let folders: Int
+        public let archives: Int
+
+        public init?(item: FileItem, in items: [FileItem]) {
+            guard item.type != .parentDirectory else { return nil }
+            let containers = items.filter {
+                $0.type != .parentDirectory && ($0.isDirectory || $0.type == .archiveZip || $0.type == .archiveRar)
+            }
+            guard let idx = containers.firstIndex(where: { $0.id == item.id }) else { return nil }
+            index = idx + 1
+            total = containers.count
+            archives = containers.filter { $0.type == .archiveZip || $0.type == .archiveRar }.count
+            folders = total - archives
+        }
+
+        var summary: String {
+            func count(_ n: Int, _ noun: String) -> String { "\(n) \(noun)\(n == 1 ? "" : "s")" }
+            var parts: [String] = []
+            if folders > 0 { parts.append(count(folders, "folder")) }
+            if archives > 0 { parts.append(count(archives, "archive")) }
+            return parts.joined(separator: ", ")
+        }
+    }
+
+    public func updateSelectedItemStats(item: FileItem, position: ContainerPosition? = nil, parentName: String? = nil) {
         leftLabel.stringValue = StatusBarView.formatLeftPath(for: item)
 
         var parts: [String] = []
 
-        if let count = containedImagesCount {
-            parts.append("\(count) images")
+        if let position = position {
+            parts.append("\(position.index) / \(position.total)")
+            parts.append(position.summary)
+        }
+
+        // Image totals already counted (by the sidebar badge pass); never
+        // counted here, which would read the folder or archive.
+        if let stats = FolderStatsCalculator.cachedStats(for: item), stats.totalImages > 0 {
+            let noun = stats.totalImages == 1 ? "image" : "images"
+            parts.append(stats.isComplete ? "\(stats.totalImages) \(noun)" : "\(stats.totalImages)+ \(noun)")
         }
 
         // Entries inside an archive with no recorded size are folders; they
         // have no size of their own (and must never be extracted on the main
         // thread to find out).
-        let statPath = item.archivePath == nil ? item.path : nil
+        let statPath = item.archivePath == nil && !item.isDirectory ? item.path : nil
         setRightLabel(before: parts, sizeBytes: item.fileSize, statPath: statPath)
     }
 

@@ -10,7 +10,7 @@ FastView is a high-performance macOS image viewer written in Swift and AppKit, b
 - **Low Memory Mode**: Optional minimal caching mode limiting memory cache to at most 10 LRU items.
 - **Recursive Thumbnail Peeking**: Automatic thumbnail extraction for directories/archives by naturally sorting contents and recursively traversing until the first image is found.
 - **Visual Sidebar Badges**: Large overlay badges for favorites (star) and folders/archives (type icons) on sidebar cells.
-- **File Information Dialog**: Quick metadata panel (Cmd+I) displaying path, file size, creation date, and modification date.
+- **File Information Panel**: Metadata panel (Cmd+I) with thumbnail, kind, size, location, image properties (dimensions, colour profile, DPI), camera EXIF (camera, lens, exposure, date taken, GPS), folder/archive contents and dates. It follows the selection while open.
 - **Command-Line Integration**: Launch with a directory parameter (`FastView /path/to/folder`) to automatically open in Show All mode.
 
 ## Shortcuts & Controls
