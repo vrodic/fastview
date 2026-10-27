@@ -18,6 +18,11 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
     private var shownOrders: [Int: [String: (options: ListSortOptions, items: [FileItem])]] = [:]
     private var shownOrderKeys: [Int: [String]] = [:]
     private static let shownOrdersLimit = 16
+    /// Watches the folders the panes list, so the lists follow changes on disk.
+    private let directoryWatcher = DirectoryWatcher()
+    /// Panes whose listing is being refreshed, and the modified paths a further refresh waits to pick up.
+    private var refreshingPanes: Set<Int> = []
+    private var pendingRefreshes: [Int: Set<String>] = [:]
     private var currentDirectoryLoadItem1: DispatchWorkItem?
     private var currentDirectoryLoadItem2: DispatchWorkItem?
     private let lock = NSLock()
@@ -156,6 +161,9 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
     override public func viewDidLoad() {
         super.viewDidLoad()
         setupUI()
+        directoryWatcher.onChange = { [weak self] folder, modifiedPaths in
+            self?.folderChanged(folder, modifiedPaths: modifiedPaths)
+        }
     }
 
     override public func viewDidAppear() {
@@ -348,6 +356,7 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         dualCanvasVC.setDualViewEnabled(false)
         sidebarContainerVC.updateViewMode(isDual: false)
         navigationManager2 = nil
+        updateWatchedFolders()
         UserDefaults.standard.set(false, forKey: "FastViewIsDualViewEnabled")
     }
 
@@ -1043,6 +1052,11 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
                 if workItem.isCancelled { return }
                 self.directoryLoadFinished(workItem, pane: pane)
                 targetSidebar.setItems(items, selectFirst: targetSelectedItemPath == nil)
+                self.updateWatchedFolders()
+                // A cached listing may predate changes made while the folder was not watched.
+                if navMgr.lastContentsWereCached && !isArchive {
+                    self.refreshListing(pane: pane, modifiedPaths: [])
+                }
                 self.rememberShownOrder(items, options: sortOptions, location: navMgr.currentLocation, pane: pane)
 
                 if let targetPath = targetSelectedItemPath,
@@ -1088,10 +1102,100 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         loadQueue.async(execute: workItem)
     }
 
+    // MARK: - Folder Watching
+
+    /// The folder pane `pane` lists, or nil for favorites, archives and a closed pane.
+    private func listedFolder(pane: Int) -> String? {
+        let isFavorites = pane == 1 ? showFavoritesOnly : showFavoritesOnlyPane2
+        guard !isFavorites, let nav = pane == 2 ? navigationManager2 : navigationManager1,
+              !nav.currentLocation.isArchive else { return nil }
+        return nav.currentLocation.physicalPath
+    }
+
+    private func updateWatchedFolders() {
+        directoryWatcher.watch(Set([1, 2].compactMap { listedFolder(pane: $0) }))
+    }
+
+    private func folderChanged(_ folder: String, modifiedPaths: Set<String>) {
+        for pane in [1, 2] where listedFolder(pane: pane) == folder {
+            refreshListing(pane: pane, modifiedPaths: modifiedPaths)
+        }
+    }
+
+    /// Lists the pane's folder again and shows the result in place, keeping the selection
+    /// (see `SidebarViewController.setRefreshedItems`). Thumbnails of `modifiedPaths` are read again.
+    private func refreshListing(pane: Int, modifiedPaths: Set<String>) {
+        // A refresh or a load still running would miss this change: refresh after it.
+        if refreshingPanes.contains(pane) || isDirectoryLoadInFlight(pane: pane) {
+            pendingRefreshes[pane, default: []].formUnion(modifiedPaths)
+            if !refreshingPanes.contains(pane) {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.runPendingRefresh(pane: pane) }
+            }
+            return
+        }
+        guard let nav = pane == 2 ? navigationManager2 : navigationManager1 else { return }
+        let sidebar = pane == 2 ? sidebarContainerVC.sidebarVC2 : sidebarContainerVC.sidebarVC1
+        let location = nav.currentLocation
+        let listingNav = NavigationManager(initialLocation: location)
+        let sortOptions = sidebar.sortOptions
+        refreshingPanes.insert(pane)
+
+        loadQueue.async { [weak self] in
+            let startTime = CFAbsoluteTimeGetCurrent()
+            let listed = DiskIOGate.shared.perform(.background, label: location.physicalPath) {
+                listingNav.contents(useCache: false)
+            }
+            let items = ListSorter.sort(listed, options: sortOptions, datesReadSince: startTime)
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                self.refreshingPanes.remove(pane)
+                defer { self.runPendingRefresh(pane: pane) }
+                // Drop the result if the pane moved on or was re-sorted meanwhile.
+                guard let current = pane == 2 ? self.navigationManager2 : self.navigationManager1,
+                      current.currentLocation.cacheKey == location.cacheKey,
+                      sidebar.sortOptions == sortOptions else { return }
+
+                let changedIDs = Set(items.map { $0.id }).intersection(modifiedPaths)
+                for id in changedIDs {
+                    MemoryLRUCache.shared.removeObject(forKey: "thumb_\(id)_256.0x256.0")
+                    MemoryLRUCache.shared.removeObject(forKey: "full_\(id)")
+                }
+                guard items.map({ $0.id }) != sidebar.items.map({ $0.id }) || !changedIDs.isEmpty else { return }
+                FileLogger.shared.log("DIR_REFRESH \(sidebar.items.count) -> \(items.count) items", path: location.physicalPath)
+
+                let selectedID = sidebar.selectedItem?.id
+                sidebar.setRefreshedItems(items, changedIDs: changedIDs)
+                self.rememberShownOrder(items, options: sortOptions, location: location, pane: pane)
+                // The same item still selected: only its position in the list may have changed.
+                if pane == 1, let item = sidebar.selectedItem, item.id == selectedID {
+                    self.refreshStatusBarPosition(of: item, in: sidebar.items, folder: location.physicalPath)
+                }
+            }
+        }
+    }
+
+    private func runPendingRefresh(pane: Int) {
+        guard !refreshingPanes.contains(pane), let modified = pendingRefreshes.removeValue(forKey: pane) else { return }
+        refreshListing(pane: pane, modifiedPaths: modified)
+    }
+
+    private func refreshStatusBarPosition(of item: FileItem, in items: [FileItem], folder: String) {
+        let parentName = (folder as NSString).lastPathComponent
+        if item.type == .image {
+            let imageItems = items.filter { $0.type == .image }
+            let index = imageItems.firstIndex(where: { $0.id == item.id }).map { $0 + 1 }
+            statusBarView.updateImageInfo(item: item, image: dualCanvasVC.imageView1.currentImage,
+                                          currentIndex: index, totalImages: imageItems.count, parentName: parentName)
+        } else {
+            statusBarView.updateSelectedItemStats(item: item, position: StatusBarView.ContainerPosition(item: item, in: items), parentName: parentName)
+        }
+    }
+
     private func showFavorites(_ favorites: [FileItem], pane: Int, targetSelectedItemPath: String?) {
         let targetSidebar = (pane == 2) ? sidebarContainerVC.sidebarVC2 : sidebarContainerVC.sidebarVC1
         targetSidebar.setHeaderTitle(pane == 2 ? "Pane 2: Favorites" : "Favorites")
         targetSidebar.setItems(favorites, selectFirst: targetSelectedItemPath == nil)
+        updateWatchedFolders()
         if pane == 1 {
             statusBarView.updateDirectoryStats(imageCount: favorites.count, totalSizeBytes: 0, locationName: "Favorites")
         }

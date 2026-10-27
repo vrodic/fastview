@@ -349,6 +349,45 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
         loadVisibleThumbnailsIfIdle()
     }
 
+    /// Shows a fresh listing of the same location. The selected item stays selected, at the
+    /// same place on screen, without being reported as a new selection; when it is gone, the
+    /// row now in its place is selected and reported like a click. `changedIDs` are items
+    /// whose files changed: their rows are redrawn so their thumbnails are read again.
+    public func setRefreshedItems(_ items: [FileItem], changedIDs: Set<String> = []) {
+        let oldRow = tableView.selectedRow
+        let selectedID = selectedItem?.id
+        let clip = scrollView.contentView
+        let selectedOffset = oldRow >= 0 ? tableView.rect(ofRow: oldRow).minY - clip.bounds.minY : nil
+        let topOffset = clip.bounds.minY
+
+        isRestoringSelection = true
+        self.items = items
+        _ = SQLiteCache.shared.getViewedCount(keys: items.filter { $0.type == .image }.map(SidebarTableCellView.viewedKey))
+        tableView.reloadData()
+
+        let maxY = max(0, tableView.bounds.height - clip.bounds.height)
+        if let id = selectedID, let index = items.firstIndex(where: { $0.id == id }) {
+            tableView.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
+            let y = tableView.rect(ofRow: index).minY - (selectedOffset ?? 0)
+            clip.scroll(to: NSPoint(x: 0, y: max(0, min(maxY, y))))
+            isRestoringSelection = false
+        } else {
+            clip.scroll(to: NSPoint(x: 0, y: max(0, min(maxY, topOffset))))
+            // Cleared first, so selecting the same row index still reports the new item.
+            tableView.deselectAll(nil)
+            isRestoringSelection = false
+            if oldRow >= 0 && !items.isEmpty {
+                tableView.selectRowIndexes(IndexSet(integer: min(oldRow, items.count - 1)), byExtendingSelection: false)
+            }
+        }
+        scrollView.reflectScrolledClipView(clip)
+        if !changedIDs.isEmpty {
+            let rows = IndexSet(items.indices.filter { changedIDs.contains(items[$0].id) })
+            tableView.reloadData(forRowIndexes: rows, columnIndexes: IndexSet(integer: 0))
+        }
+        loadVisibleThumbnailsIfIdle()
+    }
+
     /// Drops thumbnail work for rows that are no longer visible (killing a
     /// running archive read) and requests the visible rows, top to bottom.
     /// Work for rows that stayed visible keeps running.

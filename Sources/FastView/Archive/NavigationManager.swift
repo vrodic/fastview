@@ -57,16 +57,22 @@ public class NavigationManager {
 
     /// `progress` reports archive listing progress (from the background
     /// thread); `isCancelled` aborts an in-flight archive scan.
-    public func contents(progress: LoadProgressHandler? = nil, isCancelled: (() -> Bool)? = nil) -> [FileItem] {
+    /// `useCache` false lists the location again even when a listing is cached (and caches the new one).
+    /// Whether the last `contents` call returned a cached listing, which may be out of date.
+    public private(set) var lastContentsWereCached = false
+
+    public func contents(progress: LoadProgressHandler? = nil, isCancelled: (() -> Bool)? = nil, useCache: Bool = true) -> [FileItem] {
         if isCancelled?() == true { return [] }
 
         let key = currentLocation.cacheKey
-        if let cached = SQLiteCache.shared.getDirectoryContents(key: key) {
+        if useCache, let cached = SQLiteCache.shared.getDirectoryContents(key: key) {
             let hasContent = cached.contains { $0.type == .image || $0.type == .directory || $0.type == .archiveZip || $0.type == .archiveRar }
             if hasContent || !currentLocation.isArchive {
+                lastContentsWereCached = true
                 return cached
             }
         }
+        lastContentsWereCached = false
 
         var results: [FileItem] = []
         let parentItem = FileItem.parentItem(for: currentLocation.physicalPath)

@@ -61,6 +61,14 @@ public class MemoryLRUCache {
         evictIfNecessary()
     }
 
+    public func removeObject(forKey key: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        if let existing = cache.removeValue(forKey: key) {
+            totalCost -= existing.cost
+        }
+    }
+
     private func evictIfNecessary() {
         let effectiveLimit = isLowMemoryMode ? 50 : Int.max
         while (totalCost > maxMemoryLimit || cache.count > effectiveLimit) && !cache.isEmpty {

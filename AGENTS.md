@@ -26,6 +26,7 @@ FastView is built using Swift, AppKit, and Swift Package Manager.
   - `SQLiteCache.swift`: SQLite database (`fastview_cache.sqlite`) for favorite persistence and directory structure caching.
   - `ThumbnailGenerator.swift`: Background and priority thumbnail extraction and recursive preview peeking.
   - `DirectoryCache.swift`: Fast in-memory caching of directory file item lists.
+  - `DirectoryWatcher.swift`: FSEvents watcher for the folders the panes list (not archives or favorites). `MainSplitViewController` re-lists a changed folder in the background, bypassing the SQLite listing cache, and `SidebarViewController.setRefreshedItems` swaps the list in place keeping the selected item and its place on screen (when it was deleted, the row now in its place is selected). Folders opened from the listing cache are re-listed once the same way, and changed files get their thumbnails read again.
   - `ArchiveThumbCache.swift`: Local on-disk cache of RAR archive thumbnails and image lists (`~/Library/Caches/FastView/ArchiveThumbs`, one JSON + JPEG per archive keyed by a hash of its path), validated by archive size and modification date. ZIP archives are not cached: their directory and preview are read by range, which is as quick.
 - `Sources/FastView/Archive/`:
   - `ArchiveReader.swift`: Archive entry-list cache, listing, and entry extraction, all requested from `ArchiveService`.
