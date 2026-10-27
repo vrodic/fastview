@@ -177,6 +177,11 @@ public class StatusBarView: NSView {
         rightLabel.stringValue = "FG Object \(pane): \(w)×\(h) px  |  Pos: (\(x), \(y))  |  Scale: \(scale)%  |  Rot: \(rot)°"
     }
 
+    public func showMessage(_ message: String) {
+        sizeLookupToken += 1
+        rightLabel.stringValue = message
+    }
+
     public func clearImageInfo() {
         sizeLookupToken += 1
         rightLabel.stringValue = ""

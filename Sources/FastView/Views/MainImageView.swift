@@ -85,7 +85,8 @@ public class MainImageView: NSView {
 
     private var selectionPath: [CGPoint] = []
     private var isDrawingSelection: Bool = false
-    public var onRegionSelectedForDetection: ((NSImage) -> Void)?
+    /// The cropped image, the crop as fractions of the oriented image (top-left origin), and the orientation.
+    public var onRegionSelectedForDetection: ((NSImage, CGRect, ImageOrientation) -> Void)?
 
     private var isDraggingImage: Bool = false
     private var lastDragLocation: NSPoint = .zero
@@ -592,30 +593,13 @@ public class MainImageView: NSView {
         let normW = intersect.width / drawRect.width
         let normH = intersect.height / drawRect.height
 
-        guard let cgImg = img.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+        let normCrop = CGRect(x: normX, y: 1.0 - normY - normH, width: normW, height: normH)
+        guard let croppedImage = img.cropped(toNormalized: normCrop) else {
             selectionPath = []
             updateOverlay()
             return
         }
-        let pixelW = CGFloat(cgImg.width)
-        let pixelH = CGFloat(cgImg.height)
-
-        let cropRect = CGRect(
-            x: max(0, normX * pixelW),
-            y: max(0, (1.0 - normY - normH) * pixelH),
-            width: min(pixelW, normW * pixelW),
-            height: min(pixelH, normH * pixelH)
-        )
-
-        guard cropRect.width > 2 && cropRect.height > 2,
-              let croppedCG = cgImg.cropping(to: cropRect) else {
-            selectionPath = []
-            updateOverlay()
-            return
-        }
-
-        let croppedImage = NSImage(cgImage: croppedCG, size: NSSize(width: cropRect.width, height: cropRect.height))
-        onRegionSelectedForDetection?(croppedImage)
+        onRegionSelectedForDetection?(croppedImage, normCrop, orientation)
         selectionPath = []
         updateOverlay()
     }

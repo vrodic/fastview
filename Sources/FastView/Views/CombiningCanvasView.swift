@@ -40,61 +40,152 @@ public class CombiningCanvasView: NSView {
         }
     }
 
-    public var foregroundObject1: ForegroundObject? {
-        get {
-            return objects.first
-        }
-        set {
-            if let newObj = newValue {
-                if objects.isEmpty {
-                    objects.append(newObj)
-                } else {
-                    objects[0] = newObj
+    /// Objects restored before the canvas had a size, with positions as fractions of the canvas.
+    private var pendingNormalizedObjects: [(ForegroundObject, CGPoint?)]?
+
+    public func foregroundObject(forPane pane: Int) -> ForegroundObject? {
+        return objects.first { $0.sourcePane == pane }
+    }
+
+    /// Replaces the object auto-detected from `pane` in place, keeping its z order.
+    public func setForegroundObject(_ object: ForegroundObject?, forPane pane: Int) {
+        let idx = objects.firstIndex { $0.sourcePane == pane }
+        guard var obj = object else {
+            if let idx = idx {
+                objects.remove(at: idx)
+                if let sel = selectedObjectIndex {
+                    selectedObjectIndex = sel == idx ? nil : (sel > idx ? sel - 1 : sel)
                 }
-            } else if !objects.isEmpty {
-                objects.remove(at: 0)
             }
-            needsDisplay = true
+            return
+        }
+        obj.sourcePane = pane
+        if let idx = idx {
+            objects[idx] = obj
+        } else {
+            objects.append(obj)
+        }
+        if obj.position == .zero {
+            positionFromSlider(pane: pane)
         }
     }
 
-    public var foregroundObject2: ForegroundObject? {
-        get {
-            return objects.count > 1 ? objects[1] : nil
+    public func normalizedPosition(of object: ForegroundObject) -> CGPoint? {
+        guard bounds.width > 0 && bounds.height > 0 else { return nil }
+        return CGPoint(x: object.position.x / bounds.width, y: object.position.y / bounds.height)
+    }
+
+    /// Replaces all objects in the given z order (first is bottom). A normalized
+    /// position, when given, is a fraction of the canvas size and wins over `position`.
+    public func setRestoredObjects(_ restored: [(ForegroundObject, CGPoint?)]) {
+        guard bounds.width > 0 && bounds.height > 0 else {
+            pendingNormalizedObjects = restored
+            objects = restored.map { $0.0 }
+            selectedObjectIndex = nil
+            return
         }
-        set {
-            if let newObj = newValue {
-                if objects.count > 1 {
-                    objects[1] = newObj
-                } else if objects.count == 1 {
-                    objects.append(newObj)
-                } else {
-                    objects.append(newObj)
-                }
-            } else if objects.count > 1 {
-                objects.remove(at: 1)
+        pendingNormalizedObjects = nil
+        objects = restored.map { obj, norm in
+            var o = obj
+            if let n = norm {
+                o.position = CGPoint(x: n.x * bounds.width, y: n.y * bounds.height)
             }
-            needsDisplay = true
+            return o
+        }
+        selectedObjectIndex = nil
+    }
+
+    private var isRenderingPreview = false
+
+    /// The canvas as it looks now, without selection handles, at most `maxDimension` points on its long side.
+    public func renderPreview(maxDimension: CGFloat) -> NSImage? {
+        guard bounds.width > 0 && bounds.height > 0,
+              let rep = bitmapImageRepForCachingDisplay(in: bounds) else { return nil }
+        isRenderingPreview = true
+        cacheDisplay(in: bounds, to: rep)
+        isRenderingPreview = false
+
+        let scale = min(1.0, maxDimension / max(bounds.width, bounds.height))
+        let size = NSSize(width: (bounds.width * scale).rounded(), height: (bounds.height * scale).rounded())
+        let full = NSImage(size: bounds.size)
+        full.addRepresentation(rep)
+        let preview = NSImage(size: size)
+        preview.lockFocus()
+        NSGraphicsContext.current?.imageInterpolation = .high
+        full.draw(in: NSRect(origin: .zero, size: size))
+        preview.unlockFocus()
+        return preview
+    }
+
+    /// Called after a colour match with how many objects were matched by their skin, and how many in all.
+    public var onColorMatchFinished: ((_ bySkin: Int, _ total: Int, _ referenceHasSkin: Bool) -> Void)?
+
+    /// Gives every other object the colours of the object at `referenceIndex`, led by skin tones.
+    public func matchColorsOfOtherObjects(to referenceIndex: Int) {
+        guard referenceIndex >= 0 && referenceIndex < objects.count else { return }
+        let referenceImage = objects[referenceIndex].image
+        let targets = objects.enumerated()
+            .filter { $0.offset != referenceIndex }
+            .map { (id: $0.element.id, base: $0.element.unadjustedImage ?? $0.element.image) }
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let reference = ColorMatcher.profile(of: referenceImage) else { return }
+            var results: [(id: UUID, adjustment: ColorAdjustment, base: NSImage, adjusted: NSImage)] = []
+            var bySkin = 0
+            for target in targets {
+                guard let profile = ColorMatcher.profile(of: target.base) else { continue }
+                let match = ColorMatcher.adjustment(matching: profile, to: reference)
+                if let adjusted = ColorMatcher.apply(match.adjustment, to: target.base) {
+                    results.append((target.id, match.adjustment, target.base, adjusted))
+                    if match.bySkin { bySkin += 1 }
+                }
+            }
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                for result in results {
+                    guard let i = self.objects.firstIndex(where: { $0.id == result.id }) else { continue }
+                    self.objects[i].unadjustedImage = result.base
+                    self.objects[i].image = result.adjusted
+                    self.objects[i].colorAdjustment = result.adjustment
+                }
+                self.onColorMatchFinished?(bySkin, results.count, reference.skin != nil)
+            }
         }
     }
 
-    public var pendingFg1Position: CGPoint?
-    public var pendingFg1Scale: CGFloat?
-    public var pendingFg1Rotation: CGFloat?
-    public var pendingFg1FlipH: Bool?
-    public var pendingFg1FlipV: Bool?
+    public func resetColors(at index: Int) {
+        guard index >= 0 && index < objects.count, let base = objects[index].unadjustedImage else { return }
+        objects[index].image = base
+        objects[index].unadjustedImage = nil
+        objects[index].colorAdjustment = nil
+    }
 
-    public var pendingFg2Position: CGPoint?
-    public var pendingFg2Scale: CGFloat?
-    public var pendingFg2Rotation: CGFloat?
-    public var pendingFg2FlipH: Bool?
-    public var pendingFg2FlipV: Bool?
+    // Resizing happens here rather than in layout() so positions are always in
+    // the current size's coordinates, whenever a restore or save reads them.
+    override public func setFrameSize(_ newSize: NSSize) {
+        let oldSize = frame.size
+        super.setFrameSize(newSize)
+        guard newSize.width > 0 && newSize.height > 0, newSize != oldSize else { return }
+
+        if let pending = pendingNormalizedObjects {
+            setRestoredObjects(pending)
+            return
+        }
+        // Keep objects at the same place relative to the canvas; their size already follows it.
+        guard oldSize.width > 0 && oldSize.height > 0 else { return }
+        let sx = newSize.width / oldSize.width
+        let sy = newSize.height / oldSize.height
+        for i in objects.indices {
+            objects[i].position = CGPoint(x: objects[i].position.x * sx, y: objects[i].position.y * sy)
+        }
+    }
 
     public var showBackground1: Bool = true { didSet { needsDisplay = true } }
     public var showBackground2: Bool = true { didSet { needsDisplay = true } }
 
     public var combiningMode: CanvasCombiningMode = .split { didSet { needsDisplay = true } }
 
+    /// Called with the object's index in `objects`.
     public var onRetuneDetector: ((Int, VisionDetectionMode) -> Void)?
     public var onSelectedObjectChanged: ((Int, ForegroundObject) -> Void)?
 
@@ -106,14 +197,14 @@ public class CombiningCanvasView: NSView {
     // Foreground Combine Sliders (0..100)
     public var fgOffset1Percent: CGFloat = 50.0 {
         didSet {
-            updateFGPositionsFromSliders()
+            positionFromSlider(pane: 1)
             needsDisplay = true
         }
     }
 
     public var fgOffset2Percent: CGFloat = 50.0 {
         didSet {
-            updateFGPositionsFromSliders()
+            positionFromSlider(pane: 2)
             needsDisplay = true
         }
     }
@@ -207,25 +298,19 @@ public class CombiningCanvasView: NSView {
         needsDisplay = true
     }
 
-    public func updateFGPositionsFromSliders() {
-        guard bounds.width > 0 && bounds.height > 0 else { return }
+    /// Places the object auto-detected from `pane` on its slider track (pane 1 left, pane 2 right).
+    public func positionFromSlider(pane: Int) {
+        guard bounds.width > 0 && bounds.height > 0,
+              let idx = objects.firstIndex(where: { $0.sourcePane == pane }) else { return }
+        if isDraggingObject && selectedObjectIndex == idx { return }
         let midX = bounds.width / 2.0
         let midY = bounds.height / 2.0
-
-        if objects.count > 0 {
+        if pane == 1 {
             let defaultX = bounds.width * 0.25
-            let moveAmount = (midX - defaultX) * (fgOffset1Percent / 100.0)
-            if !isDraggingObject || selectedObjectIndex != 0 {
-                objects[0].position = CGPoint(x: defaultX + moveAmount, y: midY)
-            }
-        }
-
-        if objects.count > 1 {
+            objects[idx].position = CGPoint(x: defaultX + (midX - defaultX) * (fgOffset1Percent / 100.0), y: midY)
+        } else {
             let defaultX = bounds.width * 0.75
-            let moveAmount = (midX - defaultX) * (fgOffset2Percent / 100.0)
-            if !isDraggingObject || selectedObjectIndex != 1 {
-                objects[1].position = CGPoint(x: defaultX - moveAmount, y: midY)
-            }
+            objects[idx].position = CGPoint(x: defaultX - (defaultX - midX) * (fgOffset2Percent / 100.0), y: midY)
         }
     }
 
@@ -342,7 +427,7 @@ public class CombiningCanvasView: NSView {
         }
 
         // 2. Overlay pass: Draw selection outline & handles on top of ALL objects for selected object
-        if let selIdx = selectedObjectIndex, selIdx >= 0 && selIdx < objects.count {
+        if !isRenderingPreview, let selIdx = selectedObjectIndex, selIdx >= 0 && selIdx < objects.count {
             drawSelectedObjectHandles(objects[selIdx], in: rect, context: context)
         }
     }
@@ -553,11 +638,26 @@ public class CombiningCanvasView: NSView {
         guard let idx = clickedIdx else { return super.menu(for: event) }
 
         let menu = NSMenu(title: "Foreground Object Menu")
+        menu.autoenablesItems = false
 
         let copyItem = NSMenuItem(title: "Copy Object to Clipboard", action: #selector(contextCopyObjectAction(_:)), keyEquivalent: "")
         copyItem.target = self
         copyItem.representedObject = idx
         menu.addItem(copyItem)
+
+        menu.addItem(NSMenuItem.separator())
+
+        let matchItem = NSMenuItem(title: "Match Other Objects' Colors to This Object", action: #selector(contextMatchColorsAction(_:)), keyEquivalent: "")
+        matchItem.target = self
+        matchItem.representedObject = idx
+        matchItem.isEnabled = objects.count > 1
+        menu.addItem(matchItem)
+
+        let resetColorsItem = NSMenuItem(title: "Reset Object Colors", action: #selector(contextResetColorsAction(_:)), keyEquivalent: "")
+        resetColorsItem.target = self
+        resetColorsItem.representedObject = idx
+        resetColorsItem.isEnabled = objects[idx].colorAdjustment != nil
+        menu.addItem(resetColorsItem)
 
         menu.addItem(NSMenuItem.separator())
 
@@ -637,6 +737,16 @@ public class CombiningCanvasView: NSView {
         NSPasteboard.general.copyImage(flippedImage)
     }
 
+    @objc private func contextMatchColorsAction(_ sender: NSMenuItem) {
+        guard let idx = sender.representedObject as? Int else { return }
+        matchColorsOfOtherObjects(to: idx)
+    }
+
+    @objc private func contextResetColorsAction(_ sender: NSMenuItem) {
+        guard let idx = sender.representedObject as? Int else { return }
+        resetColors(at: idx)
+    }
+
     @objc private func contextFlipHorizontalAction(_ sender: NSMenuItem) {
         guard let idx = sender.representedObject as? Int, idx < objects.count else { return }
         objects[idx].isFlippedHorizontal.toggle()
@@ -686,7 +796,7 @@ public class CombiningCanvasView: NSView {
               let idx = dict["index"] as? Int,
               let mode = dict["mode"] as? VisionDetectionMode else { return }
 
-        onRetuneDetector?(idx + 1, mode)
+        onRetuneDetector?(idx, mode)
     }
 
     // MARK: - Interactive Canvas Mouse Events

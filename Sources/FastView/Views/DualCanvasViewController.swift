@@ -11,6 +11,13 @@ public class DualCanvasViewController: NSViewController, CombiningToolbarDelegat
     public let imageView2 = MainImageView()
     public let combiningCanvasView = CombiningCanvasView()
     public let toolbarView = CombiningToolbarView()
+    public let restoreProgressView = RestoreProgressView()
+    /// The saved preview of a combination, filling panes and canvas while it restores.
+    /// A plain layer-backed view: an image view's intrinsic size would push the split view around.
+    private let restorePreviewView = NSView()
+
+    /// Called whenever a pane is given an image, with the item it shows (nil image when it has none).
+    public var onPaneImageSet: ((_ pane: Int, _ hasImage: Bool, _ itemPath: String?) -> Void)?
 
     public private(set) var isDualView: Bool = false
     public var combiningMode: CanvasCombiningMode = .split {
@@ -64,6 +71,18 @@ public class DualCanvasViewController: NSViewController, CombiningToolbarDelegat
         view.addSubview(combiningCanvasView)
         view.addSubview(toolbarView)
 
+        restorePreviewView.translatesAutoresizingMaskIntoConstraints = false
+        restorePreviewView.wantsLayer = true
+        restorePreviewView.layer?.contentsGravity = .resizeAspectFill
+        restorePreviewView.layer?.masksToBounds = true
+        restorePreviewView.isHidden = true
+        // Below the toolbar, so its restored values show; above panes and canvas.
+        view.addSubview(restorePreviewView, positioned: .below, relativeTo: toolbarView)
+
+        restoreProgressView.translatesAutoresizingMaskIntoConstraints = false
+        restoreProgressView.isHidden = true
+        view.addSubview(restoreProgressView)
+
         NSLayoutConstraint.activate([
             splitContainer.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             splitContainer.trailingAnchor.constraint(equalTo: view.trailingAnchor),
@@ -75,35 +94,73 @@ public class DualCanvasViewController: NSViewController, CombiningToolbarDelegat
             combiningCanvasView.topAnchor.constraint(equalTo: view.topAnchor),
             combiningCanvasView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
 
+            restorePreviewView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            restorePreviewView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            restorePreviewView.topAnchor.constraint(equalTo: view.topAnchor),
+            restorePreviewView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+
+            restoreProgressView.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            restoreProgressView.centerYAnchor.constraint(equalTo: view.centerYAnchor),
+
             toolbarView.centerXAnchor.constraint(equalTo: view.centerXAnchor),
             toolbarView.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -16)
         ])
 
-        combiningCanvasView.onRetuneDetector = { [weak self] pane, mode in
-            guard let self = self else { return }
-            let image = (pane == 1) ? self.combiningCanvasView.image1 : self.combiningCanvasView.image2
-            guard let img = image else { return }
+        combiningCanvasView.onRetuneDetector = { [weak self] index, mode in
+            guard let self = self, index < self.combiningCanvasView.objects.count else { return }
+            let target = self.combiningCanvasView.objects[index]
 
-            ForegroundDetector.detectForegroundObject(in: img, mode: mode) { [weak self] fgObj in
+            // Swaps in the re-detected object, keeping the target's identity, placement and colours.
+            let replace: (ForegroundObject?) -> Void = { [weak self] fgObj in
                 guard let self = self, var fg = fgObj else { return }
                 let canvas = self.combiningCanvasView
-                if pane == 1 {
-                    if let existing = canvas.foregroundObject1 {
-                        fg.position = existing.position
-                        fg.scale = existing.scale
-                        fg.rotationDegrees = existing.rotationDegrees
-                    }
-                    canvas.foregroundObject1 = fg
-                } else {
-                    if let existing = canvas.foregroundObject2 {
-                        fg.position = existing.position
-                        fg.scale = existing.scale
-                        fg.rotationDegrees = existing.rotationDegrees
-                    }
-                    canvas.foregroundObject2 = fg
+                guard let existing = canvas.objects.first(where: { $0.id == target.id }) else { return }
+                fg.id = existing.id
+                fg.itemPath = existing.itemPath
+                fg.archivePath = existing.archivePath
+                fg.sourcePane = existing.sourcePane
+                fg.sourceCrop = existing.sourceCrop
+                fg.sourceOrientation = existing.sourceOrientation
+                fg.position = existing.position
+                fg.scale = existing.scale
+                fg.rotationDegrees = existing.rotationDegrees
+                fg.isFlippedHorizontal = existing.isFlippedHorizontal
+                fg.isFlippedVertical = existing.isFlippedVertical
+                fg.detectionMode = mode
+                ForegroundSource.applyColorAdjustment(existing.colorAdjustment, to: fg) { adjusted in
+                    guard let idx = canvas.objects.firstIndex(where: { $0.id == target.id }) else { return }
+                    canvas.objects[idx] = adjusted
                 }
             }
+
+            if target.sourceCrop == nil, target.sourcePane == 1, let img = self.combiningCanvasView.image1 {
+                ForegroundDetector.detectForegroundObject(in: img, mode: mode, completion: replace)
+            } else if target.sourceCrop == nil, target.sourcePane == 2, let img = self.combiningCanvasView.image2 {
+                ForegroundDetector.detectForegroundObject(in: img, mode: mode, completion: replace)
+            } else if let itemPath = target.itemPath {
+                ForegroundSource.detect(itemPath: itemPath, archiveCandidates: target.archivePath.map { [$0] } ?? [], crop: target.sourceCrop, orientation: target.sourceOrientation, mode: mode, completion: replace)
+            }
         }
+    }
+
+    public func showRestorePreview(_ image: NSImage, background: NSColor) {
+        restorePreviewView.layer?.contents = image.cgImage(forProposedRect: nil, context: nil, hints: nil)
+        restorePreviewView.layer?.backgroundColor = background.cgColor
+        restorePreviewView.alphaValue = 1
+        restorePreviewView.isHidden = false
+    }
+
+    public func hideRestorePreview() {
+        guard !restorePreviewView.isHidden else { return }
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = 0.25
+            restorePreviewView.animator().alphaValue = 0
+        }, completionHandler: { [weak self] in
+            // A restore started during the fade shows its own preview again.
+            guard let self = self, self.restorePreviewView.alphaValue == 0 else { return }
+            self.restorePreviewView.isHidden = true
+            self.restorePreviewView.layer?.contents = nil
+        })
     }
 
     public func toggleToolbar() {
@@ -149,109 +206,65 @@ public class DualCanvasViewController: NSViewController, CombiningToolbarDelegat
         }
     }
 
-    public func setImage(_ image: NSImage?, pane: Int) {
+    /// Item paths whose next auto-detection is skipped because a restored
+    /// combination already supplied that pane's object.
+    private var restoredItemPaths: [Int: String] = [:]
+    private var detectionGeneration: [Int: Int] = [:]
+
+    /// A restored combination owns the canvas objects: keep the next image
+    /// loaded for each pane from replacing its object.
+    public func beginRestoringObjects(itemPath1: String?, itemPath2: String?) {
+        restoredItemPaths = [:]
+        if let p = itemPath1 { restoredItemPaths[1] = p }
+        if let p = itemPath2 { restoredItemPaths[2] = p }
+        // Drop detections still running for the images shown before the restore.
+        detectionGeneration[1, default: 0] += 1
+        detectionGeneration[2, default: 0] += 1
+    }
+
+    public func setImage(_ image: NSImage?, pane: Int, itemPath: String? = nil, archivePath: String? = nil) {
         if pane == 1 {
             imageView1.setImage(image, keepZoom: true)
             combiningCanvasView.image1 = image
-
-            if let img = image {
-                ForegroundDetector.detectForegroundObject(in: img) { [weak self] fgObj in
-                    guard let self = self, var fg = fgObj else { return }
-                    let canvas = self.combiningCanvasView
-                    if let pos = canvas.pendingFg1Position {
-                        fg.position = pos
-                        canvas.pendingFg1Position = nil
-                    } else if let existing = canvas.foregroundObject1, existing.position != .zero {
-                        fg.position = existing.position
-                    }
-
-                    if let scale = canvas.pendingFg1Scale {
-                        fg.scale = scale
-                        canvas.pendingFg1Scale = nil
-                    } else if let existing = canvas.foregroundObject1 {
-                        fg.scale = existing.scale
-                    }
-
-                    if let rot = canvas.pendingFg1Rotation {
-                        fg.rotationDegrees = rot
-                        canvas.pendingFg1Rotation = nil
-                    } else if let existing = canvas.foregroundObject1 {
-                        fg.rotationDegrees = existing.rotationDegrees
-                    }
-
-                    if let fh = canvas.pendingFg1FlipH {
-                        fg.isFlippedHorizontal = fh
-                        canvas.pendingFg1FlipH = nil
-                    } else if let existing = canvas.foregroundObject1 {
-                        fg.isFlippedHorizontal = existing.isFlippedHorizontal
-                    }
-
-                    if let fv = canvas.pendingFg1FlipV {
-                        fg.isFlippedVertical = fv
-                        canvas.pendingFg1FlipV = nil
-                    } else if let existing = canvas.foregroundObject1 {
-                        fg.isFlippedVertical = existing.isFlippedVertical
-                    }
-
-                    canvas.foregroundObject1 = fg
-                    if fg.position == .zero {
-                        canvas.updateFGPositionsFromSliders()
-                    }
-                }
-            } else {
-                combiningCanvasView.foregroundObject1 = nil
-            }
         } else {
             imageView2.setImage(image, keepZoom: true)
             combiningCanvasView.image2 = image
+        }
+        onPaneImageSet?(pane, image != nil, itemPath)
 
-            if let img = image {
-                ForegroundDetector.detectForegroundObject(in: img) { [weak self] fgObj in
-                    guard let self = self, var fg = fgObj else { return }
-                    let canvas = self.combiningCanvasView
-                    if let pos = canvas.pendingFg2Position {
-                        fg.position = pos
-                        canvas.pendingFg2Position = nil
-                    } else if let existing = canvas.foregroundObject2, existing.position != .zero {
-                        fg.position = existing.position
-                    }
+        let canvas = combiningCanvasView
+        if let restoredPath = restoredItemPaths[pane] {
+            // Loading clears the pane first; that must not drop the restored object.
+            guard image != nil else { return }
+            restoredItemPaths[pane] = nil
+            if restoredPath == itemPath { return }
+        }
+        // The same item shown again keeps its object, along with any detector tuning.
+        if image != nil, let path = itemPath, canvas.foregroundObject(forPane: pane)?.itemPath == path {
+            return
+        }
 
-                    if let scale = canvas.pendingFg2Scale {
-                        fg.scale = scale
-                        canvas.pendingFg2Scale = nil
-                    } else if let existing = canvas.foregroundObject2 {
-                        fg.scale = existing.scale
-                    }
+        detectionGeneration[pane, default: 0] += 1
+        let generation = detectionGeneration[pane]
 
-                    if let rot = canvas.pendingFg2Rotation {
-                        fg.rotationDegrees = rot
-                        canvas.pendingFg2Rotation = nil
-                    } else if let existing = canvas.foregroundObject2 {
-                        fg.rotationDegrees = existing.rotationDegrees
-                    }
+        guard let img = image else {
+            canvas.setForegroundObject(nil, forPane: pane)
+            return
+        }
 
-                    if let fh = canvas.pendingFg2FlipH {
-                        fg.isFlippedHorizontal = fh
-                        canvas.pendingFg2FlipH = nil
-                    } else if let existing = canvas.foregroundObject2 {
-                        fg.isFlippedHorizontal = existing.isFlippedHorizontal
-                    }
-
-                    if let fv = canvas.pendingFg2FlipV {
-                        fg.isFlippedVertical = fv
-                        canvas.pendingFg2FlipV = nil
-                    } else if let existing = canvas.foregroundObject2 {
-                        fg.isFlippedVertical = existing.isFlippedVertical
-                    }
-
-                    canvas.foregroundObject2 = fg
-                    if fg.position == .zero {
-                        canvas.updateFGPositionsFromSliders()
-                    }
-                }
-            } else {
-                combiningCanvasView.foregroundObject2 = nil
+        ForegroundDetector.detectForegroundObject(in: img) { [weak self] fgObj in
+            guard let self = self, var fg = fgObj,
+                  self.detectionGeneration[pane] == generation else { return }
+            fg.itemPath = itemPath
+            fg.archivePath = archivePath
+            if let existing = canvas.foregroundObject(forPane: pane) {
+                fg.position = existing.position
+                fg.scale = existing.scale
+                fg.rotationDegrees = existing.rotationDegrees
+                fg.isFlippedHorizontal = existing.isFlippedHorizontal
+                fg.isFlippedVertical = existing.isFlippedVertical
             }
+            canvas.setForegroundObject(fg, forPane: pane)
         }
     }
 

@@ -166,6 +166,10 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         self.restoreCombinationSubmenu = restoreSubmenu
         fileMenu.addItem(restoreItem)
         updateRestoreCombinationMenu()
+        NotificationCenter.default.addObserver(forName: CombinationStateManager.didChangeNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.updateRestoreCombinationMenu()
+        }
+        CombinationStateManager.reload()
 
         let switcherItem = NSMenuItem(title: "Saved Combination States Manager…", action: #selector(openCombinationSwitcherAction), keyEquivalent: "k")
         switcherItem.keyEquivalentModifierMask = [.command, .option]
@@ -545,9 +549,13 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         guard let restoreSubmenu = restoreCombinationSubmenu else { return }
         restoreSubmenu.removeAllItems()
 
-        let savedStates = CombinationStateManager.getAllSavedStates()
+        let savedStates = CombinationStateManager.summaries
         let managerItem = NSMenuItem(title: "Open Combination Switcher…", action: #selector(openCombinationSwitcherAction), keyEquivalent: "")
         restoreSubmenu.addItem(managerItem)
+        let openFileItem = NSMenuItem(title: "Open Combination File…", action: #selector(openCombinationFileAction), keyEquivalent: "")
+        restoreSubmenu.addItem(openFileItem)
+        let revealItem = NSMenuItem(title: "Show Combinations Folder in Finder", action: #selector(revealCombinationsFolderAction), keyEquivalent: "")
+        restoreSubmenu.addItem(revealItem)
         restoreSubmenu.addItem(NSMenuItem.separator())
 
         if savedStates.isEmpty {
@@ -557,24 +565,46 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             for state in savedStates {
                 let item = NSMenuItem(title: state.name, action: #selector(restoreComboStateItemAction(_:)), keyEquivalent: "")
-                item.representedObject = state.id
+                item.representedObject = state.url
                 restoreSubmenu.addItem(item)
             }
             restoreSubmenu.addItem(NSMenuItem.separator())
-            let clearItem = NSMenuItem(title: "Clear All Saved Combinations", action: #selector(clearAllComboStatesAction), keyEquivalent: "")
+            let clearItem = NSMenuItem(title: "Move All Saved Combinations to Trash", action: #selector(clearAllComboStatesAction), keyEquivalent: "")
             restoreSubmenu.addItem(clearItem)
         }
     }
 
     @objc private func restoreComboStateItemAction(_ sender: NSMenuItem) {
-        guard let stateId = sender.representedObject as? String,
-              let state = CombinationStateManager.getAllSavedStates().first(where: { $0.id == stateId }) else { return }
-        windowController?.splitVC.restoreCombinationState(state)
+        guard let url = sender.representedObject as? URL else { return }
+        windowController?.splitVC.restoreCombinationState(from: url)
+    }
+
+    @objc private func openCombinationFileAction() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.allowedFileTypes = [CombinationStateManager.fileExtension]
+        panel.directoryURL = CombinationStateManager.directory
+        if panel.runModal() == .OK, let url = panel.url {
+            windowController?.splitVC.restoreCombinationState(from: url)
+        }
+    }
+
+    @objc private func revealCombinationsFolderAction() {
+        let dir = CombinationStateManager.directory
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        NSWorkspace.shared.activateFileViewerSelecting([dir])
     }
 
     @objc private func clearAllComboStatesAction() {
+        let alert = NSAlert()
+        alert.messageText = "Move All Saved Combinations to Trash?"
+        alert.informativeText = "Every .fastview file in \(CombinationStateManager.directory.path) will be moved to the Trash."
+        alert.addButton(withTitle: "Move to Trash")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
         CombinationStateManager.clearAll()
-        updateRestoreCombinationMenu()
     }
 
     public func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {

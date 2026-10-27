@@ -12,6 +12,10 @@ public enum VisionDetectionMode: String, CaseIterable {
 public struct ForegroundObject {
     public var id: UUID = UUID()
     public var itemPath: String? = nil
+    /// The archive `itemPath` is an entry of; nil for plain files.
+    public var archivePath: String? = nil
+    /// The pane whose displayed image this object was auto-detected from; nil for objects the user added.
+    public var sourcePane: Int? = nil
     public var image: NSImage
     public var normalizedBoundingBox: CGRect
     public var position: CGPoint = .zero
@@ -20,10 +24,18 @@ public struct ForegroundObject {
     public var isFlippedHorizontal: Bool = false
     public var isFlippedVertical: Bool = false
     public var detectionMode: VisionDetectionMode = .instanceMask
+    /// For objects cut from a region selection: the region as a fraction of the
+    /// oriented source image (top-left origin), and the orientation it was taken in.
+    public var sourceCrop: CGRect? = nil
+    public var sourceOrientation: ImageOrientation? = nil
+    /// Colour change applied to `image`; `unadjustedImage` is the image before it.
+    public var colorAdjustment: ColorAdjustment? = nil
+    public var unadjustedImage: NSImage? = nil
 
     public init(
         id: UUID = UUID(),
         itemPath: String? = nil,
+        sourcePane: Int? = nil,
         image: NSImage,
         normalizedBoundingBox: CGRect,
         position: CGPoint = .zero,
@@ -35,6 +47,7 @@ public struct ForegroundObject {
     ) {
         self.id = id
         self.itemPath = itemPath
+        self.sourcePane = sourcePane
         self.image = image
         self.normalizedBoundingBox = normalizedBoundingBox
         self.position = position
@@ -165,6 +178,121 @@ public class ForegroundDetector {
                     detectionMode: .fullRegion
                 )
                 DispatchQueue.main.async { completion(fallbackObj) }
+            }
+        }
+    }
+}
+
+public extension NSImage {
+    /// The part of the image inside `rect`, given as fractions of its size with a top-left origin.
+    func cropped(toNormalized rect: CGRect) -> NSImage? {
+        guard let cg = cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
+        let pixelW = CGFloat(cg.width)
+        let pixelH = CGFloat(cg.height)
+        let cropRect = CGRect(
+            x: max(0, rect.origin.x * pixelW),
+            y: max(0, rect.origin.y * pixelH),
+            width: min(pixelW, rect.width * pixelW),
+            height: min(pixelH, rect.height * pixelH)
+        )
+        guard cropRect.width > 2 && cropRect.height > 2, let croppedCG = cg.cropping(to: cropRect) else { return nil }
+        return NSImage(cgImage: croppedCG, size: NSSize(width: cropRect.width, height: cropRect.height))
+    }
+}
+
+/// Re-creates foreground objects from the items they were cut from.
+public enum ForegroundSource {
+    /// Object loads run one at a time here, apart from the panes' full-image
+    /// loads, so neither can cancel the other.
+    private static let loadQueue = DispatchQueue(label: "FastView.ForegroundSource", qos: .userInitiated)
+
+    /// Reads the item: an entry of the first archive in `archiveCandidates` that has it,
+    /// else the file at `itemPath`. Returns the archive used. Runs on `loadQueue`.
+    private static func readImage(itemPath: String, archiveCandidates: [String]) -> (NSImage, String?)? {
+        return DiskIOGate.shared.perform(.interactive, label: itemPath) { () -> (NSImage, String?)? in
+            if archiveCandidates.isEmpty || FileManager.default.fileExists(atPath: itemPath) {
+                if let cached = MemoryLRUCache.shared.object(forKey: "full_\(itemPath)") { return (cached, nil) }
+                if let data = try? Data(contentsOf: URL(fileURLWithPath: itemPath)), let image = NSImage(data: data) {
+                    return (image, nil)
+                }
+            }
+            for archivePath in archiveCandidates {
+                let ext = (archivePath as NSString).pathExtension.lowercased()
+                let data: Data?
+                if ext == "zip" {
+                    data = ArchiveReader.loadZipData(archivePath: archivePath, entryPath: itemPath)
+                } else if ext == "rar" {
+                    data = ArchiveReader.loadRarData(archivePath: archivePath, entryPath: itemPath)
+                } else {
+                    data = nil
+                }
+                if let data = data, let image = NSImage(data: data) {
+                    return (image, archivePath)
+                }
+            }
+            return nil
+        }
+    }
+
+    /// Loads `itemPath`, re-applies the region crop if there was one, and runs detection.
+    /// When detection finds nothing, the whole source is used so the object is not lost.
+    /// Completes on the main thread.
+    public static func detect(
+        itemPath: String,
+        archiveCandidates: [String],
+        crop: CGRect?,
+        orientation: ImageOrientation?,
+        mode: VisionDetectionMode,
+        completion: @escaping (ForegroundObject?) -> Void
+    ) {
+        loadQueue.async {
+            guard let (image, archivePath) = readImage(itemPath: itemPath, archiveCandidates: archiveCandidates) else {
+                FileLogger.shared.log("FG_SOURCE_LOAD_FAILED", path: itemPath)
+                DispatchQueue.main.async { completion(nil) }
+                return
+            }
+            var source: NSImage? = image
+            if let crop = crop {
+                source = image.transformed(with: orientation ?? ImageOrientation()).cropped(toNormalized: crop)
+            }
+            guard let src = source else {
+                DispatchQueue.main.async { completion(nil) }
+                return
+            }
+            let finish: (ForegroundObject?) -> Void = { fgObj in
+                guard var fg = fgObj else { return completion(nil) }
+                fg.itemPath = itemPath
+                fg.archivePath = archivePath
+                fg.sourceCrop = crop
+                fg.sourceOrientation = crop == nil ? nil : orientation
+                fg.detectionMode = mode
+                completion(fg)
+            }
+            ForegroundDetector.detectForegroundObject(in: src, mode: mode) { fgObj in
+                if fgObj != nil || mode == .fullRegion {
+                    finish(fgObj)
+                } else {
+                    FileLogger.shared.log("FG_SOURCE_DETECT_EMPTY", path: itemPath)
+                    ForegroundDetector.detectForegroundObject(in: src, mode: .fullRegion, completion: finish)
+                }
+            }
+        }
+    }
+
+    /// Applies `adjustment` off the main thread. Completes on the main thread.
+    public static func applyColorAdjustment(_ adjustment: ColorAdjustment?, to fg: ForegroundObject, completion: @escaping (ForegroundObject) -> Void) {
+        guard let adjustment = adjustment else { return completion(fg) }
+        let base = fg.unadjustedImage ?? fg.image
+        DispatchQueue.global(qos: .userInitiated).async {
+            let adjusted = ColorMatcher.apply(adjustment, to: base)
+            DispatchQueue.main.async {
+                var out = fg
+                if let adjusted = adjusted {
+                    out.unadjustedImage = base
+                    out.image = adjusted
+                    out.colorAdjustment = adjustment
+                }
+                completion(out)
             }
         }
     }

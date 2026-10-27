@@ -69,6 +69,26 @@ public class ThumbnailGenerator {
         lock.unlock()
     }
 
+    // Cancel the full-image operations started for `group` (one per pane), so
+    // one pane's new selection never drops the other pane's image.
+    public func cancelPriorityTasks(inGroup group: String) {
+        lock.lock()
+        let prefix = "full_\(group)_"
+        for (opKey, op) in activeOperations where opKey.hasPrefix(prefix) {
+            op.cancel()
+            activeOperations.removeValue(forKey: opKey)
+        }
+        lock.unlock()
+    }
+
+    /// Whether a full-image load of `group` is queued or running.
+    public func hasPendingFullImageLoad(inGroup group: String) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        let prefix = "full_\(group)_"
+        return activeOperations.contains { $0.key.hasPrefix(prefix) && !$0.value.isFinished && !$0.value.isCancelled }
+    }
+
     public func setMainImageLoading(_ loading: Bool) {
         lock.lock()
         self.isLoadingMainImage = loading
@@ -330,7 +350,9 @@ public class ThumbnailGenerator {
     /// (image count) from the same listing used to pick the preview image.
     /// `progress` receives, on the main queue, the progress of slow archive
     /// work: that listing, or the first read of the archive holding an image.
-    public func loadFullImage(for item: FileItem, progress: LoadProgressHandler? = nil, completion: @escaping (NSImage?) -> Void) {
+    /// Loads `item` at full size. A new request cancels the earlier requests of
+    /// the same `group`; their completions are not called.
+    public func loadFullImage(for item: FileItem, group: String = "main", progress: LoadProgressHandler? = nil, completion: @escaping (NSImage?) -> Void) {
         let cacheKey = "full_\(item.id)"
 
         if let cached = MemoryLRUCache.shared.object(forKey: cacheKey) {
@@ -338,22 +360,20 @@ public class ThumbnailGenerator {
             return
         }
 
-        // Cancel any stale full-image op that may still be running or queued
-        // for a previously selected item.  Without this, the old op would sit
-        // ahead of the new one in the serial priority queue even though the
-        // selection has already changed.
-        cancelAllPriorityTasks()
+        // Cancel any stale full-image op of this group that may still be running
+        // or queued for a previously selected item.  Without this, the old op
+        // would sit ahead of the new one in the serial priority queue even
+        // though the selection has already changed.
+        cancelPriorityTasks(inGroup: group)
 
         // Cancel all queued background thumbnail work so the priority queue
         // can service this request without waiting for a backlog of thumbnails.
         cancelAllThumbnailTasks()
         setMainImageLoading(true)
 
-        let opKey = "full_\(item.id)"
+        let opKey = "full_\(group)_\(item.id)"
 
         lock.lock()
-        // (opKey collision guard kept for safety, though cancelAllPriorityTasks
-        // above already cleared every prior full_ entry.)
 
         let op = BlockOperation()
         op.addExecutionBlock { [weak self, weak op] in

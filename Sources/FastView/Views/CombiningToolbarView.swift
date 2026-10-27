@@ -305,6 +305,23 @@ public class CombiningToolbarView: NSView {
         }
     }
 
+    /// Shows the canvas's current values without notifying the delegate.
+    public func syncValues(from canvas: CombiningCanvasView) {
+        mergeSlider1.doubleValue = Double(canvas.mergeLeftPercent)
+        mergeSlider2.doubleValue = Double(canvas.mergeRightPercent)
+        alphaSlider.doubleValue = Double(canvas.alphaGradientPercent)
+        fgSlider1.doubleValue = Double(canvas.fgOffset1Percent)
+        fgSlider2.doubleValue = Double(canvas.fgOffset2Percent)
+        mergeLabel1.stringValue = String(format: "Left Image: %.0f%%", canvas.mergeLeftPercent)
+        mergeLabel2.stringValue = String(format: "Right Image: %.0f%%", canvas.mergeRightPercent)
+        alphaLabel.stringValue = String(format: "Alpha Blend: %.0f%%", canvas.alphaGradientPercent)
+        fgLabel1.stringValue = String(format: "FG 1 Pos: %.0f%%", canvas.fgOffset1Percent)
+        fgLabel2.stringValue = String(format: "FG 2 Pos: %.0f%%", canvas.fgOffset2Percent)
+        bg1Checkbox.state = canvas.showBackground1 ? .on : .off
+        bg2Checkbox.state = canvas.showBackground2 ? .on : .off
+        bgColorControl.selectedSegment = canvas.canvasBackgroundColor.isLight ? 1 : 0
+    }
+
     @objc private func modeChanged(_ sender: NSSegmentedControl) {
         let mode: CanvasCombiningMode
         switch sender.selectedSegment {
@@ -379,5 +396,12 @@ public class CombiningToolbarView: NSView {
 
     @objc private func flipVAction(_ sender: NSButton) {
         delegate?.combiningToolbar(self, didTriggerFlipVertical: sender.tag)
+    }
+}
+
+private extension NSColor {
+    var isLight: Bool {
+        guard let rgb = usingColorSpace(.sRGB) else { return false }
+        return (rgb.redComponent + rgb.greenComponent + rgb.blueComponent) / 3.0 > 0.5
     }
 }

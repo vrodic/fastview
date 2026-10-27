@@ -44,6 +44,38 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
     }
 
     private var isRestoringState: Bool = false
+    private var restoreGeneration = 0
+    private var restoreProgress: RestoreProgress?
+
+    /// What a combination restore is still waiting for, shown in `RestoreProgressView`.
+    private struct RestoreProgress {
+        let generation: Int
+        let name: String
+        /// Panes still waiting for their image, with the item each showed when the restore began.
+        var panesPending: [Int: String?]
+        let expectedItems: [Int: String?]
+        let objectCount: Int
+        var objectsLoaded = 0
+        var objectsMissing = 0
+        var objectsPlaced = false
+        /// Set once the restore has started loading both panes; until then they are not judged idle.
+        var loadsStarted = false
+
+        var total: Int { 2 + objectCount }
+        var done: Int { (2 - panesPending.count) + objectsLoaded }
+        var isComplete: Bool { panesPending.isEmpty && objectsPlaced }
+
+        var detail: String {
+            var parts = ["Images \(2 - panesPending.count) of 2"]
+            if objectCount > 0 {
+                parts.append("Objects \(objectsLoaded) of \(objectCount)")
+            }
+            return parts.joined(separator: "  ·  ")
+        }
+    }
+
+    private static let restoreTimeout: TimeInterval = 30
+    private var restoreProgressTimer: Timer?
     private var lastSelectedInfoPath: String?
 
     private var wasPreviewHiddenBeforeFullScreen: Bool = false
@@ -183,7 +215,23 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
             self?.statusBarView.updateForegroundObjectInfo(pane: pane, object: fgObj)
         }
 
-        dualCanvasVC.imageView1.onRegionSelectedForDetection = { [weak self] croppedImg in
+        dualCanvasVC.onPaneImageSet = { [weak self] pane, hasImage, itemPath in
+            self?.restorePaneImageSet(pane: pane, hasImage: hasImage, itemPath: itemPath)
+        }
+
+        dualCanvasVC.combiningCanvasView.onColorMatchFinished = { [weak self] bySkin, total, referenceHasSkin in
+            let message: String
+            if !referenceHasSkin {
+                message = "No skin found on the reference object: matched overall colours of \(total) object(s)"
+            } else if bySkin == total {
+                message = "Matched skin tones of \(total) object(s)"
+            } else {
+                message = "Matched skin tones of \(bySkin) of \(total) object(s); the others showed too little skin and were matched by overall colours"
+            }
+            self?.statusBarView.showMessage(message)
+        }
+
+        dualCanvasVC.imageView1.onRegionSelectedForDetection = { [weak self] croppedImg, crop, orientation in
             guard let self = self else { return }
             if !self.sidebarContainerVC.isDualView {
                 self.sidebarContainerVC.updateViewMode(isDual: true)
@@ -194,18 +242,24 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
             ForegroundDetector.detectForegroundObject(in: croppedImg) { [weak self] fgObj in
                 guard let self = self, var fg = fgObj else { return }
                 fg.itemPath = self.sidebarContainerVC.sidebarVC1.selectedItem?.id ?? self.sidebarContainerVC.sidebarVC1.selectedItem?.path
+                fg.archivePath = self.sidebarContainerVC.sidebarVC1.selectedItem?.archivePath
+                fg.sourceCrop = crop
+                fg.sourceOrientation = orientation
                 DispatchQueue.main.async {
                     self.dualCanvasVC.combiningCanvasView.addObject(fg)
                 }
             }
         }
 
-        dualCanvasVC.imageView2.onRegionSelectedForDetection = { [weak self] croppedImg in
+        dualCanvasVC.imageView2.onRegionSelectedForDetection = { [weak self] croppedImg, crop, orientation in
             guard let self = self else { return }
             self.dualCanvasVC.combiningMode = .foregroundCombine
             ForegroundDetector.detectForegroundObject(in: croppedImg) { [weak self] fgObj in
                 guard let self = self, var fg = fgObj else { return }
                 fg.itemPath = self.sidebarContainerVC.sidebarVC2.selectedItem?.id ?? self.sidebarContainerVC.sidebarVC2.selectedItem?.path
+                fg.archivePath = self.sidebarContainerVC.sidebarVC2.selectedItem?.archivePath
+                fg.sourceCrop = crop
+                fg.sourceOrientation = orientation
                 DispatchQueue.main.async {
                     self.dualCanvasVC.combiningCanvasView.addObject(fg)
                 }
@@ -239,21 +293,23 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         addSplitViewItem(mainItem)
     }
 
-    public func loadLocation(_ location: NavigationLocation, pane: Int = 1, targetSelectedItemPath: String? = nil) {
-        if location.isArchive {
+    /// `keepOtherPane` stops an archive location from cancelling the other pane's loading,
+    /// for when both panes are being opened together.
+    public func loadLocation(_ location: NavigationLocation, pane: Int = 1, targetSelectedItemPath: String? = nil, keepOtherPane: Bool = false) {
+        if location.isArchive && !keepOtherPane {
             cancelAllIOOperations()
         } else {
             cancelIOOperations(forPane: pane)
         }
         if pane == 1 {
             navigationManager1 = NavigationManager(initialLocation: location)
-            reloadDirectoryContentsAsync(pane: 1, targetSelectedItemPath: targetSelectedItemPath)
+            reloadDirectoryContentsAsync(pane: 1, targetSelectedItemPath: targetSelectedItemPath, keepOtherPane: keepOtherPane)
         } else {
             navigationManager2 = NavigationManager(initialLocation: location)
             sidebarContainerVC.updateViewMode(isDual: true)
             dualCanvasVC.setDualViewEnabled(true)
             activePane = 2
-            reloadDirectoryContentsAsync(pane: 2, targetSelectedItemPath: targetSelectedItemPath)
+            reloadDirectoryContentsAsync(pane: 2, targetSelectedItemPath: targetSelectedItemPath, keepOtherPane: keepOtherPane)
         }
     }
 
@@ -324,15 +380,10 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
 
         dualCanvasVC.combiningMode = .foregroundCombine
 
-        ThumbnailGenerator.shared.loadFullImage(for: item) { [weak self] image in
-            guard let self = self, let img = image else { return }
-            ForegroundDetector.detectForegroundObject(in: img) { [weak self] fgObj in
-                guard let self = self, var fg = fgObj else { return }
-                fg.itemPath = item.id.isEmpty ? item.path : item.id
-                DispatchQueue.main.async {
-                    self.dualCanvasVC.combiningCanvasView.addObject(fg)
-                }
-            }
+        let itemPath = item.id.isEmpty ? item.path : item.id
+        ForegroundSource.detect(itemPath: itemPath, archiveCandidates: item.archivePath.map { [$0] } ?? [], crop: nil, orientation: nil, mode: .instanceMask) { [weak self] fg in
+            guard let self = self, let fg = fg else { return }
+            self.dualCanvasVC.combiningCanvasView.addObject(fg)
         }
     }
 
@@ -364,10 +415,17 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
             let comboName = inputTF.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !comboName.isEmpty else { return }
 
-            let path1 = currentLocationPath ?? NSHomeDirectory()
-            let itemPath1 = sidebarContainerVC.sidebarVC1.selectedItem?.id ?? sidebarContainerVC.sidebarVC1.selectedItem?.path
-            let path2 = navigationManager2?.currentLocation.physicalPath ?? path1
-            let itemPath2 = sidebarContainerVC.sidebarVC2.selectedItem?.id ?? sidebarContainerVC.sidebarVC2.selectedItem?.path
+            // A favorites list is not a folder: save the folder the selected image is in.
+            let selected1 = sidebarContainerVC.sidebarVC1.selectedItem
+            let selected2 = sidebarContainerVC.sidebarVC2.selectedItem
+            let favoritesFolder: (FileItem?) -> String? = { item in
+                guard let item = item, item.archivePath == nil, !item.isDirectory else { return nil }
+                return (item.path as NSString).deletingLastPathComponent
+            }
+            let path1 = (showFavoritesOnly ? favoritesFolder(selected1) : nil) ?? currentLocationPath ?? NSHomeDirectory()
+            let itemPath1 = selected1?.id ?? selected1?.path
+            let path2 = (showFavoritesOnlyPane2 ? favoritesFolder(selected2) : nil) ?? navigationManager2?.currentLocation.physicalPath ?? path1
+            let itemPath2 = selected2?.id ?? selected2?.path
 
             let o1 = dualCanvasVC.imageView1.orientation
             let o2 = dualCanvasVC.imageView2.orientation
@@ -390,21 +448,29 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
                 colorR = 0.0; colorG = 0.0; colorB = 0.0; colorA = 1.0
             }
 
-            let savedObjects = canvas.objects.map { fg in
-                SavedForegroundObjectState(
+            // Array order is z order (first is bottom).
+            let savedObjects = canvas.objects.map { fg -> SavedForegroundObjectState in
+                let norm = canvas.normalizedPosition(of: fg)
+                return SavedForegroundObjectState(
                     itemPath: fg.itemPath,
+                    archivePath: fg.archivePath,
+                    sourcePane: fg.sourcePane,
                     posX: Double(fg.position.x),
                     posY: Double(fg.position.y),
+                    normX: norm.map { Double($0.x) },
+                    normY: norm.map { Double($0.y) },
                     scale: Double(fg.scale),
                     rot: Double(fg.rotationDegrees),
                     flipH: fg.isFlippedHorizontal,
                     flipV: fg.isFlippedVertical,
-                    detectionMode: fg.detectionMode.rawValue
+                    detectionMode: fg.detectionMode.rawValue,
+                    crop: fg.sourceCrop,
+                    cropOrientation: fg.sourceOrientation,
+                    colorAdjustment: fg.colorAdjustment
                 )
             }
-
-            let fg1 = canvas.foregroundObject1
-            let fg2 = canvas.foregroundObject2
+            // Large enough to stand in for the canvas while the combination restores.
+            let preview = canvas.renderPreview(maxDimension: 1600)
 
             let state = SavedCombinationState(
                 name: comboName,
@@ -426,19 +492,6 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
                 fgOffset2Percent: Double(canvas.fgOffset2Percent),
                 showBackground1: canvas.showBackground1,
                 showBackground2: canvas.showBackground2,
-                fg1OnTop: true,
-                fgPos1X: fg1.map { Double($0.position.x) },
-                fgPos1Y: fg1.map { Double($0.position.y) },
-                fgScale1: fg1.map { Double($0.scale) },
-                fgRot1: fg1.map { Double($0.rotationDegrees) },
-                fgFlipH1: fg1?.isFlippedHorizontal,
-                fgFlipV1: fg1?.isFlippedVertical,
-                fgPos2X: fg2.map { Double($0.position.x) },
-                fgPos2Y: fg2.map { Double($0.position.y) },
-                fgScale2: fg2.map { Double($0.scale) },
-                fgRot2: fg2.map { Double($0.rotationDegrees) },
-                fgFlipH2: fg2?.isFlippedHorizontal,
-                fgFlipV2: fg2?.isFlippedVertical,
                 canvasRed: colorR,
                 canvasGreen: colorG,
                 canvasBlue: colorB,
@@ -446,31 +499,92 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
                 objects: savedObjects
             )
 
-            CombinationStateManager.saveState(state)
-            globalAppDelegate?.updateRestoreCombinationMenu()
+            CombinationStateManager.save(state, preview: preview) { result in
+                if case .failure(let error) = result {
+                    let failAlert = NSAlert()
+                    failAlert.messageText = "Could Not Save Combination"
+                    failAlert.informativeText = error.localizedDescription
+                    failAlert.alertStyle = .warning
+                    failAlert.runModal()
+                }
+            }
         }
     }
 
-    public func restoreCombinationState(_ state: SavedCombinationState) {
+    public func restoreCombinationState(from url: URL) {
+        CombinationStateManager.load(url) { [weak self] state, preview in
+            guard let self = self else { return }
+            guard let state = state else {
+                let alert = NSAlert()
+                alert.messageText = "Could Not Open Combination"
+                alert.informativeText = "\(url.lastPathComponent) is missing or is not a FastView combination file."
+                alert.alertStyle = .warning
+                alert.runModal()
+                return
+            }
+            self.restoreCombinationState(state, preview: preview)
+        }
+    }
+
+    /// `preview`, the canvas as saved, covers the canvas until everything is loaded,
+    /// so the panes and objects arriving one by one are not seen.
+    public func restoreCombinationState(_ state: SavedCombinationState, preview: NSImage? = nil) {
+        restoreGeneration += 1
+        let generation = restoreGeneration
+        let canvas = dualCanvasVC.combiningCanvasView
+        let savedObjects = state.objects ?? Self.legacyObjects(from: state)
+
+        restoreProgress = RestoreProgress(
+            generation: generation,
+            name: state.name,
+            panesPending: [1: sidebarContainerVC.sidebarVC1.selectedItem?.id, 2: sidebarContainerVC.sidebarVC2.selectedItem?.id],
+            expectedItems: [1: state.itemPath1, 2: state.itemPath2],
+            objectCount: savedObjects.count
+        )
+        if let preview = preview {
+            var background = NSColor.black
+            if let r = state.canvasRed, let g = state.canvasGreen, let b = state.canvasBlue, let a = state.canvasAlpha {
+                background = NSColor(srgbRed: CGFloat(r), green: CGFloat(g), blue: CGFloat(b), alpha: CGFloat(a))
+            }
+            dualCanvasVC.showRestorePreview(preview, background: background)
+        } else {
+            dualCanvasVC.hideRestorePreview()
+        }
+        updateRestoreProgress()
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.restoreTimeout) { [weak self] in
+            guard let self = self, let progress = self.restoreProgress, progress.generation == generation else { return }
+            self.finishRestoreProgress(timedOut: true)
+        }
+
+        // The saved objects replace whatever the panes would auto-detect.
+        dualCanvasVC.beginRestoringObjects(itemPath1: state.itemPath1, itemPath2: state.itemPath2)
+        canvas.objects = []
+
+        // The saved folders are shown, not the favorites lists.
+        if showFavoritesOnly { showFavoritesOnly = false }
+        if showFavoritesOnlyPane2 { showFavoritesOnlyPane2 = false }
+
+        // Both panes load together; neither may cancel the other's loading.
         let loc1 = NavigationManager.locationForPath(state.path1)
-        loadLocation(loc1, pane: 1, targetSelectedItemPath: state.itemPath1)
+        loadLocation(loc1, pane: 1, targetSelectedItemPath: state.itemPath1, keepOtherPane: true)
 
         let loc2 = NavigationManager.locationForPath(state.path2)
-        loadLocation(loc2, pane: 2, targetSelectedItemPath: state.itemPath2)
+        loadLocation(loc2, pane: 2, targetSelectedItemPath: state.itemPath2, keepOtherPane: true)
+        restoreProgress?.loadsStarted = true
+        startRestoreProgressTimer()
 
         let o1 = ImageOrientation(rotationDegrees: CGFloat(state.rot1), isFlippedHorizontal: state.flipH1, isFlippedVertical: state.flipV1)
         dualCanvasVC.imageView1.orientation = o1
-        dualCanvasVC.combiningCanvasView.orientation1 = o1
+        canvas.orientation1 = o1
 
         let o2 = ImageOrientation(rotationDegrees: CGFloat(state.rot2), isFlippedHorizontal: state.flipH2, isFlippedVertical: state.flipV2)
         dualCanvasVC.imageView2.orientation = o2
-        dualCanvasVC.combiningCanvasView.orientation2 = o2
+        canvas.orientation2 = o2
 
         if let mode = CanvasCombiningMode(rawValue: state.combiningMode) {
             dualCanvasVC.combiningMode = mode
         }
 
-        let canvas = dualCanvasVC.combiningCanvasView
         canvas.mergeLeftPercent = CGFloat(state.mergeLeftPercent)
         canvas.mergeRightPercent = CGFloat(state.mergeRightPercent)
         canvas.alphaGradientPercent = CGFloat(state.alphaGradientPercent)
@@ -483,74 +597,170 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
             canvas.canvasBackgroundColor = NSColor(srgbRed: CGFloat(r), green: CGFloat(g), blue: CGFloat(b), alpha: CGFloat(a))
         }
 
-        if let savedObjects = state.objects, !savedObjects.isEmpty {
-            canvas.objects = []
-            for savedObj in savedObjects {
-                if let itemPath = savedObj.itemPath {
-                    let fileItem = FileItem(id: itemPath, name: (itemPath as NSString).lastPathComponent, path: itemPath, type: .image, fileSize: 0)
-                    ThumbnailGenerator.shared.loadFullImage(for: fileItem) { image in
-                        guard let image = image else { return }
-                        let mode = VisionDetectionMode(rawValue: savedObj.detectionMode) ?? .instanceMask
-                        ForegroundDetector.detectForegroundObject(in: image, mode: mode) { fgObj in
-                            guard var fg = fgObj else { return }
-                            fg.itemPath = itemPath
-                            fg.position = CGPoint(x: savedObj.posX, y: savedObj.posY)
-                            fg.scale = CGFloat(savedObj.scale)
-                            fg.rotationDegrees = CGFloat(savedObj.rot)
-                            fg.isFlippedHorizontal = savedObj.flipH
-                            fg.isFlippedVertical = savedObj.flipV
-                            DispatchQueue.main.async {
-                                canvas.addObject(fg)
-                            }
-                        }
-                    }
-                }
-            }
-        } else {
-            if let x1 = state.fgPos1X, let y1 = state.fgPos1Y {
-                canvas.pendingFg1Position = CGPoint(x: x1, y: y1)
-                canvas.foregroundObject1?.position = CGPoint(x: x1, y: y1)
-            }
-            if let s1 = state.fgScale1 {
-                canvas.pendingFg1Scale = CGFloat(s1)
-                canvas.foregroundObject1?.scale = CGFloat(s1)
-            }
-            if let r1 = state.fgRot1 {
-                canvas.pendingFg1Rotation = CGFloat(r1)
-                canvas.foregroundObject1?.rotationDegrees = CGFloat(r1)
-            }
-            if let fh1 = state.fgFlipH1 {
-                canvas.pendingFg1FlipH = fh1
-                canvas.foregroundObject1?.isFlippedHorizontal = fh1
-            }
-            if let fv1 = state.fgFlipV1 {
-                canvas.pendingFg1FlipV = fv1
-                canvas.foregroundObject1?.isFlippedVertical = fv1
-            }
+        dualCanvasVC.setDualViewEnabled(true)
+        dualCanvasVC.toolbarView.syncValues(from: canvas)
 
-            if let x2 = state.fgPos2X, let y2 = state.fgPos2Y {
-                canvas.pendingFg2Position = CGPoint(x: x2, y: y2)
-                canvas.foregroundObject2?.position = CGPoint(x: x2, y: y2)
-            }
-            if let s2 = state.fgScale2 {
-                canvas.pendingFg2Scale = CGFloat(s2)
-                canvas.foregroundObject2?.scale = CGFloat(s2)
-            }
-            if let r2 = state.fgRot2 {
-                canvas.pendingFg2Rotation = CGFloat(r2)
-                canvas.foregroundObject2?.rotationDegrees = CGFloat(r2)
-            }
-            if let fh2 = state.fgFlipH2 {
-                canvas.pendingFg2FlipH = fh2
-                canvas.foregroundObject2?.isFlippedHorizontal = fh2
-            }
-            if let fv2 = state.fgFlipV2 {
-                canvas.pendingFg2FlipV = fv2
-                canvas.foregroundObject2?.isFlippedVertical = fv2
+        // Objects load in parallel; they are placed together, in saved z order, once all are back.
+        var loaded = [ForegroundObject?](repeating: nil, count: savedObjects.count)
+        let group = DispatchGroup()
+        for (i, savedObj) in savedObjects.enumerated() {
+            group.enter()
+            Self.loadObject(savedObj, archiveCandidates: Self.archiveCandidates(of: savedObj, in: state)) { [weak self] fg in
+                loaded[i] = fg
+                if let self = self, self.restoreProgress?.generation == generation {
+                    self.restoreProgress?.objectsLoaded += 1
+                    if fg == nil { self.restoreProgress?.objectsMissing += 1 }
+                    self.updateRestoreProgress()
+                }
+                group.leave()
             }
         }
+        group.notify(queue: .main) { [weak self] in
+            guard let self = self, generation == self.restoreGeneration else { return }
+            let restored = zip(savedObjects, loaded).compactMap { savedObj, loadedObj -> (ForegroundObject, CGPoint?)? in
+                guard var fg = loadedObj else { return nil }
+                fg.sourcePane = savedObj.sourcePane
+                fg.position = CGPoint(x: savedObj.posX, y: savedObj.posY)
+                fg.scale = CGFloat(savedObj.scale)
+                fg.rotationDegrees = CGFloat(savedObj.rot)
+                fg.isFlippedHorizontal = savedObj.flipH
+                fg.isFlippedVertical = savedObj.flipV
+                var norm: CGPoint? = nil
+                if let nx = savedObj.normX, let ny = savedObj.normY {
+                    norm = CGPoint(x: nx, y: ny)
+                }
+                return (fg, norm)
+            }
+            canvas.setRestoredObjects(restored)
+            self.restoreProgress?.objectsPlaced = true
+            self.updateRestoreProgress()
+        }
+    }
 
-        dualCanvasVC.setDualViewEnabled(true)
+    /// A pane got its image: the restore's step for it is done when the image is the
+    /// saved item, the pane has none to show, or it shows something other than before
+    /// the restore (the saved item is gone). A late image for the earlier selection does not count.
+    private func restorePaneImageSet(pane: Int, hasImage: Bool, itemPath: String?) {
+        guard let progress = restoreProgress, let shownBefore = progress.panesPending[pane] else { return }
+        let expected = progress.expectedItems[pane] ?? nil
+        guard !hasImage || itemPath == expected || itemPath != shownBefore else { return }
+        restoreProgress?.panesPending[pane] = nil
+        updateRestoreProgress()
+    }
+
+    /// Image events can be missed (a cancelled load never reports back, a folder selection
+    /// shows no image), so the panes are also checked for having gone idle.
+    private func startRestoreProgressTimer() {
+        restoreProgressTimer?.invalidate()
+        let timer = Timer(timeInterval: 0.2, repeats: true) { [weak self] _ in
+            self?.checkRestorePanesIdle()
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        restoreProgressTimer = timer
+    }
+
+    /// A pane whose listing is applied and that has no full-image load pending has
+    /// shown whatever it is going to show.
+    private func checkRestorePanesIdle() {
+        guard let progress = restoreProgress, progress.loadsStarted else { return }
+        var changed = false
+        for pane in progress.panesPending.keys {
+            let group = pane == 2 ? "pane2" : "main"
+            if !isDirectoryLoadInFlight(pane: pane) && !ThumbnailGenerator.shared.hasPendingFullImageLoad(inGroup: group) {
+                restoreProgress?.panesPending[pane] = nil
+                changed = true
+            }
+        }
+        if changed { updateRestoreProgress() }
+    }
+
+    /// The pane's location has no item to show, so a restore stops waiting for its image.
+    private func restorePaneHasNoImage(pane: Int) {
+        guard restoreProgress?.panesPending[pane] != nil else { return }
+        restoreProgress?.panesPending[pane] = nil
+        updateRestoreProgress()
+    }
+
+    private func updateRestoreProgress() {
+        guard let progress = restoreProgress else { return }
+        if progress.isComplete {
+            finishRestoreProgress(timedOut: false)
+            return
+        }
+        let overlay = dualCanvasVC.restoreProgressView
+        overlay.update(title: "Restoring “\(progress.name)”…", done: progress.done, total: progress.total, detail: progress.detail)
+        overlay.isHidden = false
+    }
+
+    private func finishRestoreProgress(timedOut: Bool) {
+        guard let progress = restoreProgress else { return }
+        restoreProgress = nil
+        restoreProgressTimer?.invalidate()
+        restoreProgressTimer = nil
+        let overlay = dualCanvasVC.restoreProgressView
+        overlay.update(title: "Restoring “\(progress.name)”…", done: progress.total, total: progress.total, detail: progress.detail)
+        // Leave the full bar up for a moment so the end is visible.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            guard let self = self, self.restoreProgress == nil else { return }
+            overlay.isHidden = true
+            self.dualCanvasVC.hideRestorePreview()
+        }
+
+        var problems: [String] = []
+        if progress.objectsMissing > 0 {
+            problems.append(progress.objectsMissing == 1 ? "1 object could not be loaded" : "\(progress.objectsMissing) objects could not be loaded")
+        }
+        if timedOut {
+            if !progress.panesPending.isEmpty { problems.append("a pane image did not load") }
+            if !progress.objectsPlaced { problems.append("objects are still loading") }
+        }
+        statusBarView.showMessage(problems.isEmpty
+            ? "Restored “\(progress.name)”"
+            : "Restored “\(progress.name)”: " + problems.joined(separator: ", "))
+    }
+
+    /// Re-detects the object from its source item, with its saved crop and colour
+    /// adjustment. Completes on the main thread.
+    private static func loadObject(_ savedObj: SavedForegroundObjectState, archiveCandidates: [String], completion: @escaping (ForegroundObject?) -> Void) {
+        guard let itemPath = savedObj.itemPath else {
+            completion(nil)
+            return
+        }
+        let mode = VisionDetectionMode(rawValue: savedObj.detectionMode) ?? .instanceMask
+        ForegroundSource.detect(itemPath: itemPath, archiveCandidates: archiveCandidates, crop: savedObj.crop, orientation: savedObj.cropOrientation, mode: mode) { fg in
+            guard let fg = fg else { return completion(nil) }
+            ForegroundSource.applyColorAdjustment(savedObj.colorAdjustment, to: fg, completion: completion)
+        }
+    }
+
+    /// Archives an object's item may be in, most likely first. Files saved before
+    /// objects recorded their archive fall back to pane locations that are archives.
+    private static func archiveCandidates(of savedObj: SavedForegroundObjectState, in state: SavedCombinationState) -> [String] {
+        if let archivePath = savedObj.archivePath { return [archivePath] }
+        let isArchive: (String) -> Bool = { ["zip", "rar"].contains(($0 as NSString).pathExtension.lowercased()) }
+        let panes = savedObj.sourcePane == 2 ? [state.path2, state.path1] : [state.path1, state.path2]
+        var seen = Set<String>()
+        return panes.filter { isArchive($0) && seen.insert($0).inserted }
+    }
+
+    /// Objects of states saved before the object list existed: one per pane.
+    private static func legacyObjects(from state: SavedCombinationState) -> [SavedForegroundObjectState] {
+        var result: [SavedForegroundObjectState] = []
+        if let x = state.fgPos1X, let y = state.fgPos1Y {
+            result.append(SavedForegroundObjectState(
+                itemPath: state.itemPath1, sourcePane: 1, posX: x, posY: y,
+                scale: state.fgScale1 ?? 1, rot: state.fgRot1 ?? 0,
+                flipH: state.fgFlipH1 ?? false, flipV: state.fgFlipV1 ?? false
+            ))
+        }
+        if let x = state.fgPos2X, let y = state.fgPos2Y {
+            result.append(SavedForegroundObjectState(
+                itemPath: state.itemPath2, sourcePane: 2, posX: x, posY: y,
+                scale: state.fgScale2 ?? 1, rot: state.fgRot2 ?? 0,
+                flipH: state.fgFlipH2 ?? false, flipV: state.fgFlipV2 ?? false
+            ))
+        }
+        return result
     }
 
     public func saveSelectionAndDualState() {
@@ -681,6 +891,24 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         lock.unlock()
     }
 
+    /// Forgets the pane's listing once it is applied, so `isDirectoryLoadInFlight` turns false.
+    private func directoryLoadFinished(_ workItem: DispatchWorkItem, pane: Int) {
+        lock.lock()
+        if pane == 1, currentDirectoryLoadItem1 === workItem {
+            currentDirectoryLoadItem1 = nil
+        } else if pane == 2, currentDirectoryLoadItem2 === workItem {
+            currentDirectoryLoadItem2 = nil
+        }
+        lock.unlock()
+    }
+
+    private func isDirectoryLoadInFlight(pane: Int) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        let item = pane == 1 ? currentDirectoryLoadItem1 : currentDirectoryLoadItem2
+        return item.map { !$0.isCancelled } ?? false
+    }
+
     public func cancelAllIOOperations() {
         cancelIOOperations(forPane: 1)
         cancelIOOperations(forPane: 2)
@@ -691,9 +919,9 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         reloadDirectoryContentsAsync(pane: activePane)
     }
 
-    private func reloadDirectoryContentsAsync(pane: Int = 1, targetSelectedItemPath: String? = nil, isNavigatingUp: Bool = false) {
+    private func reloadDirectoryContentsAsync(pane: Int = 1, targetSelectedItemPath: String? = nil, isNavigatingUp: Bool = false, keepOtherPane: Bool = false) {
         let navMgrCheck = (pane == 2) ? navigationManager2 : navigationManager1
-        if navMgrCheck?.currentLocation.isArchive == true {
+        if navMgrCheck?.currentLocation.isArchive == true && !keepOtherPane {
             cancelAllIOOperations()
         } else {
             cancelIOOperations(forPane: pane)
@@ -717,6 +945,7 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
                 let favorites = ListSorter.sort(SQLiteCache.shared.getAllFavorites(), options: sortOptions, refreshDates: true)
                 DispatchQueue.main.async {
                     guard let self = self, !workItem.isCancelled else { return }
+                    self.directoryLoadFinished(workItem, pane: pane)
                     self.showFavorites(favorites, pane: pane, targetSelectedItemPath: targetSelectedItemPath)
                 }
             }
@@ -803,6 +1032,7 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
 
             DispatchQueue.main.async {
                 if workItem.isCancelled { return }
+                self.directoryLoadFinished(workItem, pane: pane)
                 targetSidebar.setItems(items, selectFirst: targetSelectedItemPath == nil)
                 self.rememberShownOrder(items, options: sortOptions, location: navMgr.currentLocation, pane: pane)
 
@@ -823,6 +1053,8 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
                           let firstItem = items.first(where: { $0.type == .image || $0.type == .archiveZip || $0.type == .archiveRar }) {
                     self.displayItem(firstItem, pane: pane)
                 } else {
+                    // The item asked for is not here: nothing will be shown in this pane.
+                    self.restorePaneHasNoImage(pane: pane)
                     if pane == 1 {
                         self.statusBarView.updateDirectoryStats(imageCount: imageItems.count, totalSizeBytes: archiveSize, locationName: locationTitle)
                         if imageItems.isEmpty {
@@ -1010,7 +1242,7 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
             self.dualCanvasVC.imageView1.updateLoadingProgress(update)
         } : nil
 
-        ThumbnailGenerator.shared.loadFullImage(for: item, progress: loadProgress) { [weak self] image in
+        ThumbnailGenerator.shared.loadFullImage(for: item, group: pane == 2 ? "pane2" : "main", progress: loadProgress) { [weak self] image in
             guard let self = self else { return }
             guard targetSidebar.selectedItem?.id == item.id else { return }
 
@@ -1020,7 +1252,7 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
                     SQLiteCache.shared.markImageAsViewed(key: key)
                 }
 
-                self.dualCanvasVC.setImage(image, pane: pane)
+                self.dualCanvasVC.setImage(image, pane: pane, itemPath: item.id, archivePath: item.archivePath)
                 if pane == 1 {
                     self.statusBarView.updateImageInfo(item: item, image: image, currentIndex: currentIndex, totalImages: totalImages, parentName: parentName)
                 }

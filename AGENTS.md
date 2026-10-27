@@ -13,6 +13,10 @@ FastView is built using Swift, AppKit, and Swift Package Manager.
   - `SidebarViewController.swift`: Sidebar table view (`NSTableView`), cell configuration (`SidebarTableCellView`), custom keyboard input handling, and cell badge rendering.
   - `MainImageView.swift`: Image canvas, zooming, panning, and loading indicator overlay.
   - `ListSorter.swift`: Per-pane list sort options (name, modified date, favorites, viewed; persisted in UserDefaults) and the sort itself, run off the main thread. The parent entry stays first and folders/archives stay ahead of images.
+  - `CombinationStateManager.swift`: Saved combinations, one pretty-printed JSON `.fastview` file each in `~/Documents/FastView` (file I/O on a serial queue). Objects are stored in z order with normalized positions, region crop and colour adjustment; restoring re-runs detection on their source items through `ForegroundSource` (its own load queue, so pane image loads cannot cancel it). Preview thumbnails for the manager window are cached in `~/Library/Caches/FastView/CombinationPreviews`.
+  - `CombinationStatesWindowController.swift`: Saved-combinations manager window (previews, search, rename, Show in Finder, Move to Trash).
+  - `RestoreProgressView.swift`: Overlay with a progress bar shown over the canvas while a saved combination restores (pane images + objects; tracked in `MainSplitViewController`).
+  - `ColorMatcher.swift`: Matches objects' colours to a reference object, led by skin tones (YCbCr skin test, grey-world retry for colour casts; per-channel gains match average skin colour), falling back to whole-object mean/spread matching.
   - `StatusBarView.swift`: Status bar at bottom displaying location, index, count, and size metrics.
 - `Sources/FastView/Cache/`:
   - `MemoryLRUCache.swift`: In-memory image cache supporting Low Memory Mode (capped at 10 items when active).

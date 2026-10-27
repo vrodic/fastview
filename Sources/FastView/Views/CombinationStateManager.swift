@@ -2,32 +2,78 @@ import AppKit
 
 public struct SavedForegroundObjectState: Codable {
     public var itemPath: String?
+    /// Archive `itemPath` is an entry of; nil for plain files.
+    public var archivePath: String?
+    /// Pane whose image the object was auto-detected from; nil for added objects.
+    public var sourcePane: Int?
+    /// Absolute canvas position; `normX`/`normY` (fractions of the canvas) win when present.
     public var posX: Double
     public var posY: Double
+    public var normX: Double?
+    public var normY: Double?
     public var scale: Double
     public var rot: Double
     public var flipH: Bool
     public var flipV: Bool
     public var detectionMode: String
+    /// Region-selection crop as fractions of the oriented source image (top-left origin).
+    public var cropX: Double?
+    public var cropY: Double?
+    public var cropW: Double?
+    public var cropH: Double?
+    /// Orientation of the source pane when the region was cropped.
+    public var cropRot: Double?
+    public var cropFlipH: Bool?
+    public var cropFlipV: Bool?
+    public var colorAdjustment: ColorAdjustment?
 
     public init(
         itemPath: String? = nil,
+        archivePath: String? = nil,
+        sourcePane: Int? = nil,
         posX: Double,
         posY: Double,
+        normX: Double? = nil,
+        normY: Double? = nil,
         scale: Double,
         rot: Double,
         flipH: Bool,
         flipV: Bool,
-        detectionMode: String = "Instance Segmentation"
+        detectionMode: String = "Instance Segmentation",
+        crop: CGRect? = nil,
+        cropOrientation: ImageOrientation? = nil,
+        colorAdjustment: ColorAdjustment? = nil
     ) {
         self.itemPath = itemPath
+        self.archivePath = archivePath
+        self.sourcePane = sourcePane
         self.posX = posX
         self.posY = posY
+        self.normX = normX
+        self.normY = normY
         self.scale = scale
         self.rot = rot
         self.flipH = flipH
         self.flipV = flipV
         self.detectionMode = detectionMode
+        self.cropX = crop.map { Double($0.origin.x) }
+        self.cropY = crop.map { Double($0.origin.y) }
+        self.cropW = crop.map { Double($0.width) }
+        self.cropH = crop.map { Double($0.height) }
+        self.cropRot = cropOrientation.map { Double($0.rotationDegrees) }
+        self.cropFlipH = cropOrientation?.isFlippedHorizontal
+        self.cropFlipV = cropOrientation?.isFlippedVertical
+        self.colorAdjustment = colorAdjustment
+    }
+
+    public var crop: CGRect? {
+        guard let x = cropX, let y = cropY, let w = cropW, let h = cropH else { return nil }
+        return CGRect(x: x, y: y, width: w, height: h)
+    }
+
+    public var cropOrientation: ImageOrientation? {
+        guard crop != nil else { return nil }
+        return ImageOrientation(rotationDegrees: CGFloat(cropRot ?? 0), isFlippedHorizontal: cropFlipH ?? false, isFlippedVertical: cropFlipV ?? false)
     }
 }
 
@@ -155,35 +201,251 @@ public struct SavedCombinationState: Codable {
     }
 }
 
-public class CombinationStateManager {
-    private static let key = "FastViewSavedCombinationStates"
+/// The light part of a saved combination, read for menus and the manager window.
+public struct SavedCombinationSummary {
+    public var url: URL
+    public var id: String
+    public var name: String
+    public var savedAt: Date
+    public var combiningMode: String
+    public var itemName1: String
+    public var itemName2: String
+    public var objectCount: Int
+    /// Source folders or archives that no longer exist.
+    public var missingSources: [String]
 
-    public static func getAllSavedStates() -> [SavedCombinationState] {
-        guard let data = UserDefaults.standard.data(forKey: key) else { return [] }
-        return (try? JSONDecoder().decode([SavedCombinationState].self, from: data)) ?? []
-    }
+    public var itemNames: String { "\(itemName1) + \(itemName2)" }
+}
 
-    public static func saveState(_ state: SavedCombinationState) {
-        var states = getAllSavedStates()
-        if let idx = states.firstIndex(where: { $0.id == state.id || $0.name == state.name }) {
-            states[idx] = state
-        } else {
-            states.append(state)
-        }
-        if let data = try? JSONEncoder().encode(states) {
-            UserDefaults.standard.set(data, forKey: key)
-        }
-    }
+public enum CombinationStateError: LocalizedError {
+    case nameTaken(String)
 
-    public static func deleteState(id: String) {
-        var states = getAllSavedStates()
-        states.removeAll { $0.id == id }
-        if let data = try? JSONEncoder().encode(states) {
-            UserDefaults.standard.set(data, forKey: key)
+    public var errorDescription: String? {
+        switch self {
+        case .nameTaken(let name): return "A combination named \"\(name)\" already exists."
         }
     }
+}
 
+/// Saved combinations, one `.fastview` JSON file each in ~/Documents/FastView.
+/// Preview thumbnails are a cache in ~/Library/Caches/FastView/CombinationPreviews.
+/// File I/O runs on a serial queue; `summaries` is read and updated on the main thread.
+public enum CombinationStateManager {
+    public static let fileExtension = "fastview"
+    public static let didChangeNotification = Notification.Name("FastViewCombinationStatesDidChange")
+
+    private static let legacyDefaultsKey = "FastViewSavedCombinationStates"
+    private static let ioQueue = DispatchQueue(label: "FastView.CombinationStates", qos: .userInitiated)
+
+    public private(set) static var summaries: [SavedCombinationSummary] = []
+
+    public static var directory: URL {
+        let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Documents")
+        return documents.appendingPathComponent("FastView", isDirectory: true)
+    }
+
+    private static var previewDirectory: URL {
+        let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Caches")
+        return caches.appendingPathComponent("FastView/CombinationPreviews", isDirectory: true)
+    }
+
+    public static func previewURL(forId id: String) -> URL {
+        previewDirectory.appendingPathComponent(id).appendingPathExtension("jpg")
+    }
+
+    static func makeEncoder() -> JSONEncoder {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        return encoder
+    }
+
+    static func makeDecoder() -> JSONDecoder {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return decoder
+    }
+
+    /// Re-reads the folder and posts `didChangeNotification` on the main thread.
+    public static func reload() {
+        ioQueue.async {
+            migrateLegacyDefaults()
+            publish(readSummaries())
+        }
+    }
+
+    public static func save(_ state: SavedCombinationState, preview: NSImage? = nil, completion: ((Result<URL, Error>) -> Void)? = nil) {
+        ioQueue.async {
+            let result = Result { try write(state) }
+            if case .success = result, let preview = preview {
+                writePreview(preview, id: state.id)
+            }
+            publish(readSummaries()) { completion?(result) }
+        }
+    }
+
+    /// The state, and its preview when one is cached.
+    public static func load(_ url: URL, completion: @escaping (SavedCombinationState?, NSImage?) -> Void) {
+        ioQueue.async {
+            let state = readState(at: url)
+            let preview = state.flatMap { decodedImage(at: previewURL(forId: $0.id), maxPixelSize: nil) }
+            DispatchQueue.main.async { completion(state, preview) }
+        }
+    }
+
+    /// The image at `url`, decoded now (not on first draw), optionally downscaled.
+    public static func decodedImage(at url: URL, maxPixelSize: Int?) -> NSImage? {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+        var options: [CFString: Any] = [
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true
+        ]
+        if let max = maxPixelSize {
+            options[kCGImageSourceThumbnailMaxPixelSize] = max
+        } else if let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+                  let w = props[kCGImagePropertyPixelWidth] as? Int, let h = props[kCGImagePropertyPixelHeight] as? Int {
+            options[kCGImageSourceThumbnailMaxPixelSize] = Swift.max(w, h)
+        }
+        guard let cg = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
+        return NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
+    }
+
+    /// Renames the combination and its file.
+    public static func rename(_ url: URL, to newName: String, completion: ((Result<URL, Error>) -> Void)? = nil) {
+        ioQueue.async {
+            let result = Result<URL, Error> {
+                guard var state = readState(at: url) else { throw CocoaError(.fileReadCorruptFile) }
+                let newURL = fileURL(forName: newName)
+                if newURL.standardizedFileURL != url.standardizedFileURL,
+                   FileManager.default.fileExists(atPath: newURL.path) {
+                    throw CombinationStateError.nameTaken(newName)
+                }
+                state.name = newName
+                let written = try write(state)
+                if written.standardizedFileURL != url.standardizedFileURL {
+                    try? FileManager.default.removeItem(at: url)
+                }
+                return written
+            }
+            publish(readSummaries()) { completion?(result) }
+        }
+    }
+
+    /// Moves the file to the Trash.
+    public static func delete(_ url: URL) {
+        ioQueue.async {
+            if let id = readState(at: url)?.id {
+                try? FileManager.default.removeItem(at: previewURL(forId: id))
+            }
+            try? FileManager.default.trashItem(at: url, resultingItemURL: nil)
+            publish(readSummaries())
+        }
+    }
+
+    /// Moves every saved combination to the Trash.
     public static func clearAll() {
-        UserDefaults.standard.removeObject(forKey: key)
+        ioQueue.async {
+            for summary in readSummaries() {
+                try? FileManager.default.removeItem(at: previewURL(forId: summary.id))
+                try? FileManager.default.trashItem(at: summary.url, resultingItemURL: nil)
+            }
+            publish([])
+        }
+    }
+
+    public static func fileURL(forName name: String) -> URL {
+        let illegal = CharacterSet(charactersIn: "/:\\\\").union(.newlines).union(.controlCharacters)
+        var base = name.components(separatedBy: illegal).joined(separator: "-")
+            .trimmingCharacters(in: .whitespaces)
+        while base.hasPrefix(".") { base.removeFirst() }
+        if base.isEmpty { base = "Combination" }
+        return directory.appendingPathComponent(base).appendingPathExtension(fileExtension)
+    }
+
+    // MARK: - Runs on ioQueue
+
+    private static func publish(_ list: [SavedCombinationSummary], then: (() -> Void)? = nil) {
+        DispatchQueue.main.async {
+            summaries = list
+            NotificationCenter.default.post(name: didChangeNotification, object: nil)
+            then?()
+        }
+    }
+
+    private static func readState(at url: URL) -> SavedCombinationState? {
+        (try? Data(contentsOf: url)).flatMap { try? makeDecoder().decode(SavedCombinationState.self, from: $0) }
+    }
+
+    /// Writes `state` to the file named after it; a combination with the same name is replaced.
+    private static func write(_ state: SavedCombinationState) throws -> URL {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let url = fileURL(forName: state.name)
+        let data = try makeEncoder().encode(state)
+        try data.write(to: url, options: .atomic)
+        return url
+    }
+
+    private static func writePreview(_ image: NSImage, id: String) {
+        guard let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil),
+              let data = NSBitmapImageRep(cgImage: cg).representation(using: .jpeg, properties: [.compressionFactor: 0.8]) else { return }
+        try? FileManager.default.createDirectory(at: previewDirectory, withIntermediateDirectories: true)
+        try? data.write(to: previewURL(forId: id), options: .atomic)
+    }
+
+    private struct SummaryFields: Decodable {
+        struct Object: Decodable {}
+        var id: String
+        var name: String
+        var savedAt: Date
+        var combiningMode: String
+        var path1: String
+        var itemPath1: String?
+        var path2: String
+        var itemPath2: String?
+        var objects: [Object]?
+    }
+
+    private static func readSummaries() -> [SavedCombinationSummary] {
+        let urls = (try? FileManager.default.contentsOfDirectory(
+            at: directory, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]
+        )) ?? []
+        let decoder = makeDecoder()
+        return urls
+            .filter { $0.pathExtension.lowercased() == fileExtension }
+            .compactMap { url -> SavedCombinationSummary? in
+                guard let data = try? Data(contentsOf: url),
+                      let f = try? decoder.decode(SummaryFields.self, from: data) else { return nil }
+                let missing = Set([f.path1, f.path2]).filter { !FileManager.default.fileExists(atPath: $0) }.sorted()
+                return SavedCombinationSummary(
+                    url: url, id: f.id, name: f.name, savedAt: f.savedAt, combiningMode: f.combiningMode,
+                    itemName1: displayName(f.itemPath1 ?? f.path1),
+                    itemName2: displayName(f.itemPath2 ?? f.path2),
+                    objectCount: f.objects?.count ?? 0,
+                    missingSources: missing
+                )
+            }
+            .sorted { $0.savedAt > $1.savedAt }
+    }
+
+    /// Last path component; archive entries ("archive#entry") show the entry name.
+    private static func displayName(_ path: String) -> String {
+        let tail = path.components(separatedBy: "#").last ?? path
+        return (tail as NSString).lastPathComponent
+    }
+
+    /// Moves combinations saved in UserDefaults by earlier versions into files.
+    private static func migrateLegacyDefaults() {
+        guard let data = UserDefaults.standard.data(forKey: legacyDefaultsKey) else { return }
+        let states = (try? JSONDecoder().decode([SavedCombinationState].self, from: data)) ?? []
+        var allWritten = true
+        for state in states where !FileManager.default.fileExists(atPath: fileURL(forName: state.name).path) {
+            if (try? write(state)) == nil { allWritten = false }
+        }
+        if allWritten {
+            UserDefaults.standard.removeObject(forKey: legacyDefaultsKey)
+        }
     }
 }
