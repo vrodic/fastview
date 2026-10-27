@@ -49,6 +49,43 @@ final class ListSorterTests: XCTestCase {
         let refreshed = ListSorter.sort([old, new, tie], options: ListSortOptions(key: .modified, ascending: false), refreshDates: true)
         XCTAssertEqual(refreshed.map { $0.name }, ["old.jpg", "another.jpg", "new.jpg"])
     }
+
+    func testModifiedSortOfLargeFolderReadsDatesByListingIt() throws {
+        // More files than the one-by-one threshold, in reverse date order to their names.
+        var items: [FileItem] = []
+        for i in 0..<30 {
+            items.append(try makeFile(String(format: "img%02d.jpg", i), modified: TimeInterval(10_000 - i * 10)))
+        }
+        let oldestFirst = ListSorter.sort(items.shuffled(), options: ListSortOptions(key: .modified, ascending: true), refreshDates: true)
+        XCTAssertEqual(oldestFirst.map { $0.name }, items.reversed().map { $0.name })
+    }
+
+    func testDatesFromTheListingAreNotReadAgain() throws {
+        let a = try makeFile("a.jpg", modified: 1_000)
+        let b = try makeFile("b.jpg", modified: 2_000)
+        let loadStart = CFAbsoluteTimeGetCurrent()
+
+        // The listing supplied these (deliberately unlike the files' real dates).
+        ListSorter.recordModificationDates([a.path: 5_000, b.path: 4_000])
+        let sorted = ListSorter.sort([a, b], options: ListSortOptions(key: .modified, ascending: true), datesReadSince: loadStart)
+        XCTAssertEqual(sorted.map { $0.name }, ["b.jpg", "a.jpg"], "recorded dates were used, not re-read")
+
+        // A later load re-reads them from disk.
+        let resorted = ListSorter.sort([a, b], options: ListSortOptions(key: .modified, ascending: true), datesReadSince: CFAbsoluteTimeGetCurrent())
+        XCTAssertEqual(resorted.map { $0.name }, ["a.jpg", "b.jpg"])
+    }
+
+    func testListingRecordsModificationDates() throws {
+        _ = try makeFile("listed.jpg", modified: 7_000)
+        let nav = NavigationManager(initialLocation: NavigationManager.locationForPath(directory.path))
+        let listed = try XCTUnwrap(nav.contents().first { $0.name == "listed.jpg" })
+        // Change the file's real date: the sort must use what the listing recorded.
+        try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: 1)], ofItemAtPath: listed.path)
+        let other = FileItem(id: "/elsewhere/other.jpg", name: "other.jpg", path: "/elsewhere/other.jpg", type: .image)
+        ListSorter.recordModificationDates([other.path: 5_000])
+        let sorted = ListSorter.sort([listed, other], options: ListSortOptions(key: .modified, ascending: true), datesReadSince: nil)
+        XCTAssertEqual(sorted.map { $0.name }, ["other.jpg", "listed.jpg"])
+    }
 }
 
 final class FavoriteContainerKeysTests: XCTestCase {

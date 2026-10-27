@@ -59,27 +59,53 @@ public struct ListSortOptions: Equatable {
 /// stay ahead of images; the sort key orders items within those groups, with
 /// name order breaking ties.
 ///
-/// Sorting by modification date stats files, so call `sort` off the main
-/// thread.  `refreshDates` re-reads dates already cached (on a fresh load);
-/// re-sorting the same list reuses them.
+/// Sorting by modification date may read file dates, so call `sort` off the
+/// main thread.  Dates are cached for the session with the time they were read:
+/// a fresh load passes `datesReadSince` (when it began), so dates read before
+/// it are read again while those its listing just supplied are kept.
+/// Re-sorting the same list reuses them.
 public enum ListSorter {
-    private static var modificationDates = [String: Double]()
-    private static let datesLock = NSLock()
+    private struct CachedDate {
+        var date: Double
+        var readAt: CFAbsoluteTime
+    }
 
+    private static var modificationDates = [String: CachedDate]()
+    private static let datesLock = NSLock()
+    /// Above this many dates missing in one folder, the folder is listed once
+    /// (its entries' dates arrive in bulk) instead of reading each file's date.
+    private static let bulkReadThreshold = 8
+
+    /// `refreshDates` is `datesReadSince` set to now.
     public static func sort(_ items: [FileItem], options: ListSortOptions, refreshDates: Bool = false) -> [FileItem] {
+        return sort(items, options: options, datesReadSince: refreshDates ? CFAbsoluteTimeGetCurrent() : nil)
+    }
+
+    public static func sort(_ items: [FileItem], options: ListSortOptions, datesReadSince: CFAbsoluteTime?) -> [FileItem] {
         let parents = items.filter { $0.type == .parentDirectory }
         let rest = items.filter { $0.type != .parentDirectory }
         let containers = rest.filter { isContainer($0) }
         let images = rest.filter { !isContainer($0) }
-        return parents + sortGroup(containers, options: options, refreshDates: refreshDates)
-            + sortGroup(images, options: options, refreshDates: refreshDates)
+        return parents + sortGroup(containers, options: options, datesReadSince: datesReadSince)
+            + sortGroup(images, options: options, datesReadSince: datesReadSince)
+    }
+
+    /// Records dates a directory listing already fetched, so sorting needs no reads of its own.
+    public static func recordModificationDates(_ dates: [String: Double]) {
+        guard !dates.isEmpty else { return }
+        let now = CFAbsoluteTimeGetCurrent()
+        datesLock.lock()
+        for (path, date) in dates {
+            modificationDates[path] = CachedDate(date: date, readAt: now)
+        }
+        datesLock.unlock()
     }
 
     private static func isContainer(_ item: FileItem) -> Bool {
         return item.isDirectory || item.type == .archiveZip || item.type == .archiveRar
     }
 
-    private static func sortGroup(_ items: [FileItem], options: ListSortOptions, refreshDates: Bool) -> [FileItem] {
+    private static func sortGroup(_ items: [FileItem], options: ListSortOptions, datesReadSince: CFAbsoluteTime?) -> [FileItem] {
         guard items.count > 1 else { return items }
 
         let scores: [Double]
@@ -88,7 +114,7 @@ public enum ListSorter {
             let sorted = items.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
             return options.ascending ? sorted : sorted.reversed()
         case .modified:
-            scores = modificationDates(for: items, refresh: refreshDates)
+            scores = modificationDates(for: items, readSince: datesReadSince)
         case .favorites:
             scores = items.map(favoriteScore)
         case .viewed:
@@ -143,31 +169,54 @@ public enum ListSorter {
         return SQLiteCache.shared.isImageViewed(key: key) ? 1 : 0
     }
 
-    /// Entries inside an archive have no date of their own and use the
-    /// archive's.  Dates are cached for the session so re-sorting is cheap.
-    private static func modificationDates(for items: [FileItem], refresh: Bool) -> [Double] {
+    /// Entries inside an archive have no date of their own and use the archive's.
+    private static func modificationDates(for items: [FileItem], readSince: CFAbsoluteTime?) -> [Double] {
         let paths = items.map { $0.archivePath ?? $0.path }
 
         datesLock.lock()
-        let missing = Set(paths.filter { refresh || modificationDates[$0] == nil })
+        let missing = Set(paths.filter { path in
+            guard let cached = modificationDates[path] else { return true }
+            return readSince.map { cached.readAt < $0 } ?? false
+        })
         datesLock.unlock()
 
         if !missing.isEmpty {
-            let found = DiskIOGate.shared.perform(.interactive, label: "sort-by-date") { () -> [String: Double] in
-                var result = [String: Double]()
-                for path in missing {
-                    let values = try? URL(fileURLWithPath: path).resourceValues(forKeys: [.contentModificationDateKey])
-                    result[path] = values?.contentModificationDate?.timeIntervalSince1970 ?? 0
-                }
-                return result
+            let found = DiskIOGate.shared.perform(.interactive, label: "sort-by-date") {
+                readModificationDates(missing)
             }
-            datesLock.lock()
-            modificationDates.merge(found) { _, new in new }
-            datesLock.unlock()
+            recordModificationDates(found)
         }
 
         datesLock.lock()
         defer { datesLock.unlock() }
-        return paths.map { modificationDates[$0] ?? 0 }
+        return paths.map { modificationDates[$0]?.date ?? 0 }
+    }
+
+    /// On a network volume every file's date is a round trip; listing the folder
+    /// returns all its entries' dates in a few. So folders with many dates
+    /// missing are listed, and the rest read one by one.
+    private static func readModificationDates(_ paths: Set<String>) -> [String: Double] {
+        var result = [String: Double]()
+        let byFolder = Dictionary(grouping: paths) { ($0 as NSString).deletingLastPathComponent }
+        for (folder, folderPaths) in byFolder {
+            if folderPaths.count > bulkReadThreshold {
+                let wanted = Set(folderPaths)
+                let urls = (try? FileManager.default.contentsOfDirectory(
+                    at: URL(fileURLWithPath: folder),
+                    includingPropertiesForKeys: [.contentModificationDateKey],
+                    options: []
+                )) ?? []
+                for url in urls where wanted.contains(url.path) {
+                    let date = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+                    result[url.path] = date?.timeIntervalSince1970 ?? 0
+                }
+            }
+            // One by one: small groups, and anything the listing did not return.
+            for path in folderPaths where result[path] == nil {
+                let values = try? URL(fileURLWithPath: path).resourceValues(forKeys: [.contentModificationDateKey])
+                result[path] = values?.contentModificationDate?.timeIntervalSince1970 ?? 0
+            }
+        }
+        return result
     }
 }

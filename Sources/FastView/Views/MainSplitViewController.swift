@@ -1022,7 +1022,8 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
                 navMgr.contents(progress: listingProgress, isCancelled: { workItem.isCancelled })
             }
             if workItem.isCancelled { return }
-            let items = ListSorter.sort(listed, options: sortOptions, refreshDates: true)
+            // Dates read since this load began (by the listing itself) are current.
+            let items = ListSorter.sort(listed, options: sortOptions, datesReadSince: startTime)
             if workItem.isCancelled { return }
 
             let elapsedTime = (CFAbsoluteTimeGetCurrent() - startTime) * 1000.0

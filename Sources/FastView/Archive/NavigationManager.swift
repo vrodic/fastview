@@ -87,9 +87,11 @@ public class NavigationManager {
             let fm = FileManager.default
             let dirURL = URL(fileURLWithPath: currentLocation.physicalPath)
 
+            // Modification dates come with the listing in bulk; reading them
+            // later per file costs a round trip each on a network volume.
             guard let fileURLs = try? fm.contentsOfDirectory(
                 at: dirURL,
-                includingPropertiesForKeys: [.isDirectoryKey],
+                includingPropertiesForKeys: [.isDirectoryKey, .contentModificationDateKey],
                 options: [.skipsHiddenFiles]
             ) else {
                 SQLiteCache.shared.saveDirectoryContents(key: key, items: results)
@@ -98,11 +100,16 @@ public class NavigationManager {
 
             var dirItems: [FileItem] = []
             dirItems.reserveCapacity(fileURLs.count)
+            var dates: [String: Double] = [:]
+            dates.reserveCapacity(fileURLs.count)
 
             for fileURL in fileURLs {
                 let ext = fileURL.pathExtension.lowercased()
                 let fullPath = fileURL.path
                 let fileName = fileURL.lastPathComponent
+                if let date = (try? fileURL.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate {
+                    dates[fullPath] = date.timeIntervalSince1970
+                }
 
                 if ext == "zip" {
                     dirItems.append(FileItem(id: fullPath, name: fileName, path: fullPath, type: .archiveZip, isDirectory: false))
@@ -119,6 +126,7 @@ public class NavigationManager {
                 }
             }
 
+            ListSorter.recordModificationDates(dates)
             results.append(contentsOf: ArchiveReader.sortItems(dirItems))
         }
 
