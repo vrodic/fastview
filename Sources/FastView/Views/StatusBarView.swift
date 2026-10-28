@@ -125,12 +125,15 @@ public class StatusBarView: NSView {
     }
 
     /// Where a folder or archive sits among the folders and archives of the
-    /// list it is in, for "3 / 17" and the "12 folders, 5 archives" summary.
+    /// list it is in, for "3 / 17" and the "12 folders, 5 archives" summary,
+    /// with the share of them holding viewed images once that is known.
     public struct ContainerPosition {
         public let index: Int
         public let total: Int
         public let folders: Int
         public let archives: Int
+        public let containers: [FileItem]
+        public var viewedPercent: Int?
 
         public init?(item: FileItem, in items: [FileItem]) {
             guard item.type != .parentDirectory else { return nil }
@@ -140,6 +143,7 @@ public class StatusBarView: NSView {
             guard let idx = containers.firstIndex(where: { $0.id == item.id }) else { return nil }
             index = idx + 1
             total = containers.count
+            self.containers = containers
             archives = containers.filter { $0.type == .archiveZip || $0.type == .archiveRar }.count
             folders = total - archives
         }
@@ -149,7 +153,8 @@ public class StatusBarView: NSView {
             var parts: [String] = []
             if folders > 0 { parts.append(count(folders, "folder")) }
             if archives > 0 { parts.append(count(archives, "archive")) }
-            return parts.joined(separator: ", ")
+            let summary = parts.joined(separator: ", ")
+            return viewedPercent.map { "\(summary) (\($0)% viewed)" } ?? summary
         }
     }
 
@@ -177,13 +182,16 @@ public class StatusBarView: NSView {
         setRightLabel(before: parts, sizeBytes: item.fileSize, statPath: statPath)
     }
 
-    public func updateImageInfo(item: FileItem, image: NSImage?, currentIndex: Int? = nil, totalImages: Int? = nil, parentName: String? = nil) {
+    public func updateImageInfo(item: FileItem, image: NSImage?, currentIndex: Int? = nil, totalImages: Int? = nil, viewedPercent: Int? = nil, parentName: String? = nil) {
         leftLabel.stringValue = StatusBarView.formatLeftPath(for: item)
 
         var infoParts: [String] = []
 
         if let index = currentIndex, let total = totalImages, total > 0 {
             infoParts.append("\(index) / \(total)")
+        }
+        if let percent = viewedPercent {
+            infoParts.append("\(percent)% viewed")
         }
 
         var afterSize: [String] = []

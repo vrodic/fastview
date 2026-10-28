@@ -79,6 +79,11 @@ public class SQLiteCache {
     }
 
     private var viewedCache = [String: Bool]()
+    // Viewed-key prefixes (see `FolderStatsCalculator.viewedKeyPrefix`) found
+    // to have viewed images under them, and found to have none; the latter
+    // are forgotten whenever a new image is marked viewed.
+    private var prefixesWithViewed = Set<String>()
+    private var prefixesWithoutViewed = Set<String>()
     // Favorite images per containing location: every enclosing folder and
     // archive by path, and every folder inside an archive as
     // "<archive path>#<folder>".
@@ -164,6 +169,7 @@ public class SQLiteCache {
 
         if viewedCache[key] == true { return }
         viewedCache[key] = true
+        prefixesWithoutViewed.removeAll()
 
         guard db != nil else { return }
         let query = "INSERT OR REPLACE INTO viewed_images (path, timestamp) VALUES (?, ?);"
@@ -243,6 +249,51 @@ public class SQLiteCache {
         }
         sqlite3_finalize(statement)
         return count
+    }
+
+    /// How many of `prefixes` have at least one viewed image under them, if
+    /// every one has been looked up before; nil otherwise.  Reads no database.
+    public func cachedCountOfPrefixesWithViewed(_ prefixes: [String]) -> Int? {
+        guard isTrackingViewedImagesEnabled else { return 0 }
+        lock.lock()
+        defer { lock.unlock() }
+        var count = 0
+        for prefix in prefixes {
+            if prefixesWithViewed.contains(prefix) {
+                count += 1
+            } else if !prefixesWithoutViewed.contains(prefix) {
+                return nil
+            }
+        }
+        return count
+    }
+
+    /// How many of `prefixes` have at least one viewed image under them: one
+    /// indexed lookup for each prefix not looked up before.
+    public func countPrefixesWithViewed(_ prefixes: [String]) -> Int {
+        guard isTrackingViewedImagesEnabled else { return 0 }
+        lock.lock()
+        defer { lock.unlock() }
+
+        let missing = prefixes.filter { !prefixesWithViewed.contains($0) && !prefixesWithoutViewed.contains($0) }
+        if !missing.isEmpty, db != nil {
+            let query = "SELECT 1 FROM viewed_images WHERE path >= ? AND path < ? LIMIT 1;"
+            var statement: OpaquePointer?
+            if sqlite3_prepare_v2(db, query, -1, &statement, nil) == SQLITE_OK {
+                for prefix in missing {
+                    sqlite3_reset(statement)
+                    sqlite3_bind_text(statement, 1, prefix, -1, SQLITE_TRANSIENT)
+                    sqlite3_bind_text(statement, 2, prefix + "\u{10FFFF}", -1, SQLITE_TRANSIENT)
+                    if sqlite3_step(statement) == SQLITE_ROW {
+                        prefixesWithViewed.insert(prefix)
+                    } else {
+                        prefixesWithoutViewed.insert(prefix)
+                    }
+                }
+            }
+            sqlite3_finalize(statement)
+        }
+        return prefixes.filter { prefixesWithViewed.contains($0) }.count
     }
 
     /// The ids of every image in an archive, from its listings cached here

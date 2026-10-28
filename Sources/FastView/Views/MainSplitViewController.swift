@@ -9,6 +9,7 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
     private var navigationManager1: NavigationManager?
     private var navigationManager2: NavigationManager?
     private let loadQueue = DispatchQueue(label: "com.fastview.directoryload", qos: .userInitiated)
+    private let viewedCountQueue = DispatchQueue(label: "com.fastview.viewedcount", qos: .userInitiated)
     // Sibling navigations waiting for their parent listing, by pane: the
     // accumulated step (left/right presses made meanwhile).
     private var pendingSiblingSteps: [Int: Int] = [:]
@@ -1185,10 +1186,54 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
             let imageItems = items.filter { $0.type == .image }
             let index = imageItems.firstIndex(where: { $0.id == item.id }).map { $0 + 1 }
             statusBarView.updateImageInfo(item: item, image: dualCanvasVC.imageView1.currentImage,
-                                          currentIndex: index, totalImages: imageItems.count, parentName: parentName)
+                                          currentIndex: index, totalImages: imageItems.count,
+                                          viewedPercent: viewedPercent(of: imageItems), parentName: parentName)
         } else {
-            statusBarView.updateSelectedItemStats(item: item, position: StatusBarView.ContainerPosition(item: item, in: items), parentName: parentName)
+            let position = containerPosition(of: item, in: items) { [weak self] counted in
+                guard let self = self, self.sidebarContainerVC.sidebarVC1.selectedItem?.id == item.id else { return }
+                self.statusBarView.updateSelectedItemStats(item: item, position: counted, parentName: parentName)
+            }
+            statusBarView.updateSelectedItemStats(item: item, position: position, parentName: parentName)
         }
+    }
+
+    /// Share of the list's images marked viewed, nil when viewed images are
+    /// not tracked.  The sidebar loaded the list's viewed flags into memory
+    /// when it was shown, so this reads no database.
+    private func viewedPercent(of imageItems: [FileItem]) -> Int? {
+        guard SQLiteCache.shared.isTrackingViewedImagesEnabled, !imageItems.isEmpty else { return nil }
+        let viewed = SQLiteCache.shared.getViewedCount(keys: imageItems.map(SidebarTableCellView.viewedKey))
+        return Self.percent(viewed, of: imageItems.count)
+    }
+
+    private static func percent(_ count: Int, of total: Int) -> Int {
+        Int(round(Double(count) / Double(total) * 100.0))
+    }
+
+    /// Where `item` sits among the list's folders and archives, with the
+    /// share of them holding any viewed image when SQLiteCache already knows
+    /// it.  Otherwise that is counted in the background (an indexed lookup
+    /// per folder or archive, remembered after) and `onCounted` gets the
+    /// position with it, on the main queue.
+    private func containerPosition(of item: FileItem, in items: [FileItem],
+                                   onCounted: @escaping (StatusBarView.ContainerPosition) -> Void) -> StatusBarView.ContainerPosition? {
+        guard var position = StatusBarView.ContainerPosition(item: item, in: items) else { return nil }
+        guard SQLiteCache.shared.isTrackingViewedImagesEnabled else { return position }
+        let prefixes = position.containers.map(FolderStatsCalculator.viewedKeyPrefix)
+        if let count = SQLiteCache.shared.cachedCountOfPrefixesWithViewed(prefixes) {
+            position.viewedPercent = Self.percent(count, of: prefixes.count)
+            return position
+        }
+        let uncounted = position
+        viewedCountQueue.async {
+            let count = SQLiteCache.shared.countPrefixesWithViewed(prefixes)
+            DispatchQueue.main.async {
+                var counted = uncounted
+                counted.viewedPercent = Self.percent(count, of: prefixes.count)
+                onCounted(counted)
+            }
+        }
+        return position
     }
 
     private func showFavorites(_ favorites: [FileItem], pane: Int, targetSelectedItemPath: String?) {
@@ -1325,7 +1370,15 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         let imageItems = targetSidebar.items.filter { $0.type == .image }
         let currentIndex = imageItems.firstIndex(where: { $0.id == item.id }).map { $0 + 1 }
         let totalImages = imageItems.count
-        let containerStats = pane == 1 ? StatusBarView.ContainerPosition(item: item, in: targetSidebar.items) : nil
+        var containerStats: StatusBarView.ContainerPosition?
+        if pane == 1 {
+            containerStats = containerPosition(of: item, in: targetSidebar.items) { [weak self] counted in
+                // Kept for the status bar updates below that run later.
+                containerStats = counted
+                guard let self = self, targetSidebar.selectedItem?.id == item.id else { return }
+                self.statusBarView.updateSelectedItemStats(item: item, position: counted, parentName: parentName)
+            }
+        }
 
         if pane == activePane {
             fileInfoController?.refreshIfVisible(item: item)
@@ -1333,7 +1386,8 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
 
         if pane == 1 {
             if item.type == .image {
-                statusBarView.updateImageInfo(item: item, image: nil, currentIndex: currentIndex, totalImages: totalImages, parentName: parentName)
+                statusBarView.updateImageInfo(item: item, image: nil, currentIndex: currentIndex, totalImages: totalImages,
+                                              viewedPercent: viewedPercent(of: imageItems), parentName: parentName)
                 if let archivePath = item.archivePath {
                     // The first image of an archive not read yet (e.g. opened
                     // at launch, its listing cached) waits for the archive read.
@@ -1374,7 +1428,9 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
 
                 self.dualCanvasVC.setImage(image, pane: pane, itemPath: item.id, archivePath: item.archivePath)
                 if pane == 1 {
-                    self.statusBarView.updateImageInfo(item: item, image: image, currentIndex: currentIndex, totalImages: totalImages, parentName: parentName)
+                    // Recounted: this image was just marked viewed.
+                    self.statusBarView.updateImageInfo(item: item, image: image, currentIndex: currentIndex, totalImages: totalImages,
+                                                       viewedPercent: self.viewedPercent(of: imageItems), parentName: parentName)
                 }
 
                 let cacheKey = "thumb_\(item.id)_256.0x256.0"
