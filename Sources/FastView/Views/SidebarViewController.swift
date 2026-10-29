@@ -13,6 +13,7 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
     public var paneIndex: Int = 1 {
         didSet {
             sortOptions = ListSortOptions.load(pane: paneIndex)
+            headerCloseButton.isHidden = paneIndex != 2
         }
     }
     public private(set) var sortOptions = ListSortOptions.default {
@@ -33,8 +34,11 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
     }
 
     public private(set) var items: [FileItem] = []
+    /// Called by the header's close button, shown only on pane 2.
+    public var onClosePane: (() -> Void)?
     private let headerContainerView = NSView()
     private let headerTitleLabel = NSTextField(labelWithString: "")
+    private let headerCloseButton = NSButton()
     private let headerAccentIndicator = NSView()
     private var headerHeightConstraint: NSLayoutConstraint?
     private let sortBarView = NSView()
@@ -182,8 +186,20 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
 
         headerAccentIndicator.translatesAutoresizingMaskIntoConstraints = false
 
+        headerCloseButton.translatesAutoresizingMaskIntoConstraints = false
+        headerCloseButton.isBordered = false
+        headerCloseButton.image = NSImage(systemSymbolName: "xmark.circle.fill", accessibilityDescription: "Close 2nd View")?
+            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 12, weight: .regular))
+        headerCloseButton.contentTintColor = NSColor.secondaryLabelColor
+        headerCloseButton.toolTip = "Close 2nd View"
+        headerCloseButton.refusesFirstResponder = true
+        headerCloseButton.target = self
+        headerCloseButton.action = #selector(closePaneClicked(_:))
+        headerCloseButton.isHidden = paneIndex != 2
+
         headerContainerView.addSubview(headerAccentIndicator)
         headerContainerView.addSubview(headerTitleLabel)
+        headerContainerView.addSubview(headerCloseButton)
 
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         scrollView.hasVerticalScroller = true
@@ -255,8 +271,13 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
             headerAccentIndicator.widthAnchor.constraint(equalToConstant: 4),
 
             titleLeading,
-            headerTitleLabel.trailingAnchor.constraint(equalTo: headerContainerView.trailingAnchor, constant: -6),
+            headerTitleLabel.trailingAnchor.constraint(equalTo: headerCloseButton.leadingAnchor, constant: -4),
             headerTitleLabel.centerYAnchor.constraint(equalTo: headerContainerView.centerYAnchor),
+
+            headerCloseButton.trailingAnchor.constraint(equalTo: headerContainerView.trailingAnchor, constant: -6),
+            headerCloseButton.centerYAnchor.constraint(equalTo: headerContainerView.centerYAnchor),
+            headerCloseButton.widthAnchor.constraint(equalToConstant: 16),
+            headerCloseButton.heightAnchor.constraint(equalToConstant: 16),
 
             scrollView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
@@ -270,6 +291,10 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
         ])
 
         updateHeaderFocusStyle()
+    }
+
+    @objc private func closePaneClicked(_ sender: NSButton) {
+        onClosePane?()
     }
 
     @objc private func scrollViewDidScroll(_ notification: Notification) {

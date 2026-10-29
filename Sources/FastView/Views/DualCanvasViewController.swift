@@ -16,6 +16,10 @@ public class DualCanvasViewController: NSViewController, CombiningToolbarDelegat
     /// A plain layer-backed view: an image view's intrinsic size would push the split view around.
     private let restorePreviewView = NSView()
 
+    /// Called by the close button over pane 2's corner.
+    public var onCloseSecondPane: (() -> Void)?
+    private let closeSecondPaneButton = NSButton()
+
     /// Called whenever a pane is given an image, with the item it shows (nil image when it has none).
     public var onPaneImageSet: ((_ pane: Int, _ hasImage: Bool, _ itemPath: String?) -> Void)?
 
@@ -83,6 +87,18 @@ public class DualCanvasViewController: NSViewController, CombiningToolbarDelegat
         restoreProgressView.isHidden = true
         view.addSubview(restoreProgressView)
 
+        closeSecondPaneButton.translatesAutoresizingMaskIntoConstraints = false
+        closeSecondPaneButton.isBordered = false
+        closeSecondPaneButton.image = NSImage(systemSymbolName: "xmark.circle.fill", accessibilityDescription: "Close 2nd View")?
+            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 16, weight: .regular))
+        closeSecondPaneButton.contentTintColor = NSColor.white.withAlphaComponent(0.75)
+        closeSecondPaneButton.toolTip = "Close 2nd View"
+        closeSecondPaneButton.refusesFirstResponder = true
+        closeSecondPaneButton.target = self
+        closeSecondPaneButton.action = #selector(closeSecondPaneClicked(_:))
+        closeSecondPaneButton.isHidden = !isDualView
+        view.addSubview(closeSecondPaneButton)
+
         NSLayoutConstraint.activate([
             splitContainer.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             splitContainer.trailingAnchor.constraint(equalTo: view.trailingAnchor),
@@ -103,7 +119,13 @@ public class DualCanvasViewController: NSViewController, CombiningToolbarDelegat
             restoreProgressView.centerYAnchor.constraint(equalTo: view.centerYAnchor),
 
             toolbarView.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            toolbarView.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -16)
+            toolbarView.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -16),
+
+            // Top right: pane 2's corner when split, the canvas's otherwise.
+            closeSecondPaneButton.topAnchor.constraint(equalTo: view.topAnchor, constant: 8),
+            closeSecondPaneButton.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -8),
+            closeSecondPaneButton.widthAnchor.constraint(equalToConstant: 22),
+            closeSecondPaneButton.heightAnchor.constraint(equalToConstant: 22)
         ])
 
         combiningCanvasView.onRetuneDetector = { [weak self] index, mode in
@@ -163,12 +185,17 @@ public class DualCanvasViewController: NSViewController, CombiningToolbarDelegat
         })
     }
 
+    @objc private func closeSecondPaneClicked(_ sender: NSButton) {
+        onCloseSecondPane?()
+    }
+
     public func toggleToolbar() {
         isToolbarVisible = !isToolbarVisible
     }
 
     public func setDualViewEnabled(_ enabled: Bool) {
         self.isDualView = enabled
+        closeSecondPaneButton.isHidden = !enabled
         if !enabled {
             combiningMode = .split
             isToolbarVisible = false

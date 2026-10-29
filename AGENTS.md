@@ -10,7 +10,7 @@ FastView is built using Swift, AppKit, and Swift Package Manager.
 - `Sources/FastView/Main.swift`: Application entry point (`AppDelegate`), menu bar creation, and command-line launch handling. The Dock icon is `Resources/AppIcon.png`, a package resource set before the run loop starts.
 - `Sources/FastView/Resources/AppIcon.png`: Application icon (1024×1024).
 - `Sources/FastView/Views/`:
-  - `MainSplitViewController.swift`: Core application coordinator, split view layout, and navigation state.
+  - `MainSplitViewController.swift`: Core application coordinator, split view layout, and navigation state Random image (`showRandomImage`): a walk down from the location or selected folder/archive on `loadQueue`, picking one listed entry at random per level until an image, cancelled by any navigation in the pane. The 2nd view closes from its sidebar header button (`SidebarViewController.onClosePane`) or the button at the canvas's top right (`DualCanvasViewController.onCloseSecondPane`).
   - `SidebarViewController.swift`: Sidebar table view (`NSTableView`), cell configuration (`SidebarTableCellView`), custom keyboard input handling, and cell badge rendering.
   - `MainImageView.swift`: Image canvas, zooming, panning, and loading indicator overlay.
   - `ListSorter.swift`: Per-pane list sort options (name, modified date, favorites, viewed; persisted in UserDefaults; in the favorites list, modified means when each item was favorited) and the sort itself, run off the main thread. Modification dates come in bulk with the directory listing (`NavigationManager.contents`); dates still missing are read by listing each parent folder once, never one network round trip per file. The parent entry stays first and folders/archives stay ahead of images.

@@ -11,6 +11,8 @@ FastView is a high-performance macOS image viewer written in Swift and AppKit, b
 - **Recursive Thumbnail Peeking**: Automatic thumbnail extraction for directories/archives by naturally sorting contents and recursively traversing until the first image is found.
 - **Visual Sidebar Badges**: Large overlay badges for favorites (star) and folders/archives (type icons) on sidebar cells.
 - **File Information Panel**: Metadata panel (Cmd+I) with thumbnail, kind, size, location, image properties (dimensions, colour profile, DPI), camera EXIF (camera, lens, exposure, date taken, GPS), folder/archive contents and dates. It follows the selection while open.
+- **Random Image**: Jump to a random image anywhere under the current location (Cmd+J) or inside the selected folder or archive (Cmd+Option+J), descending through subfolders and archives.
+- **Dual View**: A second pane for comparing and combining images; close it with the small close button in its header or at the top right of the canvas.
 - **Command-Line Integration**: Launch with a directory parameter (`FastView /path/to/folder`) to automatically open in Show All mode.
 
 ## Shortcuts & Controls
@@ -22,6 +24,8 @@ FastView is a high-performance macOS image viewer written in Swift and AppKit, b
 - `Option + F` (`⌥F`): Toggle Favorites browsing mode
 - `Cmd + L`: Switch to All Mode at current item location
 - `Cmd + I`: File Info dialog
+- `Cmd + J`: Random image in the current folder or archive (including its subfolders and archives)
+- `Cmd + Option + J`: Random image in the selected folder or archive
 - `Enter`: Open directory / archive or advance selection
 - `Escape`: Navigate up / exit archive
 

@@ -26,6 +26,8 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
     private var pendingRefreshes: [Int: Set<String>] = [:]
     private var currentDirectoryLoadItem1: DispatchWorkItem?
     private var currentDirectoryLoadItem2: DispatchWorkItem?
+    /// The random-image walk in flight for each pane (guarded by `lock`).
+    private var randomImageWalks: [Int: DispatchWorkItem] = [:]
     private let lock = NSLock()
     // The old "FastViewSidebarWidth" key could hold the image area's width
     // (it measured splitView.subviews[0], which is not the sidebar).
@@ -215,6 +217,13 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
 
         dualCanvasVC.combiningCanvasView.onSelectedObjectChanged = { [weak self] pane, fgObj in
             self?.statusBarView.updateForegroundObjectInfo(pane: pane, object: fgObj)
+        }
+
+        sidebarContainerVC.sidebarVC2.onClosePane = { [weak self] in
+            self?.closeSecondView()
+        }
+        dualCanvasVC.onCloseSecondPane = { [weak self] in
+            self?.closeSecondView()
         }
 
         dualCanvasVC.onPaneImageSet = { [weak self] pane, hasImage, itemPath in
@@ -906,6 +915,7 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
             currentDirectoryLoadItem2?.cancel()
             currentDirectoryLoadItem2 = nil
         }
+        randomImageWalks.removeValue(forKey: pane)?.cancel()
         lock.unlock()
     }
 
@@ -1646,6 +1656,144 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
                 }
             }
         }
+    }
+
+    public enum RandomImageScope {
+        /// Anywhere under the pane's location: its images, folders and archives.
+        case currentLocation
+        /// Anywhere in the selected folder or archive (the location when an image is selected).
+        case selectedItem
+    }
+
+    /// Shows a random image in the pane (the active one by default).
+    ///
+    /// The image is found by a walk down from the start: each step picks
+    /// one entry of a listing at random, an image ending the walk and a
+    /// folder or archive being listed in turn, so no tree is ever listed
+    /// whole (listings come from the cache when they can).  A walk that ends
+    /// in an empty folder starts again.  It runs on `loadQueue` behind the
+    /// I/O gate, and any navigation in the pane cancels it.
+    public func showRandomImage(scope: RandomImageScope, pane: Int? = nil) {
+        let p = pane ?? activePane
+        guard p == 1 || sidebarContainerVC.isDualView else { return }
+        let sidebar = (p == 2) ? sidebarContainerVC.sidebarVC2 : sidebarContainerVC.sidebarVC1
+        let inFavorites = (p == 2) ? showFavoritesOnlyPane2 : showFavoritesOnly
+        let navMgr = (p == 2) ? navigationManager2 : navigationManager1
+        let selected = sidebar.selectedItem
+        let isContainer: (FileItem) -> Bool = {
+            $0.type == .directory || $0.type == .archiveZip || $0.type == .archiveRar || ($0.isDirectory && $0.type != .parentDirectory)
+        }
+
+        let start: NavigationLocation
+        if scope == .selectedItem, let selected = selected, isContainer(selected) {
+            if inFavorites || navMgr == nil {
+                guard selected.archivePath == nil else { return }
+                start = NavigationManager.locationForPath(selected.path)
+            } else if let navMgr = navMgr, let loc = NavigationManager(initialLocation: navMgr.currentLocation).navigateTo(selected) {
+                start = loc
+            } else {
+                return
+            }
+        } else if inFavorites {
+            // The favorites list is not a location to walk: pick among its images.
+            let images = sidebar.items.indices.filter { sidebar.items[$0].type == .image && sidebar.items[$0].id != selected?.id }
+            if let idx = images.randomElement() {
+                sidebar.selectRow(idx)
+            }
+            return
+        } else if let navMgr = navMgr {
+            start = navMgr.currentLocation
+        } else {
+            return
+        }
+
+        cancelIOOperations(forPane: p)
+        let avoidId = selected?.id
+        var workItem: DispatchWorkItem!
+        workItem = DispatchWorkItem { [weak self] in
+            let found = MainSplitViewController.pickRandomImage(from: start, avoidingItemId: avoidId, isCancelled: { workItem.isCancelled })
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                if workItem.isCancelled {
+                    // A navigation in this pane arms its own overlay; one in the other pane does not.
+                    if p == 1 && !self.isDirectoryLoadInFlight(pane: 1) && self.pendingSiblingSteps[1] == nil {
+                        self.dualCanvasVC.imageView1.hideLoading()
+                    }
+                    return
+                }
+                self.lock.lock()
+                if self.randomImageWalks[p] === workItem { self.randomImageWalks[p] = nil }
+                self.lock.unlock()
+                if p == 1 { self.dualCanvasVC.imageView1.hideLoading() }
+                guard let found = found else {
+                    self.statusBarView.showMessage("No images found")
+                    return
+                }
+                self.showPickedImage(found.item, at: found.location, pane: p)
+            }
+        }
+        lock.lock()
+        randomImageWalks[p] = workItem
+        lock.unlock()
+        if p == 1 {
+            dualCanvasVC.imageView1.beginLoading(statusText: "Picking a random image...")
+        }
+        loadQueue.async(execute: workItem)
+    }
+
+    private func showPickedImage(_ item: FileItem, at location: NavigationLocation, pane p: Int) {
+        let sidebar = (p == 2) ? sidebarContainerVC.sidebarVC2 : sidebarContainerVC.sidebarVC1
+        let navMgr = (p == 2) ? navigationManager2 : navigationManager1
+        let inFavorites = (p == 2) ? showFavoritesOnlyPane2 : showFavoritesOnly
+        if !inFavorites, navMgr?.currentLocation == location,
+           let idx = sidebar.items.firstIndex(where: { $0.id == item.id }) {
+            sidebar.selectRow(idx)
+            return
+        }
+        // Leaving favorites mode starts a reload of the location; the one below supersedes it.
+        if p == 1 {
+            navigationManager1 = NavigationManager(initialLocation: location)
+            if showFavoritesOnly { showFavoritesOnly = false }
+        } else {
+            navigationManager2 = NavigationManager(initialLocation: location)
+            if showFavoritesOnlyPane2 { showFavoritesOnlyPane2 = false }
+        }
+        if location.isArchive { cancelAllIOOperations() } else { cancelIOOperations(forPane: p) }
+        reloadDirectoryContentsAsync(pane: p, targetSelectedItemPath: item.id)
+    }
+
+    /// Walks down from `start` picking entries at random until it reaches an
+    /// image; see `showRandomImage`.  Off the main thread.
+    private static func pickRandomImage(from start: NavigationLocation, avoidingItemId avoidId: String?, isCancelled: @escaping () -> Bool) -> (location: NavigationLocation, item: FileItem)? {
+        let maxWalks = 8
+        let maxDepth = 16
+        for _ in 0..<maxWalks {
+            let navMgr = NavigationManager(initialLocation: start)
+            for depth in 0..<maxDepth {
+                if isCancelled() { return nil }
+                let location = navMgr.currentLocation
+                let listed = DiskIOGate.shared.perform(.interactive, label: location.physicalPath) {
+                    navMgr.contents(isCancelled: isCancelled)
+                }
+                if isCancelled() { return nil }
+                var candidates = listed.filter {
+                    $0.type == .image || $0.type == .directory || $0.type == .archiveZip || $0.type == .archiveRar
+                        || ($0.isDirectory && $0.type != .parentDirectory)
+                }
+                // Prefer a different image from the one shown, when there is one.
+                if candidates.count > 1, let avoidId = avoidId {
+                    candidates.removeAll { $0.id == avoidId }
+                }
+                guard let pick = candidates.randomElement() else {
+                    // Nothing at the start: no walk can find anything.
+                    if depth == 0 { return nil }
+                    break
+                }
+                if pick.type == .image { return (location, pick) }
+                guard navMgr.navigateTo(pick) != nil else { break }
+            }
+        }
+        return nil
     }
 
     public func activateSelectedItem() {

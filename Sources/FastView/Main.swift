@@ -290,6 +290,19 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         controlsMenu.addItem(withTitle: "Next Sibling Directory or Archive", action: #selector(nextSiblingAction), keyEquivalent: "\u{F703}")
         controlsMenu.addItem(withTitle: "Previous Sibling Directory or Archive", action: #selector(prevSiblingAction), keyEquivalent: "\u{F702}")
 
+        controlsMenu.addItem(NSMenuItem.separator())
+
+        let randomItem = NSMenuItem(title: "Random Image", action: #selector(randomImageAction), keyEquivalent: "j")
+        randomItem.keyEquivalentModifierMask = [.command]
+        randomItem.toolTip = "A random image from the images, folders and archives in the current location"
+        controlsMenu.addItem(randomItem)
+
+        let randomSelectedItem = NSMenuItem(title: "Random Image in Selected Folder / Archive", action: #selector(randomImageInSelectionAction), keyEquivalent: "j")
+        randomSelectedItem.keyEquivalentModifierMask = [.command, .option]
+        controlsMenu.addItem(randomSelectedItem)
+
+        controlsMenu.addItem(NSMenuItem.separator())
+
         let enterItem = NSMenuItem(title: "Enter / Activate Selected Item", action: #selector(activateSelectedItemAction), keyEquivalent: "\r")
         controlsMenu.addItem(enterItem)
 
@@ -460,6 +473,14 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func prevSiblingAction() {
         windowController?.splitVC.selectPreviousHierarchyItem()
+    }
+
+    @objc private func randomImageAction() {
+        windowController?.splitVC.showRandomImage(scope: .currentLocation)
+    }
+
+    @objc private func randomImageInSelectionAction() {
+        windowController?.splitVC.showRandomImage(scope: .selectedItem)
     }
 
     @objc private func activateSelectedItemAction() {
