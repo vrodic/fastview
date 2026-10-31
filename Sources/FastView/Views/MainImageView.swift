@@ -79,6 +79,21 @@ private class OrientedImageView: NSView {
     }
 }
 
+/// Cancellation flag for a background object removal, safe to read from any thread.
+private final class RemovalTicket {
+    private let lock = NSLock()
+    private var cancelled = false
+
+    var isCancelled: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return cancelled
+    }
+
+    func cancel() {
+        lock.lock(); cancelled = true; lock.unlock()
+    }
+}
+
 private class ZoomingScrollView: NSScrollView {
     weak var ownerImageView: MainImageView?
 
@@ -153,6 +168,14 @@ public class MainImageView: NSView {
 
     private var selectionPath: [CGPoint] = []
     private var isDrawingSelection: Bool = false
+    /// Whether the next freehand outline outlines an area to remove instead of a region to detect in.
+    private var outlineRemovesArea = false
+    /// The image as loaded, while `rawImage` shows it with objects removed.
+    public private(set) var uneditedImage: NSImage?
+    /// The running removal; a new image or removal cancels it.
+    private var removalTicket: RemovalTicket?
+    /// Called with the new image after an object is removed or the original restored.
+    public var onImageEdited: ((NSImage) -> Void)?
     /// The cropped image, the crop as fractions of the oriented image (top-left origin), and the orientation.
     public var onRegionSelectedForDetection: ((NSImage, CGRect, ImageOrientation) -> Void)?
 
@@ -399,6 +422,8 @@ public class MainImageView: NSView {
 
     public func setImage(_ image: NSImage?, keepZoom: Bool = true) {
         hideLoading()
+        removalTicket?.cancel()
+        uneditedImage = nil
         self.rawImage = image
         updateTransformedImage(keepZoom: keepZoom)
     }
@@ -500,6 +525,21 @@ public class MainImageView: NSView {
 
         menu.addItem(NSMenuItem.separator())
 
+        menu.addItem(NSMenuItem.separator())
+        let removeItem = NSMenuItem(title: "Remove Foreground Object from Background", action: #selector(contextRemoveForegroundAction(_:)), keyEquivalent: "")
+        removeItem.target = self
+        if #unavailable(macOS 14.0) { removeItem.isEnabled = false }
+        menu.addItem(removeItem)
+        let removeAreaItem = NSMenuItem(title: "Remove Outlined Area from Background…", action: #selector(contextRemoveOutlinedAction(_:)), keyEquivalent: "")
+        removeAreaItem.target = self
+        menu.addItem(removeAreaItem)
+        if uneditedImage != nil {
+            let restoreItem = NSMenuItem(title: "Restore Original Image", action: #selector(contextRestoreOriginalAction(_:)), keyEquivalent: "")
+            restoreItem.target = self
+            menu.addItem(restoreItem)
+        }
+
+        menu.addItem(NSMenuItem.separator())
         let copyItem = NSMenuItem(title: "Copy Image to Clipboard", action: #selector(contextCopyImageAction(_:)), keyEquivalent: "")
         copyItem.target = self
         menu.addItem(copyItem)
@@ -531,7 +571,82 @@ public class MainImageView: NSView {
     @objc private func contextFlipVAction(_ sender: NSMenuItem) { flipVertical() }
     @objc private func contextResetOrientationAction(_ sender: NSMenuItem) { resetOrientation() }
 
+    @objc private func contextRemoveForegroundAction(_ sender: NSMenuItem) {
+        removeObject(outline: nil)
+    }
+
+    @objc private func contextRemoveOutlinedAction(_ sender: NSMenuItem) {
+        outlineRemovesArea = true
+        isFreehandSelectionMode = true
+        selectionPath = []
+        updateOverlay()
+    }
+
+    @objc private func contextRestoreOriginalAction(_ sender: NSMenuItem) {
+        guard let original = uneditedImage else { return }
+        removalTicket?.cancel()
+        hideLoading()
+        uneditedImage = nil
+        rawImage = original
+        updateTransformedImage(keepZoom: true)
+        onImageEdited?(original)
+    }
+
+    /// Removes the detected foreground (`outline` nil) or the outlined area (fractions of the raw image,
+    /// bottom-left origin) and shows the filled image.
+    private func removeObject(outline: [CGPoint]?) {
+        guard let raw = rawImage else { return }
+        removalTicket?.cancel()
+        let ticket = RemovalTicket()
+        removalTicket = ticket
+        let engineName = ObjectRemovalEngine.effective == .aiModel ? "AI model" : "patch fill"
+        beginLoading(statusText: "Removing object (\(engineName))…")
+        ObjectRemover.remove(from: raw, outline: outline, isCancelled: { ticket.isCancelled }) { [weak self] image, message in
+            guard let self = self, self.removalTicket === ticket else { return }
+            self.removalTicket = nil
+            self.hideLoading()
+            guard let image = image else {
+                if let message = message { NSSound.beep(); self.showRemovalMessage(message) }
+                return
+            }
+            if self.uneditedImage == nil { self.uneditedImage = raw }
+            self.rawImage = image
+            self.updateTransformedImage(keepZoom: true)
+            self.onImageEdited?(image)
+        }
+    }
+
+    private func showRemovalMessage(_ message: String) {
+        let alert = NSAlert()
+        alert.messageText = "Could Not Remove Object"
+        alert.informativeText = message
+        if let window = window { alert.beginSheetModal(for: window) } else { alert.runModal() }
+    }
+
+    /// Maps the outline from view coordinates to fractions of the raw image (bottom-left origin),
+    /// undoing the display orientation.
+    private func outlineInRawImage(_ path: [CGPoint]) -> [CGPoint]? {
+        guard let raw = rawImage, let size = displaySize, size.width > 0, size.height > 0 else { return nil }
+        let box = imageView.bounds
+        let scale = min(box.width / size.width, box.height / size.height)
+        let drawW = size.width * scale, drawH = size.height * scale
+        let rect = CGRect(x: box.midX - drawW / 2, y: box.midY - drawH / 2, width: drawW, height: drawH)
+        let radians = -orientation.rotationDegrees * .pi / 180.0
+        let c = cos(radians), sn = sin(radians)
+        return path.map { viewPoint in
+            let p = imageView.convert(viewPoint, from: self)
+            // Centred, in oriented image units.
+            var x = ((p.x - rect.minX) / rect.width - 0.5) * size.width
+            var y = ((p.y - rect.minY) / rect.height - 0.5) * size.height
+            if orientation.isFlippedHorizontal { x = -x }
+            if orientation.isFlippedVertical { y = -y }
+            let rx = x * c - y * sn, ry = x * sn + y * c
+            return CGPoint(x: rx / raw.size.width + 0.5, y: ry / raw.size.height + 0.5)
+        }
+    }
+
     @objc private func contextDrawSelectionAction(_ sender: NSMenuItem) {
+        outlineRemovesArea = false
         isFreehandSelectionMode = true
         selectionPath = []
         updateOverlay()
@@ -620,6 +735,14 @@ public class MainImageView: NSView {
     }
 
     private func processFreehandSelection() {
+        if outlineRemovesArea {
+            outlineRemovesArea = false
+            let outline = selectionPath.count > 2 ? outlineInRawImage(selectionPath) : nil
+            selectionPath = []
+            updateOverlay()
+            if let outline = outline { removeObject(outline: outline) }
+            return
+        }
         guard let img = currentImage, selectionPath.count > 2 else {
             selectionPath = []
             updateOverlay()

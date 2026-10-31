@@ -450,13 +450,25 @@ public class CombiningCanvasView: NSView {
     }
 
     private func drawForegroundObjectBody(_ obj: ForegroundObject, in rect: CGRect, context: CGContext) {
-        context.saveGState()
-
-        let baseImg = obj.image
+        let baseImg = obj.effects.featherEdges ? featheredImage(of: obj) : obj.image
         let effectiveScale = defaultFitScale(for: obj)
         let targetWidth = baseImg.size.width * effectiveScale
         let targetHeight = baseImg.size.height * effectiveScale
 
+        if obj.effects.shadow, let shadow = cachedEffect(.shadow, of: obj) {
+            // Falls straight down in canvas space, whatever the object's rotation.
+            context.saveGState()
+            context.translateBy(x: obj.position.x, y: obj.position.y - max(targetWidth, targetHeight) * ObjectEffectsRenderer.shadowDrop)
+            context.rotate(by: obj.rotationDegrees * .pi / 180.0)
+            context.scaleBy(x: obj.isFlippedHorizontal ? -1 : 1, y: obj.isFlippedVertical ? -1 : 1)
+            let pad = ObjectEffectsRenderer.shadowPadding
+            shadow.draw(in: CGRect(x: -targetWidth * (0.5 + pad), y: -targetHeight * (0.5 + pad),
+                                   width: targetWidth * (1 + 2 * pad), height: targetHeight * (1 + 2 * pad)),
+                        from: .zero, operation: .sourceOver, fraction: 0.6)
+            context.restoreGState()
+        }
+
+        context.saveGState()
         context.translateBy(x: obj.position.x, y: obj.position.y)
         context.rotate(by: obj.rotationDegrees * .pi / 180.0)
 
@@ -477,6 +489,112 @@ public class CombiningCanvasView: NSView {
 
         context.restoreGState()
     }
+
+    // MARK: - Effects
+
+    private enum EffectKind { case feather, shadow }
+    private struct EffectKey: Hashable { let id: UUID; let kind: EffectKind }
+
+    /// Feathered copies and shadows of object images, by object, for the image they were made from.
+    private var effectCache: [EffectKey: (source: ObjectIdentifier, image: NSImage)] = [:]
+    private var effectPending: Set<EffectKey> = []
+
+    /// The object's image with feathered edges; the plain image until the feathered one is ready.
+    private func featheredImage(of obj: ForegroundObject) -> NSImage {
+        cachedEffect(.feather, of: obj) ?? obj.image
+    }
+
+    /// A cached effect image for the object's current image; nil while it is being made (the canvas redraws when ready).
+    private func cachedEffect(_ kind: EffectKind, of obj: ForegroundObject) -> NSImage? {
+        let key = EffectKey(id: obj.id, kind: kind)
+        let source = ObjectIdentifier(obj.image)
+        if let cached = effectCache[key], cached.source == source { return cached.image }
+        if !effectPending.contains(key) {
+            effectPending.insert(key)
+            let image = obj.image
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                let made = kind == .feather ? ObjectEffectsRenderer.feather(image) : ObjectEffectsRenderer.shadow(of: image)
+                DispatchQueue.main.async {
+                    guard let self = self else { return }
+                    self.effectPending.remove(key)
+                    if let made = made { self.effectCache[key] = (source, made) }
+                    self.needsDisplay = true
+                }
+            }
+        }
+        return nil
+    }
+
+    /// The object's corners' bounding box on the canvas.
+    func canvasBounds(of obj: ForegroundObject) -> CGRect {
+        let scale = defaultFitScale(for: obj)
+        let w = obj.image.size.width * scale, h = obj.image.size.height * scale
+        let rad = obj.rotationDegrees * .pi / 180.0
+        let corners = [(-w / 2, -h / 2), (w / 2, -h / 2), (w / 2, h / 2), (-w / 2, h / 2)].map { x, y in
+            CGPoint(x: obj.position.x + x * cos(rad) - y * sin(rad), y: obj.position.y + x * sin(rad) + y * cos(rad))
+        }
+        let xs = corners.map(\.x), ys = corners.map(\.y)
+        return CGRect(x: xs.min()!, y: ys.min()!, width: xs.max()! - xs.min()!, height: ys.max()! - ys.min()!)
+    }
+
+    /// Draws the objects at `indices` (in z order) into an RGBA bitmap of `area` (canvas points) at `scale`
+    /// pixels per point, over `background` (transparent when nil), with their effects.
+    func renderObjects(_ indices: [Int], area: CGRect, scale: CGFloat, background: NSColor?) -> RGBABuffer? {
+        let w = max(1, Int((area.width * scale).rounded())), h = max(1, Int((area.height * scale).rounded()))
+        var pixels = [UInt8](repeating: 0, count: w * h * 4)
+        let ok: Bool = pixels.withUnsafeMutableBytes { bytes in
+            guard let ctx = CGContext(data: bytes.baseAddress, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+                                      space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return false }
+            if let background = background {
+                ctx.setFillColor(background.usingColorSpace(.sRGB)?.cgColor ?? background.cgColor)
+                ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
+            }
+            ctx.interpolationQuality = .high
+            ctx.scaleBy(x: scale, y: scale)
+            ctx.translateBy(x: -area.minX, y: -area.minY)
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.current = NSGraphicsContext(cgContext: ctx, flipped: false)
+            for i in indices where i >= 0 && i < objects.count {
+                drawForegroundObjectBody(objects[i], in: bounds, context: ctx)
+            }
+            NSGraphicsContext.restoreGraphicsState()
+            return true
+        }
+        return ok ? RGBABuffer(width: w, height: h, pixels: pixels) : nil
+    }
+
+    /// Matches the object's colours and light to the objects beneath it, led by skin tones.
+    public func harmonizeWithObjectsBelow(_ index: Int) {
+        guard index > 0, index < objects.count else {
+            onEffectMessage?("There are no objects beneath this one to match.")
+            return
+        }
+        let obj = objects[index]
+        let area = canvasBounds(of: obj).insetBy(dx: -canvasBounds(of: obj).width * 0.25, dy: -canvasBounds(of: obj).height * 0.25).intersection(bounds)
+        guard !area.isNull, let below = renderObjects(Array(0..<index), area: area, scale: 1, background: nil),
+              let belowImage = below.makeCGImage() else { return }
+        let reference = NSImage(cgImage: belowImage, size: area.size)
+        let base = obj.unadjustedImage ?? obj.image
+        let id = obj.id
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let refProfile = ColorMatcher.profile(of: reference), let profile = ColorMatcher.profile(of: base) else {
+                DispatchQueue.main.async { self?.onEffectMessage?("There is too little beneath this object to match.") }
+                return
+            }
+            let match = ColorMatcher.adjustment(matching: profile, to: refProfile)
+            guard let adjusted = ColorMatcher.apply(match.adjustment, to: base) else { return }
+            DispatchQueue.main.async {
+                guard let self = self, let i = self.objects.firstIndex(where: { $0.id == id }) else { return }
+                self.objects[i].unadjustedImage = base
+                self.objects[i].image = adjusted
+                self.objects[i].colorAdjustment = match.adjustment
+            }
+        }
+    }
+
+    /// Short notices from effect actions, for the status bar.
+    public var onEffectMessage: ((String) -> Void)?
+
 
     private func drawSelectedObjectHandles(_ obj: ForegroundObject, in rect: CGRect, context: CGContext) {
         context.saveGState()
@@ -709,6 +827,26 @@ public class CombiningCanvasView: NSView {
         resetColorsItem.isEnabled = objects[idx].colorAdjustment != nil
         menu.addItem(resetColorsItem)
 
+        let harmonizeItem = NSMenuItem(title: "Match Colors and Light to Objects Below", action: #selector(contextHarmonizeAction(_:)), keyEquivalent: "")
+        harmonizeItem.target = self
+        harmonizeItem.representedObject = idx
+        harmonizeItem.isEnabled = idx > 0
+        menu.addItem(harmonizeItem)
+
+        menu.addItem(NSMenuItem.separator())
+
+        let shadowItem = NSMenuItem(title: "Drop Shadow", action: #selector(contextToggleShadowAction(_:)), keyEquivalent: "")
+        shadowItem.target = self
+        shadowItem.representedObject = idx
+        shadowItem.state = objects[idx].effects.shadow ? .on : .off
+        menu.addItem(shadowItem)
+
+        let featherItem = NSMenuItem(title: "Feather Edges", action: #selector(contextToggleFeatherAction(_:)), keyEquivalent: "")
+        featherItem.target = self
+        featherItem.representedObject = idx
+        featherItem.state = objects[idx].effects.featherEdges ? .on : .off
+        menu.addItem(featherItem)
+
         menu.addItem(NSMenuItem.separator())
 
         let flipHItem = NSMenuItem(title: "Flip Object Horizontal", action: #selector(contextFlipHorizontalAction(_:)), keyEquivalent: "")
@@ -813,6 +951,21 @@ public class CombiningCanvasView: NSView {
     @objc private func contextMatchColorsAction(_ sender: NSMenuItem) {
         guard let idx = sender.representedObject as? Int else { return }
         matchColorsOfOtherObjects(to: idx)
+    }
+
+    @objc private func contextHarmonizeAction(_ sender: NSMenuItem) {
+        guard let idx = sender.representedObject as? Int else { return }
+        harmonizeWithObjectsBelow(idx)
+    }
+
+    @objc private func contextToggleShadowAction(_ sender: NSMenuItem) {
+        guard let idx = sender.representedObject as? Int, idx < objects.count else { return }
+        objects[idx].effects.shadow.toggle()
+    }
+
+    @objc private func contextToggleFeatherAction(_ sender: NSMenuItem) {
+        guard let idx = sender.representedObject as? Int, idx < objects.count else { return }
+        objects[idx].effects.featherEdges.toggle()
     }
 
     @objc private func contextResetColorsAction(_ sender: NSMenuItem) {

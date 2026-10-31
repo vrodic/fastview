@@ -28,6 +28,8 @@ public struct SavedForegroundObjectState: Codable {
     public var colorAdjustment: ColorAdjustment?
     /// Carves applied to the detected object image, in order.
     public var carves: [ObjectCarve]?
+    /// Shadow and edge feathering; nil when neither is on.
+    public var effects: ObjectEffects?
 
     public init(
         itemPath: String? = nil,
@@ -45,7 +47,8 @@ public struct SavedForegroundObjectState: Codable {
         crop: CGRect? = nil,
         cropOrientation: ImageOrientation? = nil,
         colorAdjustment: ColorAdjustment? = nil,
-        carves: [ObjectCarve] = []
+        carves: [ObjectCarve] = [],
+        effects: ObjectEffects = ObjectEffects()
     ) {
         self.itemPath = itemPath
         self.archivePath = archivePath
@@ -68,6 +71,7 @@ public struct SavedForegroundObjectState: Codable {
         self.cropFlipV = cropOrientation?.isFlippedVertical
         self.colorAdjustment = colorAdjustment
         self.carves = carves.isEmpty ? nil : carves
+        self.effects = effects == ObjectEffects() ? nil : effects
     }
 
     public var crop: CGRect? {

@@ -230,6 +230,9 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
             self?.restorePaneImageSet(pane: pane, hasImage: hasImage, itemPath: itemPath)
         }
 
+        dualCanvasVC.combiningCanvasView.onEffectMessage = { [weak self] message in
+            self?.statusBarView.showMessage(message)
+        }
         dualCanvasVC.combiningCanvasView.onColorMatchFinished = { [weak self] bySkin, total, referenceHasSkin in
             let message: String
             if !referenceHasSkin {
@@ -491,7 +494,8 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
                     crop: fg.sourceCrop,
                     cropOrientation: fg.sourceOrientation,
                     colorAdjustment: fg.colorAdjustment,
-                    carves: fg.carves
+                    carves: fg.carves,
+                    effects: fg.effects
                 )
             }
             // Large enough to stand in for the canvas while the combination restores.
@@ -650,6 +654,7 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
                 fg.rotationDegrees = CGFloat(savedObj.rot)
                 fg.isFlippedHorizontal = savedObj.flipH
                 fg.isFlippedVertical = savedObj.flipV
+                fg.effects = savedObj.effects ?? ObjectEffects()
                 var norm: CGPoint? = nil
                 if let nx = savedObj.normX, let ny = savedObj.normY {
                     norm = CGPoint(x: nx, y: ny)

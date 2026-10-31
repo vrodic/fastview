@@ -3,7 +3,7 @@ import AppKit
 var globalAppDelegate: AppDelegate?
 
 @main
-public class AppDelegate: NSObject, NSApplicationDelegate {
+public class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, NSMenuDelegate {
     public var windowController: MainWindowController?
     private var restoreCombinationSubmenu: NSMenu?
     private var recentDirsSubmenu: NSMenu?
@@ -263,6 +263,28 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         lowMemItem.state = MemoryLRUCache.shared.isLowMemoryMode ? .on : .off
         optionsMenu.addItem(lowMemItem)
 
+        optionsMenu.addItem(NSMenuItem.separator())
+        let removalItem = NSMenuItem(title: "Object Removal", action: nil, keyEquivalent: "")
+        let removalSubmenu = NSMenu(title: "Object Removal")
+        removalSubmenu.addItem(withTitle: "Patch Fill (Built-in)", action: #selector(usePatchFillAction(_:)), keyEquivalent: "")
+        removalSubmenu.addItem(withTitle: "AI Model (LaMa)", action: #selector(useAIModelAction(_:)), keyEquivalent: "")
+        removalItem.submenu = removalSubmenu
+        optionsMenu.addItem(removalItem)
+
+        let modelsItem = NSMenuItem(title: "AI Models", action: nil, keyEquivalent: "")
+        let modelsSubmenu = NSMenu(title: "AI Models")
+        for model in [LamaInpainter.shared] as [DownloadableModel] {
+            let download = NSMenuItem(title: "Download the \(model.displayName)…", action: #selector(downloadModelAction(_:)), keyEquivalent: "")
+            download.representedObject = model
+            modelsSubmenu.addItem(download)
+            let delete = NSMenuItem(title: "Delete the \(model.displayName)", action: #selector(deleteModelAction(_:)), keyEquivalent: "")
+            delete.representedObject = model
+            modelsSubmenu.addItem(delete)
+        }
+        modelsSubmenu.delegate = self
+        modelsItem.submenu = modelsSubmenu
+        optionsMenu.addItem(modelsItem)
+
         // 5. Controls Menu
         let controlsMenuItem = NSMenuItem()
         mainMenu.addItem(controlsMenuItem)
@@ -446,6 +468,33 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         sender.state = newState ? .on : .off
         FolderStatsCalculator.clearCache()
         windowController?.splitVC.reloadDirectoryContentsPublic()
+    }
+
+    @objc private func usePatchFillAction(_ sender: NSMenuItem) {
+        ObjectRemovalEngine.current = .patchFill
+    }
+
+    @objc private func useAIModelAction(_ sender: NSMenuItem) {
+        if LamaInpainter.shared.isInstalled {
+            ObjectRemovalEngine.current = .aiModel
+            return
+        }
+        ModelDownloadPanel.run(LamaInpainter.shared) { installed in
+            if installed { ObjectRemovalEngine.current = .aiModel }
+        }
+    }
+
+    @objc private func downloadModelAction(_ sender: NSMenuItem) {
+        guard let model = sender.representedObject as? DownloadableModel else { return }
+        ModelDownloadPanel.run(model) { installed in
+            if installed, model === LamaInpainter.shared { ObjectRemovalEngine.current = .aiModel }
+        }
+    }
+
+    @objc private func deleteModelAction(_ sender: NSMenuItem) {
+        guard let model = sender.representedObject as? DownloadableModel else { return }
+        // Object removal falls back to the patch fill on its own once the model is gone.
+        _ = ModelDownloadPanel.confirmDelete(model)
     }
 
     @objc private func toggleLowMemoryModeAction(_ sender: NSMenuItem) {
@@ -683,10 +732,36 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         CombinationStateManager.clearAll()
     }
 
+    /// AI Models: shows Download or Delete for each model, as it is installed or not.
+    public func menuNeedsUpdate(_ menu: NSMenu) {
+        for item in menu.items {
+            guard let model = item.representedObject as? DownloadableModel else { continue }
+            if item.action == #selector(downloadModelAction(_:)) {
+                item.isHidden = model.isInstalled
+                item.title = model.isDownloading ? "Downloading the \(model.displayName)…" : "Download the \(model.displayName) (\(model.approximateDownloadSize))…"
+            } else if item.action == #selector(deleteModelAction(_:)) {
+                item.isHidden = !model.isInstalled
+                item.title = "Delete the \(model.displayName) (\(model.installedSize ?? model.approximateDownloadSize))…"
+            }
+        }
+    }
+
     public func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         if menuItem.action == #selector(toggleTrackViewedImagesAction(_:)) {
             menuItem.state = SQLiteCache.shared.isTrackingViewedImagesEnabled ? .on : .off
             return true
+        }
+        if menuItem.action == #selector(usePatchFillAction(_:)) {
+            menuItem.state = ObjectRemovalEngine.effective == .patchFill ? .on : .off
+            return true
+        }
+        if menuItem.action == #selector(useAIModelAction(_:)) {
+            menuItem.state = ObjectRemovalEngine.effective == .aiModel ? .on : .off
+            menuItem.title = LamaInpainter.shared.isInstalled ? "AI Model (LaMa)" : "AI Model (LaMa, download \(LamaInpainter.shared.approximateDownloadSize))…"
+            return !LamaInpainter.shared.isDownloading
+        }
+        if menuItem.action == #selector(downloadModelAction(_:)), let model = menuItem.representedObject as? DownloadableModel {
+            return !model.isDownloading
         }
         if menuItem.action == #selector(toggleLowMemoryModeAction(_:)) {
             menuItem.state = MemoryLRUCache.shared.isLowMemoryMode ? .on : .off

@@ -54,6 +54,8 @@ public class DualCanvasViewController: NSViewController, CombiningToolbarDelegat
             guard let self else { return }
             self.combiningCanvasView.orientation2 = self.imageView2.orientation
         }
+        imageView1.onImageEdited = { [weak self] image in self?.combiningCanvasView.image1 = image }
+        imageView2.onImageEdited = { [weak self] image in self?.combiningCanvasView.image2 = image }
         self.view = NSView()
         setupUI()
     }
@@ -156,6 +158,7 @@ public class DualCanvasViewController: NSViewController, CombiningToolbarDelegat
                 fg.rotationDegrees = existing.rotationDegrees
                 fg.isFlippedHorizontal = existing.isFlippedHorizontal
                 fg.isFlippedVertical = existing.isFlippedVertical
+                fg.effects = existing.effects
                 fg.detectionMode = mode
                 ForegroundSource.applyColorAdjustment(existing.colorAdjustment, to: fg) { adjusted in
                     guard let idx = canvas.objects.firstIndex(where: { $0.id == target.id }) else { return }
@@ -298,6 +301,7 @@ public class DualCanvasViewController: NSViewController, CombiningToolbarDelegat
                 fg.rotationDegrees = existing.rotationDegrees
                 fg.isFlippedHorizontal = existing.isFlippedHorizontal
                 fg.isFlippedVertical = existing.isFlippedVertical
+                fg.effects = existing.effects
             }
             canvas.setForegroundObject(fg, forPane: pane)
         }

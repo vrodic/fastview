@@ -9,6 +9,19 @@ public enum VisionDetectionMode: String, CaseIterable {
     case fullRegion = "Full Region"
 }
 
+/// How an object is drawn into the combination, beyond its pixels.
+public struct ObjectEffects: Codable, Equatable {
+    /// A soft shadow under the object, falling straight down onto whatever is below.
+    public var shadow = false
+    /// Edges faded over a few pixels instead of the mask's hard cut.
+    public var featherEdges = false
+
+    public init(shadow: Bool = false, featherEdges: Bool = false) {
+        self.shadow = shadow
+        self.featherEdges = featherEdges
+    }
+}
+
 public struct ForegroundObject {
     public var id: UUID = UUID()
     public var itemPath: String? = nil
@@ -37,6 +50,7 @@ public struct ForegroundObject {
     /// (fractions, bottom-left origin).
     public var imageBeforeCarving: NSImage? = nil
     public var carvedRect = CGRect(x: 0, y: 0, width: 1, height: 1)
+    public var effects = ObjectEffects()
 
     public init(
         id: UUID = UUID(),
