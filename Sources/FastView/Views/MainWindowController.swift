@@ -87,7 +87,11 @@ public class MainWindowController: NSWindowController, NSWindowDelegate {
             case 123: // Left Arrow
                 self.splitVC.selectPreviousHierarchyItem()
                 return nil
-            case 36: // Return / Enter
+            case 36, 76: // Return / Enter (Cmd: toggle full screen)
+                if isCmdPressed {
+                    self.window?.toggleFullScreen(nil)
+                    return nil
+                }
                 self.splitVC.activateSelectedItem()
                 return nil
             case 53, 51: // Escape or Backspace

@@ -37,6 +37,12 @@ public struct ImageOrientation {
         isFlippedVertical = false
     }
 
+    /// Size of an image of `size` after this orientation's rotation.
+    public func orientedSize(_ size: NSSize) -> NSSize {
+        let norm = ((Int(rotationDegrees) % 360) + 360) % 360
+        return (norm == 90 || norm == 270) ? NSSize(width: size.height, height: size.width) : size
+    }
+
     public var isIdentity: Bool {
         let norm = ((Int(rotationDegrees) % 360) + 360) % 360
         return norm == 0 && !isFlippedHorizontal && !isFlippedVertical

@@ -10,26 +10,22 @@ public class CombiningCanvasView: NSView {
 
     public var image1: NSImage? {
         didSet {
-            updateCachedTransformedImage1()
             needsDisplay = true
         }
     }
     public var image2: NSImage? {
         didSet {
-            updateCachedTransformedImage2()
             needsDisplay = true
         }
     }
 
     public var orientation1 = ImageOrientation() {
         didSet {
-            updateCachedTransformedImage1()
             needsDisplay = true
         }
     }
     public var orientation2 = ImageOrientation() {
         didSet {
-            updateCachedTransformedImage2()
             needsDisplay = true
         }
     }
@@ -237,18 +233,6 @@ public class CombiningCanvasView: NSView {
         }
     }
 
-    // Cached Transformed Images
-    private var cachedTransformedImage1: NSImage?
-    private var cachedTransformedImage2: NSImage?
-
-    private func updateCachedTransformedImage1() {
-        cachedTransformedImage1 = image1?.transformed(with: orientation1)
-    }
-
-    private func updateCachedTransformedImage2() {
-        cachedTransformedImage2 = image2?.transformed(with: orientation2)
-    }
-
     // Interactivity
     public var selectedObjectIndex: Int? = nil {
         didSet {
@@ -373,14 +357,14 @@ public class CombiningCanvasView: NSView {
     private func drawSplitView(in rect: CGRect, context: CGContext) {
         let halfWidth = rect.width / 2.0
 
-        if let img1 = cachedTransformedImage1 ?? image1?.transformed(with: orientation1) {
+        if let img1 = image1 {
             let rect1 = CGRect(x: 0, y: 0, width: halfWidth, height: rect.height)
-            drawAspectFit(image: img1, in: rect1, context: context)
+            drawAspectFit(image: img1, orientation: orientation1, in: rect1, context: context)
         }
 
-        if let img2 = cachedTransformedImage2 ?? image2?.transformed(with: orientation2) {
+        if let img2 = image2 {
             let rect2 = CGRect(x: halfWidth, y: 0, width: halfWidth, height: rect.height)
-            drawAspectFit(image: img2, in: rect2, context: context)
+            drawAspectFit(image: img2, orientation: orientation2, in: rect2, context: context)
         }
 
         context.setStrokeColor(NSColor.separatorColor.cgColor)
@@ -392,16 +376,16 @@ public class CombiningCanvasView: NSView {
 
     // MARK: - Merge View with Alpha Gradient
     private func drawMergeView(in rect: CGRect, context: CGContext) {
-        let transformed1 = cachedTransformedImage1 ?? image1?.transformed(with: orientation1)
-        let transformed2 = cachedTransformedImage2 ?? image2?.transformed(with: orientation2)
+        let img1 = image1
+        let img2 = image2
 
-        if let img1 = transformed1 {
+        if let img1 = img1 {
             let leftWidth = rect.width * (mergeLeftPercent / 100.0)
             let leftRect = CGRect(x: 0, y: 0, width: max(leftWidth, 10), height: rect.height)
-            drawAspectFill(image: img1, in: leftRect, context: context)
+            drawAspectFill(image: img1, orientation: orientation1, in: leftRect, context: context)
         }
 
-        if let img2 = transformed2 {
+        if let img2 = img2 {
             let rightWidth = rect.width * (mergeRightPercent / 100.0)
             let rightX = rect.width - rightWidth
             let rightRect = CGRect(x: rightX, y: 0, width: max(rightWidth, 10), height: rect.height)
@@ -420,7 +404,7 @@ public class CombiningCanvasView: NSView {
 
                     context.clip(to: rightRect)
                     context.beginTransparencyLayer(auxiliaryInfo: nil)
-                    drawAspectFill(image: img2, in: rightRect, context: context)
+                    drawAspectFill(image: img2, orientation: orientation2, in: rightRect, context: context)
 
                     context.setBlendMode(.destinationIn)
                     context.drawLinearGradient(gradient, start: blendStart, end: blendEnd, options: [.drawsBeforeStartLocation, .drawsAfterEndLocation])
@@ -430,7 +414,7 @@ public class CombiningCanvasView: NSView {
                 }
             }
 
-            drawAspectFill(image: img2, in: rightRect, context: context)
+            drawAspectFill(image: img2, orientation: orientation2, in: rightRect, context: context)
             context.restoreGState()
         }
     }
@@ -441,11 +425,11 @@ public class CombiningCanvasView: NSView {
         context.setAlpha(0.35)
         let halfWidth = rect.width / 2.0
 
-        if showBackground1, let img1 = cachedTransformedImage1 ?? image1?.transformed(with: orientation1) {
-            drawAspectFit(image: img1, in: CGRect(x: 0, y: 0, width: halfWidth, height: rect.height), context: context)
+        if showBackground1, let img1 = image1 {
+            drawAspectFit(image: img1, orientation: orientation1, in: CGRect(x: 0, y: 0, width: halfWidth, height: rect.height), context: context)
         }
-        if showBackground2, let img2 = cachedTransformedImage2 ?? image2?.transformed(with: orientation2) {
-            drawAspectFit(image: img2, in: CGRect(x: halfWidth, y: 0, width: halfWidth, height: rect.height), context: context)
+        if showBackground2, let img2 = image2 {
+            drawAspectFit(image: img2, orientation: orientation2, in: CGRect(x: halfWidth, y: 0, width: halfWidth, height: rect.height), context: context)
         }
         context.restoreGState()
 
@@ -589,9 +573,22 @@ public class CombiningCanvasView: NSView {
         context.restoreGState()
     }
 
-    private func drawAspectFit(image: NSImage, in rect: CGRect, context: CGContext) {
-        guard rect.width > 0 && rect.height > 0 && image.size.width > 0 && image.size.height > 0 else { return }
-        let aspect = image.size.width / image.size.height
+    /// Draws `image` with `orientation` applied as a context transform, filling `target` (sized in oriented space).
+    private func drawOriented(image: NSImage, orientation: ImageOrientation, in target: CGRect, context: CGContext) {
+        let size = orientation.orientedSize(target.size)
+        context.saveGState()
+        context.translateBy(x: target.midX, y: target.midY)
+        if orientation.isFlippedHorizontal { context.scaleBy(x: -1.0, y: 1.0) }
+        if orientation.isFlippedVertical { context.scaleBy(x: 1.0, y: -1.0) }
+        context.rotate(by: orientation.rotationDegrees * .pi / 180.0)
+        image.draw(in: CGRect(x: -size.width / 2.0, y: -size.height / 2.0, width: size.width, height: size.height))
+        context.restoreGState()
+    }
+
+    private func drawAspectFit(image: NSImage, orientation: ImageOrientation, in rect: CGRect, context: CGContext) {
+        let imgSize = orientation.orientedSize(image.size)
+        guard rect.width > 0 && rect.height > 0 && imgSize.width > 0 && imgSize.height > 0 else { return }
+        let aspect = imgSize.width / imgSize.height
         var w = rect.width
         var h = w / aspect
         if h > rect.height {
@@ -600,12 +597,13 @@ public class CombiningCanvasView: NSView {
         }
         let x = rect.origin.x + (rect.width - w) / 2.0
         let y = rect.origin.y + (rect.height - h) / 2.0
-        image.draw(in: CGRect(x: x, y: y, width: w, height: h))
+        drawOriented(image: image, orientation: orientation, in: CGRect(x: x, y: y, width: w, height: h), context: context)
     }
 
-    private func drawAspectFill(image: NSImage, in rect: CGRect, context: CGContext) {
-        guard rect.width > 0 && rect.height > 0 && image.size.width > 0 && image.size.height > 0 else { return }
-        let aspect = image.size.width / image.size.height
+    private func drawAspectFill(image: NSImage, orientation: ImageOrientation, in rect: CGRect, context: CGContext) {
+        let imgSize = orientation.orientedSize(image.size)
+        guard rect.width > 0 && rect.height > 0 && imgSize.width > 0 && imgSize.height > 0 else { return }
+        let aspect = imgSize.width / imgSize.height
         var w = rect.width
         var h = w / aspect
         if h < rect.height {
@@ -617,7 +615,7 @@ public class CombiningCanvasView: NSView {
 
         context.saveGState()
         context.clip(to: rect)
-        image.draw(in: CGRect(x: x, y: y, width: w, height: h))
+        drawOriented(image: image, orientation: orientation, in: CGRect(x: x, y: y, width: w, height: h), context: context)
         context.restoreGState()
     }
 

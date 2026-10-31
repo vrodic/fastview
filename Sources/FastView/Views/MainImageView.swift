@@ -47,11 +47,43 @@ private class SelectionOverlayView: NSView {
     }
 }
 
+/// Draws the raw image aspect-fit with the orientation applied as a context transform,
+/// so rotating or flipping only redraws instead of re-rendering the bitmap.
+private class OrientedImageView: NSView {
+    var image: NSImage? { didSet { needsDisplay = true } }
+    var orientation = ImageOrientation() { didSet { needsDisplay = true } }
+
+    override var isFlipped: Bool { return false }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        return nil
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard let image = image, let context = NSGraphicsContext.current?.cgContext else { return }
+        let rawSize = image.size
+        guard rawSize.width > 0, rawSize.height > 0 else { return }
+        let size = orientation.orientedSize(rawSize)
+        let scale = min(bounds.width / size.width, bounds.height / size.height)
+        let drawW = rawSize.width * scale
+        let drawH = rawSize.height * scale
+
+        context.saveGState()
+        context.interpolationQuality = .high
+        context.translateBy(x: bounds.midX, y: bounds.midY)
+        if orientation.isFlippedHorizontal { context.scaleBy(x: -1.0, y: 1.0) }
+        if orientation.isFlippedVertical { context.scaleBy(x: 1.0, y: -1.0) }
+        context.rotate(by: orientation.rotationDegrees * .pi / 180.0)
+        image.draw(in: NSRect(x: -drawW / 2.0, y: -drawH / 2.0, width: drawW, height: drawH), from: .zero, operation: .sourceOver, fraction: 1.0)
+        context.restoreGState()
+    }
+}
+
 private class ZoomingScrollView: NSScrollView {
     weak var ownerImageView: MainImageView?
 
     override func scrollWheel(with event: NSEvent) {
-        if let owner = ownerImageView, owner.currentImage != nil {
+        if let owner = ownerImageView, owner.rawImage != nil {
             owner.handleScrollWheel(with: event)
         } else {
             super.scrollWheel(with: event)
@@ -60,12 +92,48 @@ private class ZoomingScrollView: NSScrollView {
 }
 
 public class MainImageView: NSView {
-    public private(set) var currentImage: NSImage?
+    /// The oriented image, rendered only when needed (copy, selection); display uses `rawImage` with a transform.
+    public var currentImage: NSImage? {
+        guard let raw = rawImage else { return nil }
+        if let cached = transformedCache { return cached }
+        let transformed = raw.transformed(with: orientation)
+        transformedCache = transformed
+        return transformed
+    }
+    private var transformedCache: NSImage?
+    /// Size of the image as displayed (rotation applied).
+    private var displaySize: NSSize? {
+        rawImage.map { orientation.orientedSize($0.size) }
+    }
     public private(set) var rawImage: NSImage?
     public var orientation = ImageOrientation() {
         didSet {
             updateTransformedImage(keepZoom: true)
+            updateOrientationBadge()
+            onOrientationChanged?()
         }
+    }
+    /// Called whenever `orientation` changes (menu, toolbar or context menu).
+    public var onOrientationChanged: (() -> Void)?
+    private lazy var orientationBadge: NSImageView = {
+        let config = NSImage.SymbolConfiguration(pointSize: 18, weight: .bold)
+        let v = NSImageView(image: NSImage(systemSymbolName: "rotate.right", accessibilityDescription: "Orientation changed")!.withSymbolConfiguration(config)!)
+        v.contentTintColor = .systemYellow
+        v.toolTip = "Orientation changed"
+        v.translatesAutoresizingMaskIntoConstraints = false
+        v.isHidden = true
+        addSubview(v)
+        NSLayoutConstraint.activate([
+            v.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
+            v.topAnchor.constraint(equalTo: topAnchor, constant: 8),
+            v.widthAnchor.constraint(equalToConstant: 32),
+            v.heightAnchor.constraint(equalToConstant: 32),
+        ])
+        return v
+    }()
+
+    private func updateOrientationBadge() {
+        orientationBadge.isHidden = orientation.isIdentity
     }
 
     public var zoomMode: ImageZoomMode = .fitToScreen {
@@ -91,7 +159,7 @@ public class MainImageView: NSView {
     private var isDraggingImage: Bool = false
     private var lastDragLocation: NSPoint = .zero
 
-    private let imageView = NSImageView()
+    private let imageView = OrientedImageView()
     private let scrollView = ZoomingScrollView()
     private let selectionOverlayView = SelectionOverlayView()
 
@@ -133,8 +201,6 @@ public class MainImageView: NSView {
         scrollView.minMagnification = 0.1
         scrollView.maxMagnification = 10.0
 
-        imageView.imageScaling = .scaleProportionallyUpOrDown
-        imageView.imageAlignment = .alignCenter
 
         selectionOverlayView.translatesAutoresizingMaskIntoConstraints = false
 
@@ -338,16 +404,15 @@ public class MainImageView: NSView {
     }
 
     private func updateTransformedImage(keepZoom: Bool = true) {
+        transformedCache = nil
+        imageView.orientation = orientation
         guard let raw = rawImage else {
-            self.currentImage = nil
             imageView.image = nil
             updateLayout()
             return
         }
 
-        let transformed = raw.transformed(with: orientation)
-        self.currentImage = transformed
-        imageView.image = transformed
+        if imageView.image !== raw { imageView.image = raw }
 
         if !keepZoom {
             scrollView.magnification = 1.0
@@ -396,7 +461,7 @@ public class MainImageView: NSView {
     }
 
     public func handleScrollWheel(with event: NSEvent) {
-        guard currentImage != nil, bounds.width > 0 && bounds.height > 0 else { return }
+        guard rawImage != nil, bounds.width > 0 && bounds.height > 0 else { return }
 
         let deltaY = event.hasPreciseScrollingDeltas ? event.scrollingDeltaY : event.deltaY
         guard abs(deltaY) > 0.01 else { return }
@@ -425,8 +490,9 @@ public class MainImageView: NSView {
     }
 
     override public func menu(for event: NSEvent) -> NSMenu? {
-        guard let img = currentImage else { return super.menu(for: event) }
+        guard rawImage != nil else { return super.menu(for: event) }
         let menu = NSMenu(title: "Main Image Menu")
+        menu.autoenablesItems = false
 
         let drawSelectionItem = NSMenuItem(title: "Draw Selection for Foreground Detection", action: #selector(contextDrawSelectionAction(_:)), keyEquivalent: "")
         drawSelectionItem.target = self
@@ -436,11 +502,34 @@ public class MainImageView: NSView {
 
         let copyItem = NSMenuItem(title: "Copy Image to Clipboard", action: #selector(contextCopyImageAction(_:)), keyEquivalent: "")
         copyItem.target = self
-        copyItem.representedObject = img
         menu.addItem(copyItem)
+
+        menu.addItem(NSMenuItem.separator())
+        let changed = !orientation.isIdentity
+        let entries: [(String, Selector)] = [
+            ("Rotate Right 90°", #selector(contextRotateRightAction(_:))),
+            ("Rotate Left 90°", #selector(contextRotateLeftAction(_:))),
+            ("Flip Horizontal", #selector(contextFlipHAction(_:))),
+            ("Flip Vertical", #selector(contextFlipVAction(_:))),
+            (changed ? "Reset Orientation (changed)" : "Reset Orientation", #selector(contextResetOrientationAction(_:))),
+        ]
+        for (title, sel) in entries {
+            let item = NSMenuItem(title: title, action: sel, keyEquivalent: "")
+            item.target = self
+            menu.addItem(item)
+        }
+        menu.items.last?.isEnabled = changed
+        if orientation.isFlippedHorizontal { menu.items[menu.items.count - 3].state = .on }
+        if orientation.isFlippedVertical { menu.items[menu.items.count - 2].state = .on }
 
         return menu
     }
+
+    @objc private func contextRotateRightAction(_ sender: NSMenuItem) { rotateRight() }
+    @objc private func contextRotateLeftAction(_ sender: NSMenuItem) { rotateLeft() }
+    @objc private func contextFlipHAction(_ sender: NSMenuItem) { flipHorizontal() }
+    @objc private func contextFlipVAction(_ sender: NSMenuItem) { flipVertical() }
+    @objc private func contextResetOrientationAction(_ sender: NSMenuItem) { resetOrientation() }
 
     @objc private func contextDrawSelectionAction(_ sender: NSMenuItem) {
         isFreehandSelectionMode = true
@@ -449,7 +538,7 @@ public class MainImageView: NSView {
     }
 
     @objc private func contextCopyImageAction(_ sender: NSMenuItem) {
-        guard let img = sender.representedObject as? NSImage else { return }
+        guard let img = currentImage else { return }
         NSPasteboard.general.copyImage(img)
     }
 
@@ -605,14 +694,13 @@ public class MainImageView: NSView {
     }
 
     public func setActualSize() {
-        guard let img = currentImage, bounds.width > 0, bounds.height > 0 else {
+        guard let imgSize = displaySize, bounds.width > 0, bounds.height > 0 else {
             zoomMode = .actualSize
             scrollView.magnification = 1.0
             updateLayout()
             return
         }
 
-        let imgSize = img.size
         let aspect = imgSize.width / max(1.0, imgSize.height)
         var fitW = bounds.width
         var fitH = fitW / aspect
@@ -640,7 +728,7 @@ public class MainImageView: NSView {
     }
 
     private func updateLayout() {
-        guard let img = currentImage else {
+        guard let imgSize = displaySize else {
             imageView.frame = .zero
             return
         }
@@ -657,10 +745,10 @@ public class MainImageView: NSView {
         case .actualSize:
             scrollView.hasHorizontalScroller = true
             scrollView.hasVerticalScroller = true
-            let originX = max(0, (containerSize.width - img.size.width) / 2)
-            let originY = max(0, (containerSize.height - img.size.height) / 2)
-            let width = max(containerSize.width, img.size.width)
-            let height = max(containerSize.height, img.size.height)
+            let originX = max(0, (containerSize.width - imgSize.width) / 2)
+            let originY = max(0, (containerSize.height - imgSize.height) / 2)
+            let width = max(containerSize.width, imgSize.width)
+            let height = max(containerSize.height, imgSize.height)
             imageView.frame = NSRect(x: originX, y: originY, width: width, height: height)
         case .custom:
             scrollView.hasHorizontalScroller = true

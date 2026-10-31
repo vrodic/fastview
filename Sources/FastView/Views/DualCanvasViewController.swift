@@ -46,6 +46,14 @@ public class DualCanvasViewController: NSViewController, CombiningToolbarDelegat
     private let splitContainer = NSStackView()
 
     override public func loadView() {
+        imageView1.onOrientationChanged = { [weak self] in
+            guard let self else { return }
+            self.combiningCanvasView.orientation1 = self.imageView1.orientation
+        }
+        imageView2.onOrientationChanged = { [weak self] in
+            guard let self else { return }
+            self.combiningCanvasView.orientation2 = self.imageView2.orientation
+        }
         self.view = NSView()
         setupUI()
     }
@@ -298,50 +306,40 @@ public class DualCanvasViewController: NSViewController, CombiningToolbarDelegat
     public func rotateRight(pane: Int) {
         if pane == 2 && isDualView {
             imageView2.rotateRight()
-            combiningCanvasView.orientation2 = imageView2.orientation
         } else {
             imageView1.rotateRight()
-            combiningCanvasView.orientation1 = imageView1.orientation
         }
     }
 
     public func rotateLeft(pane: Int) {
         if pane == 2 && isDualView {
             imageView2.rotateLeft()
-            combiningCanvasView.orientation2 = imageView2.orientation
         } else {
             imageView1.rotateLeft()
-            combiningCanvasView.orientation1 = imageView1.orientation
         }
     }
 
     public func flipHorizontal(pane: Int) {
         if pane == 2 && isDualView {
             imageView2.flipHorizontal()
-            combiningCanvasView.orientation2 = imageView2.orientation
         } else {
             imageView1.flipHorizontal()
-            combiningCanvasView.orientation1 = imageView1.orientation
         }
     }
 
     public func flipVertical(pane: Int) {
         if pane == 2 && isDualView {
             imageView2.flipVertical()
-            combiningCanvasView.orientation2 = imageView2.orientation
         } else {
             imageView1.flipVertical()
-            combiningCanvasView.orientation1 = imageView1.orientation
         }
     }
 
     public func resetOrientation(pane: Int) {
         if pane == 2 && isDualView {
             imageView2.resetOrientation()
-            combiningCanvasView.orientation2 = imageView2.orientation
         } else {
             imageView1.resetOrientation()
-            combiningCanvasView.orientation1 = imageView1.orientation
         }
     }
 
