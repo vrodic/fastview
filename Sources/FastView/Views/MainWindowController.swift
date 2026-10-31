@@ -62,6 +62,18 @@ public class MainWindowController: NSWindowController, NSWindowDelegate {
 
             let isControlPressed = event.modifierFlags.contains(.control)
 
+            // While censoring, Esc stops it and ⌘Z undoes the last censor.
+            if let censoring = self.splitVC.censoringImageView {
+                if event.keyCode == 53 {
+                    censoring.endCensoring()
+                    return nil
+                }
+                if isCmdPressed && event.charactersIgnoringModifiers?.lowercased() == "z" {
+                    censoring.undoCensor()
+                    return nil
+                }
+            }
+
             switch event.keyCode {
             case 125: // Down arrow
                 if isControlPressed {

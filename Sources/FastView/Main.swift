@@ -239,6 +239,8 @@ public class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation,
         viewMenu.addItem(withTitle: "Flip Horizontal", action: #selector(flipHorizontalAction), keyEquivalent: "")
         viewMenu.addItem(withTitle: "Flip Vertical", action: #selector(flipVerticalAction), keyEquivalent: "")
         viewMenu.addItem(withTitle: "Reset Orientation", action: #selector(resetOrientationAction), keyEquivalent: "")
+        viewMenu.addItem(NSMenuItem.separator())
+        viewMenu.addItem(withTitle: "Censor Parts of Image", action: #selector(toggleCensoringAction(_:)), keyEquivalent: "")
 
         viewMenu.addItem(NSMenuItem.separator())
         viewMenu.addItem(withTitle: "Toggle Full Screen", action: #selector(NSWindow.toggleFullScreen(_:)), keyEquivalent: "\r")
@@ -591,6 +593,10 @@ public class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation,
         windowController?.splitVC.flipVerticalForActivePane()
     }
 
+    @objc private func toggleCensoringAction(_ sender: NSMenuItem) {
+        windowController?.splitVC.toggleCensoringForActivePane()
+    }
+
     @objc private func resetOrientationAction() {
         windowController?.splitVC.resetOrientationForActivePane()
     }
@@ -762,6 +768,10 @@ public class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation,
         }
         if menuItem.action == #selector(downloadModelAction(_:)), let model = menuItem.representedObject as? DownloadableModel {
             return !model.isDownloading
+        }
+        if menuItem.action == #selector(toggleCensoringAction(_:)) {
+            menuItem.state = windowController?.splitVC.censoringImageView != nil ? .on : .off
+            return true
         }
         if menuItem.action == #selector(toggleLowMemoryModeAction(_:)) {
             menuItem.state = MemoryLRUCache.shared.isLowMemoryMode ? .on : .off

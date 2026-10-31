@@ -373,6 +373,24 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         UserDefaults.standard.set(false, forKey: "FastViewIsDualViewEnabled")
     }
 
+    /// The image view of the active pane.
+    private var activeImageView: MainImageView {
+        activePane == 2 && sidebarContainerVC.isDualView ? dualCanvasVC.imageView2 : dualCanvasVC.imageView1
+    }
+
+    /// The image view in censor mode, if any.
+    public var censoringImageView: MainImageView? {
+        [dualCanvasVC.imageView1, dualCanvasVC.imageView2].first { $0.isCensoring }
+    }
+
+    public func toggleCensoringForActivePane() {
+        if let censoring = censoringImageView {
+            censoring.endCensoring()
+        } else {
+            activeImageView.beginCensoring()
+        }
+    }
+
     public func rotateRightForActivePane() {
         dualCanvasVC.rotateRight(pane: activePane)
     }

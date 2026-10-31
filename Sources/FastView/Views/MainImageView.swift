@@ -176,6 +176,16 @@ public class MainImageView: NSView {
     private var removalTicket: RemovalTicket?
     /// Called with the new image after an object is removed or the original restored.
     public var onImageEdited: ((NSImage) -> Void)?
+
+    /// Censor mode: drags mark areas to hide, with the floating toolbar showing.
+    public private(set) var isCensoring = false
+    private var censorSettings = CensorSettings.saved
+    private var censorToolbar: CensorToolbarView?
+    /// Images before each censor of the current image, for Undo (most recent last).
+    private var censorUndo: [NSImage] = []
+    private var censorBusy = false
+    private var censorDragStart: CGPoint = .zero
+    private static let censorUndoLimit = 10
     /// The cropped image, the crop as fractions of the oriented image (top-left origin), and the orientation.
     public var onRegionSelectedForDetection: ((NSImage, CGRect, ImageOrientation) -> Void)?
 
@@ -294,7 +304,7 @@ public class MainImageView: NSView {
 
     private func updateOverlay() {
         selectionOverlayView.selectionPath = selectionPath
-        selectionOverlayView.isDrawing = (isFreehandSelectionMode || isDrawingSelection) && selectionPath.count > 1
+        selectionOverlayView.isDrawing = (isFreehandSelectionMode || isCensoring || isDrawingSelection) && selectionPath.count > 1
         selectionOverlayView.needsDisplay = true
     }
 
@@ -424,6 +434,8 @@ public class MainImageView: NSView {
         hideLoading()
         removalTicket?.cancel()
         uneditedImage = nil
+        censorUndo = []
+        censorToolbar?.canUndo = false
         self.rawImage = image
         updateTransformedImage(keepZoom: keepZoom)
     }
@@ -524,8 +536,10 @@ public class MainImageView: NSView {
         menu.addItem(drawSelectionItem)
 
         menu.addItem(NSMenuItem.separator())
+        let censorItem = NSMenuItem(title: isCensoring ? "Stop Censoring" : "Censor Parts of Image…", action: #selector(contextCensorAction(_:)), keyEquivalent: "")
+        censorItem.target = self
+        menu.addItem(censorItem)
 
-        menu.addItem(NSMenuItem.separator())
         let removeItem = NSMenuItem(title: "Remove Foreground Object from Background", action: #selector(contextRemoveForegroundAction(_:)), keyEquivalent: "")
         removeItem.target = self
         if #unavailable(macOS 14.0) { removeItem.isEnabled = false }
@@ -543,6 +557,9 @@ public class MainImageView: NSView {
         let copyItem = NSMenuItem(title: "Copy Image to Clipboard", action: #selector(contextCopyImageAction(_:)), keyEquivalent: "")
         copyItem.target = self
         menu.addItem(copyItem)
+        let saveItem = NSMenuItem(title: "Save Image As…", action: #selector(contextSaveImageAction(_:)), keyEquivalent: "")
+        saveItem.target = self
+        menu.addItem(saveItem)
 
         menu.addItem(NSMenuItem.separator())
         let changed = !orientation.isIdentity
@@ -587,6 +604,8 @@ public class MainImageView: NSView {
         removalTicket?.cancel()
         hideLoading()
         uneditedImage = nil
+        censorUndo = []
+        censorToolbar?.canUndo = false
         rawImage = original
         updateTransformedImage(keepZoom: true)
         onImageEdited?(original)
@@ -652,12 +671,147 @@ public class MainImageView: NSView {
         updateOverlay()
     }
 
+    @objc private func contextCensorAction(_ sender: NSMenuItem) {
+        if isCensoring { endCensoring() } else { beginCensoring() }
+    }
+
+    // MARK: - Censoring
+
+    public func beginCensoring() {
+        guard !isCensoring else { return }
+        isFreehandSelectionMode = false
+        isCensoring = true
+        let toolbar = CensorToolbarView(settings: censorSettings)
+        toolbar.canUndo = !censorUndo.isEmpty
+        toolbar.onSettingsChanged = { [weak self] settings in
+            self?.censorSettings = settings
+            CensorSettings.saved = settings
+        }
+        toolbar.onFaces = { [weak self] in self?.censorFaces() }
+        toolbar.onUndo = { [weak self] in self?.undoCensor() }
+        toolbar.onDone = { [weak self] in self?.endCensoring() }
+        addSubview(toolbar)
+        NSLayoutConstraint.activate([
+            toolbar.centerXAnchor.constraint(equalTo: centerXAnchor),
+            toolbar.topAnchor.constraint(equalTo: topAnchor, constant: 12),
+            toolbar.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 8),
+        ])
+        censorToolbar = toolbar
+        window?.makeFirstResponder(self)
+        window?.invalidateCursorRects(for: self)
+    }
+
+    public func endCensoring() {
+        guard isCensoring else { return }
+        isCensoring = false
+        isDrawingSelection = false
+        selectionPath = []
+        updateOverlay()
+        censorToolbar?.removeFromSuperview()
+        censorToolbar = nil
+        window?.invalidateCursorRects(for: self)
+    }
+
+    /// The censor shape from the drag start to `point`, in view coordinates.
+    private func censorShapePath(to point: CGPoint) -> [CGPoint] {
+        let rect = CGRect(x: min(censorDragStart.x, point.x), y: min(censorDragStart.y, point.y),
+                          width: abs(point.x - censorDragStart.x), height: abs(point.y - censorDragStart.y))
+        switch censorSettings.shape {
+        case .rectangle: return ImageCensor.rectangle(rect)
+        case .ellipse: return ImageCensor.ellipse(in: rect)
+        case .freehand: return selectionPath + [point]
+        }
+    }
+
+    /// Hides the areas (fractions of the raw image, bottom-left origin) in the current style.
+    private func applyCensor(_ areas: [[CGPoint]]) {
+        guard let raw = rawImage, !areas.isEmpty, !censorBusy else { return }
+        censorBusy = true
+        let settings = censorSettings
+        let o = orientation
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let result = ImageCensor.censor(raw, areas: areas, style: settings.style, strength: settings.strength,
+                                            textRotation: -o.rotationDegrees, textFlipped: (o.isFlippedHorizontal, o.isFlippedVertical))
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                self.censorBusy = false
+                // Dropped if another image was shown meanwhile.
+                guard let result = result, self.rawImage === raw else { return }
+                if self.uneditedImage == nil { self.uneditedImage = raw }
+                self.censorUndo.append(raw)
+                if self.censorUndo.count > Self.censorUndoLimit { self.censorUndo.removeFirst() }
+                self.censorToolbar?.canUndo = true
+                self.rawImage = result
+                self.updateTransformedImage(keepZoom: true)
+                self.onImageEdited?(result)
+            }
+        }
+    }
+
+    private func censorFaces() {
+        guard let raw = rawImage else { return }
+        censorToolbar?.show(message: "Looking for faces…")
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let faces = ImageCensor.faceAreas(in: raw)
+            DispatchQueue.main.async {
+                guard let self = self, self.rawImage === raw else { return }
+                if faces.isEmpty {
+                    self.censorToolbar?.show(message: "No faces found")
+                } else {
+                    self.censorToolbar?.show(message: faces.count == 1 ? "Censored 1 face" : "Censored \(faces.count) faces")
+                    self.applyCensor(faces)
+                }
+            }
+        }
+    }
+
+    /// Steps back one censor. Returns false when there is nothing to undo.
+    @discardableResult
+    public func undoCensor() -> Bool {
+        guard !censorBusy, let previous = censorUndo.popLast() else { return false }
+        if previous === uneditedImage { uneditedImage = nil }
+        censorToolbar?.canUndo = !censorUndo.isEmpty
+        rawImage = previous
+        updateTransformedImage(keepZoom: true)
+        onImageEdited?(previous)
+        return true
+    }
+
+    @objc private func contextSaveImageAction(_ sender: NSMenuItem) {
+        guard let image = currentImage, let window = window,
+              let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return }
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.png, .jpeg]
+        panel.nameFieldStringValue = uneditedImage != nil ? "Edited Image.png" : "Image.png"
+        panel.beginSheetModal(for: window) { response in
+            guard response == .OK, let url = panel.url else { return }
+            let isJPEG = ["jpg", "jpeg"].contains(url.pathExtension.lowercased())
+            DispatchQueue.global(qos: .userInitiated).async {
+                let rep = NSBitmapImageRep(cgImage: cg)
+                guard let data = rep.representation(using: isJPEG ? .jpeg : .png, properties: isJPEG ? [.compressionFactor: 0.92] : [:]) else { return }
+                do {
+                    try data.write(to: url)
+                } catch {
+                    DispatchQueue.main.async { NSAlert(error: error).runModal() }
+                }
+            }
+        }
+    }
+
     @objc private func contextCopyImageAction(_ sender: NSMenuItem) {
         guard let img = currentImage else { return }
         NSPasteboard.general.copyImage(img)
     }
 
     override public func mouseDown(with event: NSEvent) {
+        if isCensoring {
+            guard !censorBusy, rawImage != nil else { return }
+            censorDragStart = convert(event.locationInWindow, from: nil)
+            selectionPath = [censorDragStart]
+            isDrawingSelection = true
+            updateOverlay()
+            return
+        }
         if isFreehandSelectionMode {
             let pt = convert(event.locationInWindow, from: nil)
             selectionPath = [pt]
@@ -677,6 +831,12 @@ public class MainImageView: NSView {
     }
 
     override public func mouseDragged(with event: NSEvent) {
+        if isCensoring {
+            guard isDrawingSelection else { return }
+            selectionPath = censorShapePath(to: convert(event.locationInWindow, from: nil))
+            updateOverlay()
+            return
+        }
         if isFreehandSelectionMode && isDrawingSelection {
             let pt = convert(event.locationInWindow, from: nil)
             selectionPath.append(pt)
@@ -705,6 +865,17 @@ public class MainImageView: NSView {
     }
 
     override public func mouseUp(with event: NSEvent) {
+        if isCensoring {
+            guard isDrawingSelection else { return }
+            isDrawingSelection = false
+            let path = censorShapePath(to: convert(event.locationInWindow, from: nil))
+            selectionPath = []
+            updateOverlay()
+            let box = path.reduce(CGRect.null) { $0.union(CGRect(origin: $1, size: .zero)) }
+            guard box.width > 4, box.height > 4, let area = outlineInRawImage(path) else { return }
+            applyCensor([area])
+            return
+        }
         if isFreehandSelectionMode && isDrawingSelection {
             isDrawingSelection = false
             isFreehandSelectionMode = false
@@ -728,6 +899,11 @@ public class MainImageView: NSView {
 
     override public func resetCursorRects() {
         super.resetCursorRects()
+        if isCensoring {
+            addCursorRect(bounds, cursor: .crosshair)
+            if let toolbar = censorToolbar { addCursorRect(toolbar.frame, cursor: .arrow) }
+            return
+        }
         if !isFreehandSelectionMode && scrollView.magnification > 1.001 {
             let cursor: NSCursor = isDraggingImage ? .closedHand : .openHand
             addCursorRect(bounds, cursor: cursor)
