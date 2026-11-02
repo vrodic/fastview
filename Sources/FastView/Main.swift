@@ -194,7 +194,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation,
         fileMenu.addItem(NSMenuItem.separator())
         fileMenu.addItem(withTitle: "Show Info", action: #selector(showInfoAction(_:)), keyEquivalent: "i")
         fileMenu.addItem(NSMenuItem.separator())
-        fileMenu.addItem(withTitle: "Close Window", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+        fileMenu.addItem(withTitle: "Close Window", action: #selector(closeTabOrWindowAction(_:)), keyEquivalent: "w")
 
         // 3. View Menu
         let viewMenuItem = NSMenuItem()
@@ -204,6 +204,9 @@ public class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation,
 
         viewMenu.addItem(withTitle: "Show All Items", action: #selector(showAllItemsAction(_:)), keyEquivalent: "")
         viewMenu.addItem(withTitle: "Show Favorites Only", action: #selector(showFavoritesOnlyAction(_:)), keyEquivalent: "")
+        let favoritesViewerItem = NSMenuItem(title: "Favorites Viewer", action: #selector(toggleFavoritesViewerAction(_:)), keyEquivalent: "f")
+        favoritesViewerItem.keyEquivalentModifierMask = [.command, .shift]
+        viewMenu.addItem(favoritesViewerItem)
         viewMenu.addItem(NSMenuItem.separator())
         viewMenu.addItem(withTitle: "Toggle Preview Pane", action: #selector(togglePreviewPaneAction(_:)), keyEquivalent: "b")
 
@@ -357,6 +360,13 @@ public class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation,
         windowMenuItem.submenu = windowMenu
         windowMenu.addItem(withTitle: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
         windowMenu.addItem(withTitle: "Zoom", action: #selector(NSWindow.performZoom(_:)), keyEquivalent: "")
+        windowMenu.addItem(NSMenuItem.separator())
+        let nextTabItem = NSMenuItem(title: "Show Next Tab", action: #selector(showNextTabAction(_:)), keyEquivalent: "\t")
+        nextTabItem.keyEquivalentModifierMask = [.control]
+        windowMenu.addItem(nextTabItem)
+        let previousTabItem = NSMenuItem(title: "Show Previous Tab", action: #selector(showNextTabAction(_:)), keyEquivalent: "\t")
+        previousTabItem.keyEquivalentModifierMask = [.control, .shift]
+        windowMenu.addItem(previousTabItem)
 
         // 5. Help Menu
         let helpMenuItem = NSMenuItem()
@@ -448,6 +458,31 @@ public class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation,
 
     @objc private func showFavoritesOnlyAction(_ sender: Any?) {
         windowController?.splitVC.showFavoritesOnly = true
+    }
+
+    /// Opens the Favorites tab, or goes back to the browser when it shows.
+    @objc private func toggleFavoritesViewerAction(_ sender: Any?) {
+        guard let tabsVC = windowController?.tabsVC else { return }
+        if tabsVC.selectedTab == .favorites {
+            tabsVC.select(.browser)
+        } else {
+            tabsVC.showFavoritesTab()
+        }
+    }
+
+    /// With two tabs there is only one other tab, so next and previous are the same.
+    @objc private func showNextTabAction(_ sender: Any?) {
+        windowController?.tabsVC.selectNextTab()
+    }
+
+    /// ⌘W closes the Favorites tab while it shows, else the key window.
+    @objc private func closeTabOrWindowAction(_ sender: Any?) {
+        if let tabsVC = windowController?.tabsVC, NSApp.keyWindow === windowController?.window,
+           tabsVC.selectedTab == .favorites {
+            tabsVC.closeFavoritesTab()
+            return
+        }
+        NSApp.keyWindow?.performClose(sender)
     }
 
     @objc private func toggleFavoritesModeAction(_ sender: Any?) {
@@ -772,6 +807,18 @@ public class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation,
         if menuItem.action == #selector(toggleCensoringAction(_:)) {
             menuItem.state = windowController?.splitVC.censoringImageView != nil ? .on : .off
             return true
+        }
+        if menuItem.action == #selector(toggleFavoritesViewerAction(_:)) {
+            menuItem.state = windowController?.tabsVC.selectedTab == .favorites ? .on : .off
+            return true
+        }
+        if menuItem.action == #selector(showNextTabAction(_:)) {
+            return windowController?.tabsVC.isFavoritesTabOpen ?? false
+        }
+        if menuItem.action == #selector(closeTabOrWindowAction(_:)) {
+            let closesTab = NSApp.keyWindow === windowController?.window && windowController?.tabsVC.selectedTab == .favorites
+            menuItem.title = closesTab ? "Close Tab" : "Close Window"
+            return NSApp.keyWindow != nil
         }
         if menuItem.action == #selector(toggleLowMemoryModeAction(_:)) {
             menuItem.state = MemoryLRUCache.shared.isLowMemoryMode ? .on : .off

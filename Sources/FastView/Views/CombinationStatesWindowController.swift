@@ -235,8 +235,9 @@ public class CombinationStatesWindowController: NSWindowController, NSTableViewD
 
     private func restore(_ state: SavedCombinationSummary) {
         if let window = NSApp.mainWindow ?? globalAppDelegate?.windowController?.window,
-           let splitVC = window.contentViewController as? MainSplitViewController {
-            splitVC.restoreCombinationState(from: state.url)
+           let tabsVC = window.contentViewController as? MainTabsViewController {
+            tabsVC.select(.browser)
+            tabsVC.splitVC.restoreCombinationState(from: state.url)
         } else if let splitVC = globalAppDelegate?.windowController?.splitVC {
             splitVC.restoreCombinationState(from: state.url)
         }

@@ -1,7 +1,8 @@
 import AppKit
 
 public class MainWindowController: NSWindowController, NSWindowDelegate {
-    public let splitVC = MainSplitViewController()
+    public let tabsVC = MainTabsViewController()
+    public var splitVC: MainSplitViewController { tabsVC.splitVC }
 
     public convenience init() {
         let screen = NSScreen.main ?? NSScreen.screens.first
@@ -32,7 +33,7 @@ public class MainWindowController: NSWindowController, NSWindowDelegate {
 
         self.init(window: window)
         window.delegate = self
-        window.contentViewController = splitVC
+        window.contentViewController = tabsVC
 
         window.setFrameAutosaveName("FastMainWindow")
         if !window.setFrameUsingName("FastMainWindow") {
@@ -61,6 +62,15 @@ public class MainWindowController: NSWindowController, NSWindowDelegate {
             let isCmdPressed = event.modifierFlags.contains(.command)
 
             let isControlPressed = event.modifierFlags.contains(.control)
+
+            // The Favorites tab handles its own keys; Cmd+Return still toggles full screen.
+            if let favorites = self.tabsVC.activeFavoritesVC {
+                if isCmdPressed && (event.keyCode == 36 || event.keyCode == 76) {
+                    self.window?.toggleFullScreen(nil)
+                    return nil
+                }
+                return favorites.handleKeyDown(event) ? nil : event
+            }
 
             // While censoring, Esc stops it and ⌘Z undoes the last censor.
             if let censoring = self.splitVC.censoringImageView {
@@ -125,7 +135,7 @@ public class MainWindowController: NSWindowController, NSWindowDelegate {
                 } else if chars == "0" {
                     self.splitVC.imageView.resetZoomToFit()
                     return nil
-                } else if chars == "f" {
+                } else if chars == "f" && !event.modifierFlags.contains(.shift) {
                     self.splitVC.toggleFavoriteOnSelectedItem()
                     return nil
                 }

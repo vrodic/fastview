@@ -1328,6 +1328,34 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         shownOrders[pane] = orders
     }
 
+    /// The folder or archive (sub)folder `item` is listed in.
+    private static func location(containing item: FileItem) -> NavigationLocation {
+        if let archivePath = item.archivePath, !archivePath.isEmpty {
+            let archiveType = ArchiveReader.fileType(for: URL(fileURLWithPath: archivePath))
+            let subfolder = ArchiveReader.flattenArchiveDirectories ? "" : (item.entryParentDir ?? "")
+            return NavigationLocation(
+                physicalPath: archivePath,
+                archiveSubfolder: subfolder,
+                isArchive: true,
+                archiveType: archiveType
+            )
+        }
+        return NavigationManager.locationForPath(item.path)
+    }
+
+    /// Shows `item` selected in pane 1, in the folder or archive it is in
+    /// (Favorites tab → Show in Browser).
+    public func reveal(_ item: FileItem) {
+        showFavoritesOnly = false
+        activePane = 1
+        loadLocation(Self.location(containing: item), pane: 1, targetSelectedItemPath: item.id.isEmpty ? item.path : item.id)
+        sidebarContainerVC.sidebarVC1.focusList()
+    }
+
+    public func focusActiveSidebar() {
+        activeSidebar.focusList()
+    }
+
     public func switchToCurrentItemLocationMode() {
         guard let item = sidebarContainerVC.sidebarVC1.selectedItem else {
             showFavoritesOnly = false
@@ -1336,20 +1364,7 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         showFavoritesOnly = false
 
         let targetPath = item.id.isEmpty ? item.path : item.id
-
-        let loc: NavigationLocation
-        if let archivePath = item.archivePath, !archivePath.isEmpty {
-            let archiveType = ArchiveReader.fileType(for: URL(fileURLWithPath: archivePath))
-            let subfolder = ArchiveReader.flattenArchiveDirectories ? "" : (item.entryParentDir ?? "")
-            loc = NavigationLocation(
-                physicalPath: archivePath,
-                archiveSubfolder: subfolder,
-                isArchive: true,
-                archiveType: archiveType
-            )
-        } else {
-            loc = NavigationManager.locationForPath(item.path)
-        }
+        let loc = Self.location(containing: item)
 
         print("[MainSplitVC] switchToCurrentItemLocationMode for item '\(item.name)', targetPath: '\(targetPath)', locPath: '\(loc.physicalPath)' (archiveSubfolder: '\(loc.archiveSubfolder ?? "")')")
         loadLocation(loc, pane: 1, targetSelectedItemPath: targetPath)
@@ -1363,20 +1378,7 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         showFavoritesOnlyPane2 = false
 
         let targetPath = item.id.isEmpty ? item.path : item.id
-
-        let loc: NavigationLocation
-        if let archivePath = item.archivePath, !archivePath.isEmpty {
-            let archiveType = ArchiveReader.fileType(for: URL(fileURLWithPath: archivePath))
-            let subfolder = ArchiveReader.flattenArchiveDirectories ? "" : (item.entryParentDir ?? "")
-            loc = NavigationLocation(
-                physicalPath: archivePath,
-                archiveSubfolder: subfolder,
-                isArchive: true,
-                archiveType: archiveType
-            )
-        } else {
-            loc = NavigationManager.locationForPath(item.path)
-        }
+        let loc = Self.location(containing: item)
 
         print("[MainSplitVC] switchToCurrentItemLocationModePane2 for item '\(item.name)', targetPath: '\(targetPath)', locPath: '\(loc.physicalPath)' (archiveSubfolder: '\(loc.archiveSubfolder ?? "")')")
         loadLocation(loc, pane: 2, targetSelectedItemPath: targetPath)
@@ -1432,10 +1434,13 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
                 // Indexing an archive for the first time can be slow; the
                 // overlay appears only if the scan reports that it is.
                 dualCanvasVC.imageView1.beginLoading(statusText: "Indexing \(item.name)...")
+            } else if item.isDirectory {
+                statusBarView.updateSelectedItemStats(item: item, position: containerStats, parentName: parentName)
+                dualCanvasVC.imageView1.beginLoading(statusText: "Reading \(item.name)...")
             }
         }
 
-        if item.isDirectory || item.type == .parentDirectory {
+        if item.type == .parentDirectory {
             if pane == 1 {
                 statusBarView.updateSelectedItemStats(item: item, position: containerStats, parentName: parentName)
                 dualCanvasVC.setImage(nil, pane: 1)
@@ -1443,8 +1448,10 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
             return
         }
 
+        // Folders, like archives, show their preview image.
         let isArchive = item.type == .archiveZip || item.type == .archiveRar
-        let loadProgress: LoadProgressHandler? = (pane == 1 && (isArchive || item.archivePath != nil)) ? { [weak self] update in
+        let isContainer = isArchive || item.isDirectory
+        let loadProgress: LoadProgressHandler? = (pane == 1 && (isContainer || item.archivePath != nil)) ? { [weak self] update in
             guard let self = self, targetSidebar.selectedItem?.id == item.id else { return }
             self.dualCanvasVC.imageView1.updateLoadingProgress(update)
         } : nil
@@ -1477,7 +1484,7 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
                 }
             }
 
-            if isArchive {
+            if isContainer {
                 // The preview pass also computed the image count.
                 targetSidebar.refreshStatsForSelectedItem()
                 if pane == 1 {

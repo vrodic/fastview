@@ -33,6 +33,8 @@ public class ThumbnailGenerator {
     // Requester group of each thumbnail op (one per sidebar), so a sidebar
     // can drop the work for rows it no longer shows.
     private var thumbnailGroups = [String: String]()
+    // Item id of each thumbnail op (its key also holds the size).
+    private var thumbnailItemIDs = [String: String]()
     private let lock = NSLock()
     public private(set) var isLoadingMainImage: Bool = false
 
@@ -43,6 +45,7 @@ public class ThumbnailGenerator {
         thumbnailQueue.cancelAllOperations()
         activeOperations.removeAll()
         thumbnailGroups.removeAll()
+        thumbnailItemIDs.removeAll()
         isLoadingMainImage = false
         lock.unlock()
     }
@@ -66,6 +69,7 @@ public class ThumbnailGenerator {
         // are never delivered.
         activeOperations = activeOperations.filter { $0.key.hasPrefix("full_") }
         thumbnailGroups.removeAll()
+        thumbnailItemIDs.removeAll()
         lock.unlock()
     }
 
@@ -108,11 +112,12 @@ public class ThumbnailGenerator {
         lock.lock()
         defer { lock.unlock() }
         let dropped = thumbnailGroups.filter { opKey, opGroup in
-            opGroup == group && !keepIDs.contains(String(opKey.dropFirst("thumb_".count)))
+            opGroup == group && !keepIDs.contains(thumbnailItemIDs[opKey] ?? "")
         }.keys
         for opKey in dropped {
             activeOperations.removeValue(forKey: opKey)?.cancel()
             thumbnailGroups.removeValue(forKey: opKey)
+            thumbnailItemIDs.removeValue(forKey: opKey)
         }
     }
 
@@ -127,7 +132,8 @@ public class ThumbnailGenerator {
             return
         }
 
-        let opKey = "thumb_\(item.id)"
+        // Sizes get their own ops: the favorites viewer asks for larger ones than the sidebar.
+        let opKey = "thumb_\(Int(targetSize.width))x\(Int(targetSize.height))_\(item.id)"
 
         lock.lock()
         if let existing = activeOperations[opKey], !existing.isFinished, !existing.isCancelled {
@@ -167,8 +173,9 @@ public class ThumbnailGenerator {
                         let preview = ArchiveReader.loadArchivePreview(archivePath: item.path, type: item.type,
                                                                        maxPixelSize: thumbnailSize, isCancelled: shouldStop)
                         archiveThumbnail = preview?.thumbnail
-                        // Saved even if we are about to yield: the work is done.
-                        if preview != nil && ArchiveThumbCache.isUsed(for: item.type) {
+                        // Saved even if we are about to yield: the work is done.  Only the
+                        // sidebar's size is kept, so larger ones never replace it.
+                        if preview != nil && ArchiveThumbCache.isUsed(for: item.type) && thumbnailSize == 256 {
                             self.saveArchiveThumbnail(for: item, thumbnail: archiveThumbnail, thumbnailSize: thumbnailSize)
                         }
                         if shouldStop() { return }
@@ -217,6 +224,7 @@ public class ThumbnailGenerator {
 
         activeOperations[opKey] = op
         thumbnailGroups[opKey] = group
+        thumbnailItemIDs[opKey] = item.id
         lock.unlock()
 
         thumbnailQueue.addOperation(op)
@@ -252,14 +260,17 @@ public class ThumbnailGenerator {
         thumbnailQueue.addOperation(op)
     }
 
-    public func peekFirstImage(in item: FileItem) -> FileItem? {
-        if item.type == .parentDirectory { return nil }
+    /// The preview image of a folder or archive: the preferred image directly
+    /// inside it, else the first found in its subfolders and archives.
+    /// `isCancelled` stops the search between listings.
+    public func peekFirstImage(in item: FileItem, isCancelled: (() -> Bool)? = nil) -> FileItem? {
+        if item.type == .parentDirectory || isCancelled?() == true { return nil }
 
         var entries: [FileItem] = []
         if item.type == .archiveZip {
-            entries = ArchiveReader.listAllZipImages(archivePath: item.path)
+            entries = ArchiveReader.listAllZipImages(archivePath: item.path, isCancelled: isCancelled)
         } else if item.type == .archiveRar {
-            entries = ArchiveReader.listAllRarImages(archivePath: item.path)
+            entries = ArchiveReader.listAllRarImages(archivePath: item.path, isCancelled: isCancelled)
         } else if item.isDirectory {
             if let archivePath = item.archivePath {
                 let ext = (archivePath as NSString).pathExtension.lowercased()
@@ -268,9 +279,9 @@ public class ThumbnailGenerator {
 
                 let all: [FileItem]
                 if ext == "zip" {
-                    all = ArchiveReader.listAllZipImages(archivePath: archivePath)
+                    all = ArchiveReader.listAllZipImages(archivePath: archivePath, isCancelled: isCancelled)
                 } else {
-                    all = ArchiveReader.listAllRarImages(archivePath: archivePath)
+                    all = ArchiveReader.listAllRarImages(archivePath: archivePath, isCancelled: isCancelled)
                 }
 
                 if !prefix.isEmpty {
@@ -280,7 +291,7 @@ public class ThumbnailGenerator {
                 }
             } else {
                 let mgr = NavigationManager(initialLocation: NavigationLocation(physicalPath: item.path))
-                entries = mgr.contents().filter { $0.type != .parentDirectory }
+                entries = mgr.contents(isCancelled: isCancelled).filter { $0.type != .parentDirectory }
             }
         }
 
@@ -293,7 +304,7 @@ public class ThumbnailGenerator {
             .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
 
         for subItem in subItems {
-            if let found = peekFirstImage(in: subItem) {
+            if let found = peekFirstImage(in: subItem, isCancelled: isCancelled) {
                 return found
             }
         }
@@ -311,7 +322,7 @@ public class ThumbnailGenerator {
         if isCancelled?() == true { return nil }
 
         if item.type == .archiveZip || item.type == .archiveRar || item.isDirectory {
-            if let peeked = peekFirstImage(in: item) {
+            if let peeked = peekFirstImage(in: item, isCancelled: isCancelled) {
                 return loadAndScaleCGImage(for: peeked, targetSize: targetSize, isCancelled: isCancelled)
             }
             return nil
@@ -424,7 +435,7 @@ public class ThumbnailGenerator {
                     // the subsequent peek cheap.
                     _ = FolderStatsCalculator.stats(for: item, progress: mainQueueProgress, isCancelled: { currentOp.isCancelled })
 
-                    if let peeked = self.peekFirstImage(in: item) {
+                    if let peeked = self.peekFirstImage(in: item, isCancelled: { currentOp.isCancelled }) {
                         targetItem = peeked
                     } else {
                         DispatchQueue.main.async {

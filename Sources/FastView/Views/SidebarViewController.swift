@@ -303,9 +303,13 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
 
     private func scheduleThumbnailRefresh() {
         scrollDebounceTimer?.invalidate()
-        scrollDebounceTimer = Timer.scheduledTimer(withTimeInterval: thumbnailRefreshDelay, repeats: false) { [weak self] _ in
+        let timer = Timer(timeInterval: thumbnailRefreshDelay, repeats: false) { [weak self] _ in
             self?.loadVisibleThumbnailsIfIdle()
         }
+        // Common modes: dragging the scroller knob runs the event-tracking
+        // mode, so a pause mid-drag loads the rows shown, not only mouse up.
+        RunLoop.main.add(timer, forMode: .common)
+        scrollDebounceTimer = timer
     }
 
     /// The window has a transparent, full-size title bar, so the pane at
@@ -427,6 +431,10 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
                 cell.loadThumbnailIfIdle(for: items[row], group: thumbnailGroup)
             }
         }
+    }
+
+    public func focusList() {
+        view.window?.makeFirstResponder(tableView)
     }
 
     public func selectRow(_ index: Int) {
@@ -726,8 +734,8 @@ public class SidebarTableCellView: NSTableCellView {
     private let statsBadgeLabel = NSTextField(labelWithString: "")
     private let favoriteCountContainer = NSView()
     private let favoriteCountLabel = NSTextField(labelWithString: "")
-    private let archiveNameContainer = NSView()
-    private let archiveNameLabel = NSTextField(labelWithString: "")
+    private let containerNameBadge = NSView()
+    private let containerNameLabel = NSTextField(labelWithString: "")
     private var currentItem: FileItem?
     private var isViewed = false
 
@@ -811,27 +819,27 @@ public class SidebarTableCellView: NSTableCellView {
 
         favoriteCountContainer.addSubview(favoriteCountLabel)
 
-        archiveNameContainer.translatesAutoresizingMaskIntoConstraints = false
-        archiveNameContainer.wantsLayer = true
-        archiveNameContainer.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.75).cgColor
-        archiveNameContainer.layer?.cornerRadius = 4
-        archiveNameContainer.layer?.zPosition = 10
-        archiveNameContainer.isHidden = true
+        containerNameBadge.translatesAutoresizingMaskIntoConstraints = false
+        containerNameBadge.wantsLayer = true
+        containerNameBadge.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.75).cgColor
+        containerNameBadge.layer?.cornerRadius = 4
+        containerNameBadge.layer?.zPosition = 10
+        containerNameBadge.isHidden = true
 
-        archiveNameLabel.translatesAutoresizingMaskIntoConstraints = false
-        archiveNameLabel.font = NSFont.systemFont(ofSize: 10, weight: .bold)
-        archiveNameLabel.textColor = NSColor.white
-        archiveNameLabel.lineBreakMode = .byTruncatingMiddle
-        archiveNameLabel.maximumNumberOfLines = 1
+        containerNameLabel.translatesAutoresizingMaskIntoConstraints = false
+        containerNameLabel.font = NSFont.systemFont(ofSize: 10, weight: .bold)
+        containerNameLabel.textColor = NSColor.white
+        containerNameLabel.lineBreakMode = .byTruncatingMiddle
+        containerNameLabel.maximumNumberOfLines = 1
 
-        archiveNameContainer.addSubview(archiveNameLabel)
+        containerNameBadge.addSubview(containerNameLabel)
 
         addSubview(thumbnailImageView)
         addSubview(nameLabel)
         addSubview(typeBadge)
         addSubview(favoriteBadge)
         addSubview(statsBadgeContainer)
-        addSubview(archiveNameContainer)
+        addSubview(containerNameBadge)
         addSubview(favoriteCountContainer)
 
         NSLayoutConstraint.activate([
@@ -862,17 +870,17 @@ public class SidebarTableCellView: NSTableCellView {
             statsBadgeLabel.topAnchor.constraint(equalTo: statsBadgeContainer.topAnchor, constant: 2),
             statsBadgeLabel.bottomAnchor.constraint(equalTo: statsBadgeContainer.bottomAnchor, constant: -2),
 
-            archiveNameContainer.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
-            archiveNameContainer.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
-            archiveNameContainer.trailingAnchor.constraint(lessThanOrEqualTo: statsBadgeContainer.leadingAnchor, constant: -8),
+            containerNameBadge.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
+            containerNameBadge.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
+            containerNameBadge.trailingAnchor.constraint(lessThanOrEqualTo: statsBadgeContainer.leadingAnchor, constant: -8),
 
-            archiveNameLabel.leadingAnchor.constraint(equalTo: archiveNameContainer.leadingAnchor, constant: 5),
-            archiveNameLabel.trailingAnchor.constraint(equalTo: archiveNameContainer.trailingAnchor, constant: -5),
-            archiveNameLabel.topAnchor.constraint(equalTo: archiveNameContainer.topAnchor, constant: 2),
-            archiveNameLabel.bottomAnchor.constraint(equalTo: archiveNameContainer.bottomAnchor, constant: -2),
+            containerNameLabel.leadingAnchor.constraint(equalTo: containerNameBadge.leadingAnchor, constant: 5),
+            containerNameLabel.trailingAnchor.constraint(equalTo: containerNameBadge.trailingAnchor, constant: -5),
+            containerNameLabel.topAnchor.constraint(equalTo: containerNameBadge.topAnchor, constant: 2),
+            containerNameLabel.bottomAnchor.constraint(equalTo: containerNameBadge.bottomAnchor, constant: -2),
 
             favoriteCountContainer.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
-            favoriteCountContainer.bottomAnchor.constraint(equalTo: archiveNameContainer.topAnchor, constant: -4),
+            favoriteCountContainer.bottomAnchor.constraint(equalTo: containerNameBadge.topAnchor, constant: -4),
 
             favoriteCountLabel.leadingAnchor.constraint(equalTo: favoriteCountContainer.leadingAnchor, constant: 5),
             favoriteCountLabel.trailingAnchor.constraint(equalTo: favoriteCountContainer.trailingAnchor, constant: -5),
@@ -896,11 +904,14 @@ public class SidebarTableCellView: NSTableCellView {
             typeBadge.isHidden = true
         }
 
-        if item.type == .archiveZip || item.type == .archiveRar {
-            archiveNameLabel.stringValue = item.name
-            archiveNameContainer.isHidden = false
+        // Folders and archives show their name over the preview at bottom left.
+        let isContainer = item.type == .archiveZip || item.type == .archiveRar
+            || (item.isDirectory && item.type != .parentDirectory)
+        if isContainer {
+            containerNameLabel.stringValue = item.name
+            containerNameBadge.isHidden = false
         } else {
-            archiveNameContainer.isHidden = true
+            containerNameBadge.isHidden = true
         }
 
         if let stats = FolderStatsCalculator.cachedStats(for: item) {
