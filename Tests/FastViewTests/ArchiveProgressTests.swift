@@ -310,7 +310,9 @@ final class ArchiveProgressTests: XCTestCase {
         let cached = try XCTUnwrap(ArchiveThumbCache.load(archivePath: zipPath, thumbnailSize: 256))
         XCTAssertEqual(cached.imageIDs, ["image1.jpg"])
         XCTAssertEqual(cached.thumbnail?.width, 64)
-        XCTAssertNil(ArchiveThumbCache.load(archivePath: zipPath, thumbnailSize: 128))
+        XCTAssertEqual(cached.thumbnailSize, 256)
+        // A different size asked for still gets it: no archive is read for sharpness alone.
+        XCTAssertEqual(ArchiveThumbCache.load(archivePath: zipPath, thumbnailSize: 1536)?.thumbnailSize, 256)
 
         // Sub-second differences (network file systems vary in precision)
         // still hit; a changed archive is not served from the cache.

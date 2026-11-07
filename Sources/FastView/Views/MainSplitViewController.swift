@@ -1327,7 +1327,7 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
 
                 let changedIDs = Set(items.map { $0.id }).intersection(modifiedPaths)
                 for id in changedIDs {
-                    MemoryLRUCache.shared.removeObject(forKey: "thumb_\(id)_256.0x256.0")
+                    ThumbnailSize.removeCachedThumbnails(itemID: id)
                     MemoryLRUCache.shared.removeObject(forKey: "full_\(id)")
                 }
                 guard items.map({ $0.id }) != sidebar.items.map({ $0.id }) || !changedIDs.isEmpty else { return }
@@ -1603,7 +1603,7 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
             self.dualCanvasVC.imageView1.updateLoadingProgress(update)
         } : nil
 
-        ThumbnailGenerator.shared.loadFullImage(for: item, group: pane == 2 ? "pane2" : "main", progress: loadProgress) { [weak self] image in
+        ThumbnailGenerator.shared.loadFullImage(for: item, group: pane == 2 ? "pane2" : "main", thumbnailPixels: targetSidebar.thumbnailPixels, progress: loadProgress) { [weak self] image in
             guard let self = self else { return }
             guard targetSidebar.selectedItem?.id == item.id else { return }
 
@@ -1620,7 +1620,7 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
                                                        viewedPercent: self.viewedPercent(of: imageItems), parentName: parentName)
                 }
 
-                let cacheKey = "thumb_\(item.id)_256.0x256.0"
+                let cacheKey = ThumbnailSize.cacheKey(itemID: item.id, pixels: targetSidebar.thumbnailPixels)
                 let cost = Int(image.size.width * image.size.height * 4)
                 MemoryLRUCache.shared.setObject(image, forKey: cacheKey, cost: cost)
                 targetSidebar.updateThumbnailForSelectedItem(image: image)

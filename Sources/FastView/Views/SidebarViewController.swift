@@ -57,6 +57,8 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
     // so rows that merely scroll past never start (and stop) archive reads.
     private let thumbnailRefreshDelay: TimeInterval = 0.3
     private lazy var thumbnailGroup = "sidebar-\(ObjectIdentifier(self).hashValue)"
+    /// The size rows' thumbnails are made at: the row's width on this display.
+    public private(set) var thumbnailPixels = ThumbnailSize.steps[0]
 
     fileprivate var mainSplitVC: MainSplitViewController? {
         (parent as? MainSplitViewController) ?? ((parent as? SidebarContainerViewController)?.parent as? MainSplitViewController)
@@ -348,6 +350,11 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
         updateWindowControlsInsets()
         let width = view.bounds.width
         if width > 0 {
+            let pixels = ThumbnailSize.pixels(forDisplayed: width, scale: view.window?.backingScaleFactor ?? 2)
+            if pixels != thumbnailPixels {
+                thumbnailPixels = pixels
+                scheduleThumbnailRefresh()
+            }
             let targetRowHeight = max(80, min(800, width * 0.75))
             if abs(tableView.rowHeight - targetRowHeight) > 5 {
                 tableView.rowHeight = targetRowHeight
@@ -434,7 +441,7 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
 
         for row in rows {
             if let cell = tableView.view(atColumn: 0, row: row, makeIfNecessary: false) as? SidebarTableCellView {
-                cell.loadThumbnailIfIdle(for: items[row], group: thumbnailGroup)
+                cell.loadThumbnailIfIdle(for: items[row], group: thumbnailGroup, pixels: thumbnailPixels)
             }
         }
     }
@@ -506,7 +513,7 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
             tableView.reloadData(forRowIndexes: IndexSet(integer: selectedRow), columnIndexes: IndexSet(integer: 0))
             if let cell = tableView.view(atColumn: 0, row: selectedRow, makeIfNecessary: false) as? SidebarTableCellView,
                selectedRow < items.count {
-                cell.configure(with: items[selectedRow])
+                cell.configure(with: items[selectedRow], thumbnailPixels: thumbnailPixels)
             }
         }
     }
@@ -560,7 +567,7 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
             cell?.identifier = cellID
         }
 
-        cell?.configure(with: item)
+        cell?.configure(with: item, thumbnailPixels: thumbnailPixels)
         // Thumbnails for newly shown rows are requested once scrolling settles.
         scheduleThumbnailRefresh()
         return cell
@@ -573,7 +580,7 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
         if isRestoringSelection { return }
 
         if let cell = tableView.view(atColumn: 0, row: selectedRow, makeIfNecessary: false) as? SidebarTableCellView {
-            cell.loadThumbnailOnSelection(for: selectedItem, group: thumbnailGroup)
+            cell.loadThumbnailOnSelection(for: selectedItem, group: thumbnailGroup, pixels: thumbnailPixels)
         }
 
         delegate?.sidebar(self, didSelectItem: selectedItem)
@@ -942,7 +949,7 @@ public class SidebarTableCellView: NSTableCellView {
         ])
     }
 
-    public func configure(with item: FileItem) {
+    public func configure(with item: FileItem, thumbnailPixels: Int) {
         self.currentItem = item
         nameLabel.stringValue = item.name
         // Images show only their thumbnail.
@@ -980,8 +987,7 @@ public class SidebarTableCellView: NSTableCellView {
         favoriteBadge.isHidden = !isFav
         updateViewedState()
 
-        let cacheKey = "thumb_\(item.id)_256.0x256.0"
-        if let cached = MemoryLRUCache.shared.object(forKey: cacheKey) {
+        if let cached = ThumbnailSize.cachedThumbnail(itemID: item.id, pixels: thumbnailPixels) {
             setThumbnailLoaded(cached)
             return
         }
@@ -991,9 +997,9 @@ public class SidebarTableCellView: NSTableCellView {
         showFilenameTextOnly()
     }
 
-    public func loadThumbnailIfIdle(for item: FileItem, group: String) {
+    public func loadThumbnailIfIdle(for item: FileItem, group: String, pixels: Int) {
         guard currentItem?.id == item.id else { return }
-        ThumbnailGenerator.shared.generateThumbnailWithStats(for: item, group: group) { [weak self] image, stats in
+        ThumbnailGenerator.shared.generateThumbnailWithStats(for: item, targetSize: ThumbnailSize.size(pixels: pixels), group: group) { [weak self] image, stats in
             DispatchQueue.main.async {
                 guard let self = self, self.currentItem?.id == item.id else { return }
                 if let img = image {
@@ -1006,15 +1012,15 @@ public class SidebarTableCellView: NSTableCellView {
         }
     }
 
-    public func loadThumbnailOnSelection(for item: FileItem, group: String) {
+    public func loadThumbnailOnSelection(for item: FileItem, group: String, pixels: Int) {
         guard currentItem?.id == item.id else { return }
 
-        let cacheKey = "thumb_\(item.id)_256.0x256.0"
+        let cacheKey = ThumbnailSize.cacheKey(itemID: item.id, pixels: pixels)
         if (item.type == .archiveZip || item.type == .archiveRar) && MemoryLRUCache.shared.object(forKey: cacheKey) == nil {
             FolderStatsCalculator.cancelPendingCountCalculations()
         }
 
-        ThumbnailGenerator.shared.generateThumbnailWithStats(for: item, group: group) { [weak self] image, stats in
+        ThumbnailGenerator.shared.generateThumbnailWithStats(for: item, targetSize: ThumbnailSize.size(pixels: pixels), group: group) { [weak self] image, stats in
             DispatchQueue.main.async {
                 guard let self = self, self.currentItem?.id == item.id else { return }
                 if let img = image {

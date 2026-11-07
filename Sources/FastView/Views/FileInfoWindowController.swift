@@ -360,7 +360,7 @@ final class FileInfoWindowController: NSWindowController, NSWindowDelegate {
     }
 
     private static func cachedPicture(for item: FileItem) -> NSImage? {
-        MemoryLRUCache.shared.object(forKey: "thumb_\(item.id)_256.0x256.0")
+        ThumbnailSize.cachedThumbnail(itemID: item.id, pixels: ThumbnailSize.steps[0])
             ?? MemoryLRUCache.shared.object(forKey: "full_\(item.id)")
     }
 

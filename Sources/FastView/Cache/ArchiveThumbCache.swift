@@ -40,6 +40,8 @@ enum ArchiveThumbCache {
         /// Nil when the archive has no images.
         let thumbnail: CGImage?
         let imageIDs: [String]
+        /// The size it was made at, which may differ from the size asked for.
+        let thumbnailSize: Int
     }
 
     private struct Record: Codable {
@@ -66,8 +68,10 @@ enum ArchiveThumbCache {
     }
 
     /// The cached thumbnail and image ids of `archivePath`, if they are
-    /// current and were made at `thumbnailSize`.  A miss is logged with its
-    /// reason (THUMBS_CACHE_MISS).
+    /// current, at whatever size they were made (`Entry.thumbnailSize`; a
+    /// sharper one replaces them when the archive is next read anyway).
+    /// `thumbnailSize` is only logged.  A miss is logged with its reason
+    /// (THUMBS_CACHE_MISS).
     static func load(archivePath: String, thumbnailSize: Int) -> Entry? {
         let files = files(for: archivePath)
         func miss(_ reason: String) -> Entry? {
@@ -78,7 +82,6 @@ enum ArchiveThumbCache {
         guard let json = try? Data(contentsOf: files.json) else { return miss("no entry") }
         guard let record = try? JSONDecoder().decode(Record.self, from: json),
               record.version == formatVersion, record.archivePath == archivePath else { return miss("unreadable or old entry") }
-        guard record.thumbnailSize == thumbnailSize else { return miss("made at \(record.thumbnailSize) px") }
         guard let stamp = archiveStamp(archivePath) else { return miss("archive not found") }
         // Network file systems can report modification times at different
         // precision from one call to the next; a changed archive differs by
@@ -87,11 +90,14 @@ enum ArchiveThumbCache {
             return miss("archive changed")
         }
 
-        guard record.hasThumbnail else { return Entry(thumbnail: nil, imageIDs: record.imageIDs) }
+        if record.thumbnailSize < thumbnailSize {
+            FileLogger.shared.log("THUMBS_CACHE_SMALLER", path: "\(archivePath) | made at \(record.thumbnailSize) px, asked \(thumbnailSize) px")
+        }
+        guard record.hasThumbnail else { return Entry(thumbnail: nil, imageIDs: record.imageIDs, thumbnailSize: record.thumbnailSize) }
         guard let jpeg = try? Data(contentsOf: files.thumbnail),
               let source = CGImageSourceCreateWithData(jpeg as CFData, nil),
               let thumbnail = CGImageSourceCreateImageAtIndex(source, 0, nil) else { return miss("thumbnail unreadable") }
-        return Entry(thumbnail: thumbnail, imageIDs: record.imageIDs)
+        return Entry(thumbnail: thumbnail, imageIDs: record.imageIDs, thumbnailSize: record.thumbnailSize)
     }
 
     /// Whether thumbnails of archives of `type` are cached.

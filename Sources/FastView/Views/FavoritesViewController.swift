@@ -273,10 +273,9 @@ public final class FavoritesViewController: NSViewController, NSCollectionViewDa
         "thumb_\(item.id)_\(size.width)x\(size.height)"
     }
 
-    /// The thumbnail of the grid's size, else the sidebar's smaller one.
+    /// The thumbnail of the grid's size, else the closest one cached (the sidebar's, say).
     private func bestCachedThumbnail(for item: FileItem) -> NSImage? {
-        MemoryLRUCache.shared.object(forKey: cacheKey(for: item, size: thumbnailSize))
-            ?? MemoryLRUCache.shared.object(forKey: cacheKey(for: item, size: CGSize(width: 256, height: 256)))
+        ThumbnailSize.cachedThumbnail(itemID: item.id, pixels: Int(thumbnailSize.width))
     }
 
     @objc private func gridDidScroll(_ notification: Notification) {

@@ -44,6 +44,28 @@ final class UserExperienceTests: XCTestCase {
         XCTAssertEqual(MainImageView.suggestedSaveName(sourceName: nil, isEdited: false), "Image.png")
     }
 
+    // MARK: - Thumbnail size
+
+    func testThumbnailSizeCoversTheRowsPixels() {
+        XCTAssertEqual(ThumbnailSize.pixels(forDisplayed: 100, scale: 2), 256)
+        XCTAssertEqual(ThumbnailSize.pixels(forDisplayed: 360, scale: 2), 768)
+        XCTAssertEqual(ThumbnailSize.pixels(forDisplayed: 746, scale: 2), 1536)
+        XCTAssertEqual(ThumbnailSize.pixels(forDisplayed: 746, scale: 1), 768)
+        XCTAssertEqual(ThumbnailSize.pixels(forDisplayed: 5000, scale: 2), 3072)
+    }
+
+    func testCachedThumbnailPrefersTheClosestSizeNotSmaller() {
+        let id = "thumb-test-\(UUID().uuidString)"
+        let small = NSImage(size: NSSize(width: 1, height: 1)), large = NSImage(size: NSSize(width: 2, height: 2))
+        XCTAssertNil(ThumbnailSize.cachedThumbnail(itemID: id, pixels: 512))
+        MemoryLRUCache.shared.setObject(small, forKey: ThumbnailSize.cacheKey(itemID: id, pixels: 256), cost: 1)
+        XCTAssertTrue(ThumbnailSize.cachedThumbnail(itemID: id, pixels: 512) === small)
+        MemoryLRUCache.shared.setObject(large, forKey: ThumbnailSize.cacheKey(itemID: id, pixels: 1024), cost: 1)
+        XCTAssertTrue(ThumbnailSize.cachedThumbnail(itemID: id, pixels: 512) === large)
+        ThumbnailSize.removeCachedThumbnails(itemID: id)
+        XCTAssertNil(ThumbnailSize.cachedThumbnail(itemID: id, pixels: 512))
+    }
+
     // MARK: - File actions
 
     func testOnlyRealFilesCountAsOnDisk() {

@@ -2,6 +2,44 @@ import Foundation
 import AppKit
 import ImageIO
 
+/// Thumbnails are made at the pixel size they show at, in steps, so resizing a pane
+/// reuses cached ones and rows are neither stretched nor decoded larger than needed.
+public enum ThumbnailSize {
+    public static let steps = [256, 384, 512, 768, 1024, 1536, 2048, 3072]
+
+    /// The step for an image showing `points` wide on a display of `scale`.
+    public static func pixels(forDisplayed points: CGFloat, scale: CGFloat) -> Int {
+        let needed = points * scale
+        return steps.first { CGFloat($0) >= needed } ?? steps[steps.count - 1]
+    }
+
+    public static func size(pixels: Int) -> CGSize {
+        CGSize(width: pixels, height: pixels)
+    }
+
+    public static func cacheKey(itemID: String, pixels: Int) -> String {
+        let size = size(pixels: pixels)
+        return "thumb_\(itemID)_\(size.width)x\(size.height)"
+    }
+
+    /// The cached thumbnail closest to `pixels`: that size, else the next larger,
+    /// else the largest smaller one (better than nothing until the right one is made).
+    public static func cachedThumbnail(itemID: String, pixels: Int) -> NSImage? {
+        let larger = steps.filter { $0 >= pixels }
+        let smaller = steps.filter { $0 < pixels }.reversed()
+        for step in larger + smaller {
+            if let image = MemoryLRUCache.shared.object(forKey: cacheKey(itemID: itemID, pixels: step)) { return image }
+        }
+        return nil
+    }
+
+    public static func removeCachedThumbnails(itemID: String) {
+        for step in steps {
+            MemoryLRUCache.shared.removeObject(forKey: cacheKey(itemID: itemID, pixels: step))
+        }
+    }
+}
+
 public class ThumbnailGenerator {
     public static let shared = ThumbnailGenerator()
 
@@ -160,7 +198,9 @@ public class ThumbnailGenerator {
                 let isArchive = item.type == .archiveZip || item.type == .archiveRar
                 if isArchive {
                     let thumbnailSize = Int(max(targetSize.width, targetSize.height))
-                    // The local thumbnail cache saves reading the archive at all.
+                    // The local thumbnail cache saves reading the archive at all, also when
+                    // its thumbnail is smaller than asked: a network RAR is read whole, too
+                    // much to pay for sharpness alone.  Selecting the archive makes it sharp.
                     if ArchiveThumbCache.isUsed(for: item.type),
                        let cached = ArchiveThumbCache.load(archivePath: item.path, thumbnailSize: thumbnailSize) {
                         archiveThumbnail = cached.thumbnail
@@ -173,9 +213,8 @@ public class ThumbnailGenerator {
                         let preview = ArchiveReader.loadArchivePreview(archivePath: item.path, type: item.type,
                                                                        maxPixelSize: thumbnailSize, isCancelled: shouldStop)
                         archiveThumbnail = preview?.thumbnail
-                        // Saved even if we are about to yield: the work is done.  Only the
-                        // sidebar's size is kept, so larger ones never replace it.
-                        if preview != nil && ArchiveThumbCache.isUsed(for: item.type) && thumbnailSize == 256 {
+                        // Saved even if we are about to yield: the work is done.
+                        if preview != nil && ArchiveThumbCache.isUsed(for: item.type) {
                             self.saveArchiveThumbnail(for: item, thumbnail: archiveThumbnail, thumbnailSize: thumbnailSize)
                         }
                         if shouldStop() { return }
@@ -363,7 +402,9 @@ public class ThumbnailGenerator {
     /// work: that listing, or the first read of the archive holding an image.
     /// Loads `item` at full size. A new request cancels the earlier requests of
     /// the same `group`; their completions are not called.
-    public func loadFullImage(for item: FileItem, group: String = "main", progress: LoadProgressHandler? = nil, completion: @escaping (NSImage?) -> Void) {
+    /// `thumbnailPixels` is the size a RAR archive's on-disk thumbnail is brought up to
+    /// from the preview read here.
+    public func loadFullImage(for item: FileItem, group: String = "main", thumbnailPixels: Int = 256, progress: LoadProgressHandler? = nil, completion: @escaping (NSImage?) -> Void) {
         let cacheKey = "full_\(item.id)"
 
         if let cached = MemoryLRUCache.shared.object(forKey: cacheKey) {
@@ -413,13 +454,12 @@ public class ThumbnailGenerator {
                                                                    progress: mainQueueProgress, isCancelled: { currentOp.isCancelled })
                     _ = FolderStatsCalculator.stats(for: item, isCancelled: { currentOp.isCancelled })
                     // The sidebar shows this image as the archive's thumbnail
-                    // (it is not generated separately), so cache it too.
-                    if let preview = preview, ArchiveThumbCache.isUsed(for: item.type) {
-                        let thumbnailSize = 256
-                        let thumbnail = preview.imageData.flatMap { ArchivePreview.thumbnail(from: $0, maxPixelSize: thumbnailSize) }
-                        if ArchiveThumbCache.load(archivePath: item.path, thumbnailSize: thumbnailSize) == nil {
-                            self.saveArchiveThumbnail(for: item, thumbnail: thumbnail, thumbnailSize: thumbnailSize)
-                        }
+                    // (it is not generated separately), so cache it too, unless
+                    // what is cached is as large already.
+                    if let preview = preview, ArchiveThumbCache.isUsed(for: item.type),
+                       (ArchiveThumbCache.load(archivePath: item.path, thumbnailSize: thumbnailPixels)?.thumbnailSize ?? 0) < thumbnailPixels {
+                        let thumbnail = preview.imageData.flatMap { ArchivePreview.thumbnail(from: $0, maxPixelSize: thumbnailPixels) }
+                        self.saveArchiveThumbnail(for: item, thumbnail: thumbnail, thumbnailSize: thumbnailPixels)
                     }
                     guard let data = preview?.imageData else {
                         DispatchQueue.main.async {
