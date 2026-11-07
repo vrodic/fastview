@@ -8,8 +8,9 @@ public class SQLiteCache {
     private var db: OpaquePointer?
     private let lock = NSLock()
 
-    public init() {
-        setupDatabase()
+    /// `databaseURL` is the default location unless a test gives its own.
+    public init(databaseURL: URL? = nil) {
+        setupDatabase(at: databaseURL ?? SQLiteCache.defaultDatabaseURL())
     }
 
     deinit {
@@ -18,7 +19,25 @@ public class SQLiteCache {
         }
     }
 
-    private func setupDatabase() {
+    /// Closes the database for the app's exit. Waits for a write in progress, so the process does
+    /// not die in the middle of one and leave a journal for the next launch to roll back; writes
+    /// arriving after this are dropped.
+    public func shutdown() {
+        lock.lock()
+        defer { lock.unlock() }
+        guard db != nil else { return }
+        sqlite3_close(db)
+        db = nil
+    }
+
+    /// Rows changed so far by this connection.
+    var totalChanges: Int32 {
+        lock.lock()
+        defer { lock.unlock() }
+        return db == nil ? 0 : sqlite3_total_changes(db)
+    }
+
+    private static func defaultDatabaseURL() -> URL {
         let fm = FileManager.default
         let cacheDir: URL
         if let userCache = fm.urls(for: .cachesDirectory, in: .userDomainMask).first {
@@ -29,7 +48,10 @@ public class SQLiteCache {
         }
 
         try? fm.createDirectory(at: cacheDir, withIntermediateDirectories: true)
-        let dbURL = cacheDir.appendingPathComponent("fastview_cache.sqlite")
+        return cacheDir.appendingPathComponent("fastview_cache.sqlite")
+    }
+
+    private func setupDatabase(at dbURL: URL) {
         let dbPath = dbURL.path
 
         let res = sqlite3_open(dbPath, &db)
@@ -449,52 +471,62 @@ public class SQLiteCache {
         return result
     }
 
-    public func getDirectoryContents(key: String) -> [FileItem]? {
-        lock.lock()
-        defer { lock.unlock() }
-
+    /// The stored listing as JSON, as written: compressed (BLOB), or plain text in rows
+    /// saved before listings were compressed. Call with `lock` held.
+    private func storedListingColumn(key: String) -> (bytes: Data, isCompressed: Bool)? {
         guard db != nil else { return nil }
-
         let query = "SELECT json_data FROM directory_entries WHERE cache_key = ?;"
         var statement: OpaquePointer?
-
-        if sqlite3_prepare_v2(db, query, -1, &statement, nil) == SQLITE_OK {
-            sqlite3_bind_text(statement, 1, key, -1, SQLITE_TRANSIENT)
-
-            if sqlite3_step(statement) == SQLITE_ROW {
-                if let cString = sqlite3_column_text(statement, 0) {
-                    let jsonString = String(cString: cString)
-                    sqlite3_finalize(statement)
-
-                    if let data = jsonString.data(using: .utf8),
-                       let decoded = try? JSONDecoder().decode([CodableFileItem].self, from: data) {
-                        return decoded.map { $0.toFileItem() }
-                    }
-                }
-            }
-        }
-        sqlite3_finalize(statement)
-        return nil
+        defer { sqlite3_finalize(statement) }
+        guard sqlite3_prepare_v2(db, query, -1, &statement, nil) == SQLITE_OK else { return nil }
+        sqlite3_bind_text(statement, 1, key, -1, SQLITE_TRANSIENT)
+        guard sqlite3_step(statement) == SQLITE_ROW else { return nil }
+        let isCompressed = sqlite3_column_type(statement, 0) == SQLITE_BLOB
+        // BLOB access first: it leaves the stored text as it is.
+        guard let bytes = sqlite3_column_blob(statement, 0) else { return nil }
+        return (Data(bytes: bytes, count: Int(sqlite3_column_bytes(statement, 0))), isCompressed)
     }
 
+    public func getDirectoryContents(key: String) -> [FileItem]? {
+        lock.lock()
+        let stored = storedListingColumn(key: key)
+        lock.unlock()
+
+        guard let stored = stored else { return nil }
+        var json = stored.bytes
+        if stored.isCompressed {
+            guard let decompressed = try? (stored.bytes as NSData).decompressed(using: .lzfse) as Data else { return nil }
+            json = decompressed
+        }
+        return (try? JSONDecoder().decode([CodableFileItem].self, from: json))?.map { $0.toFileItem() }
+    }
+
+    /// Stores a listing, compressed (repeated paths make the JSON shrink about tenfold). Replacing
+    /// a row journals all of its old pages and listings can run to megabytes, and folders are
+    /// re-listed each time they open, so a listing that has not changed is not written at all.
     public func saveDirectoryContents(key: String, items: [FileItem]) {
+        let encoder = JSONEncoder()
+        // A stable key order: an unchanged listing must encode to the same bytes.
+        encoder.outputFormatting = .sortedKeys
+        guard let json = try? encoder.encode(items.map { CodableFileItem(from: $0) }),
+              let compressed = try? (json as NSData).compressed(using: .lzfse) as Data else {
+            return
+        }
+
         lock.lock()
         defer { lock.unlock() }
 
         guard db != nil else { return }
-
-        let codables = items.map { CodableFileItem(from: $0) }
-        guard let jsonData = try? JSONEncoder().encode(codables),
-              let jsonString = String(data: jsonData, encoding: .utf8) else {
-            return
-        }
+        if let stored = storedListingColumn(key: key), stored.isCompressed, stored.bytes == compressed { return }
 
         let query = "INSERT OR REPLACE INTO directory_entries (cache_key, json_data, timestamp) VALUES (?, ?, ?);"
         var statement: OpaquePointer?
 
         if sqlite3_prepare_v2(db, query, -1, &statement, nil) == SQLITE_OK {
             sqlite3_bind_text(statement, 1, key, -1, SQLITE_TRANSIENT)
-            sqlite3_bind_text(statement, 2, jsonString, -1, SQLITE_TRANSIENT)
+            compressed.withUnsafeBytes { buffer in
+                _ = sqlite3_bind_blob(statement, 2, buffer.baseAddress, Int32(buffer.count), SQLITE_TRANSIENT)
+            }
             sqlite3_bind_double(statement, 3, Date().timeIntervalSince1970)
 
             if sqlite3_step(statement) != SQLITE_DONE {

@@ -101,6 +101,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation,
 
     public func applicationWillTerminate(_ notification: Notification) {
         saveCurrentSelectionState()
+        SQLiteCache.shared.shutdown()
     }
 
     private func saveCurrentSelectionState() {
