@@ -104,6 +104,11 @@ private class ZoomingScrollView: NSScrollView {
             super.scrollWheel(with: event)
         }
     }
+
+    override func magnify(with event: NSEvent) {
+        super.magnify(with: event)
+        ownerImageView?.announceZoom()
+    }
 }
 
 public class MainImageView: NSView {
@@ -161,7 +166,9 @@ public class MainImageView: NSView {
         didSet {
             if isFreehandSelectionMode {
                 window?.makeFirstResponder(self)
+                HUDMessageView.show("Draw around the area  ·  Esc cancels", in: self, duration: 3)
             }
+            window?.invalidateCursorRects(for: self)
             updateOverlay()
         }
     }
@@ -176,7 +183,10 @@ public class MainImageView: NSView {
     private var removalTicket: RemovalTicket?
     /// Called with the new image after an object is removed or the original restored.
     public var onImageEdited: ((NSImage) -> Void)?
-
+    /// Called when the image area is clicked, so its pane can become the active one.
+    public var onActivated: (() -> Void)?
+    /// The shown file's name, offered when saving the image.
+    public var sourceName: String?
     /// Censor mode: drags mark areas to hide, with the floating toolbar showing.
     public private(set) var isCensoring = false
     private var censorSettings = CensorSettings.saved
@@ -195,6 +205,7 @@ public class MainImageView: NSView {
     private let imageView = OrientedImageView()
     private let scrollView = ZoomingScrollView()
     private let selectionOverlayView = SelectionOverlayView()
+    private let placeholderView = ImagePlaceholderView()
 
     private let loadingContainerView = NSView()
     private let loadingIndicator = NSProgressIndicator()
@@ -267,6 +278,7 @@ public class MainImageView: NSView {
 
         addSubview(scrollView)
         addSubview(selectionOverlayView)
+        addSubview(placeholderView)
         addSubview(loadingContainerView)
 
         loadingContainerView.addSubview(loadingIndicator)
@@ -283,6 +295,11 @@ public class MainImageView: NSView {
             selectionOverlayView.trailingAnchor.constraint(equalTo: trailingAnchor),
             selectionOverlayView.topAnchor.constraint(equalTo: topAnchor),
             selectionOverlayView.bottomAnchor.constraint(equalTo: bottomAnchor),
+
+            placeholderView.centerXAnchor.constraint(equalTo: centerXAnchor),
+            placeholderView.centerYAnchor.constraint(equalTo: centerYAnchor),
+            placeholderView.widthAnchor.constraint(lessThanOrEqualTo: widthAnchor, constant: -48),
+            placeholderView.widthAnchor.constraint(lessThanOrEqualToConstant: 420),
 
             loadingContainerView.centerXAnchor.constraint(equalTo: centerXAnchor),
             loadingContainerView.centerYAnchor.constraint(equalTo: centerYAnchor),
@@ -430,8 +447,15 @@ public class MainImageView: NSView {
         }
     }
 
+    /// Says why no image shows, until the next `setImage`.
+    public func showPlaceholder(symbol: String, title: String, detail: String? = nil) {
+        guard rawImage == nil else { return }
+        placeholderView.show(symbol: symbol, title: title, detail: detail)
+    }
+
     public func setImage(_ image: NSImage?, keepZoom: Bool = true) {
         hideLoading()
+        placeholderView.isHidden = true
         removalTicket?.cancel()
         uneditedImage = nil
         censorUndo = []
@@ -483,18 +507,63 @@ public class MainImageView: NSView {
         let newMag = min(scrollView.maxMagnification, scrollView.magnification * 1.25)
         scrollView.magnification = newMag
         zoomMode = .custom(newMag)
+        announceZoom()
     }
 
     public func zoomOut() {
         let newMag = max(scrollView.minMagnification, scrollView.magnification / 1.25)
         scrollView.magnification = newMag
         zoomMode = .custom(newMag)
+        announceZoom()
     }
 
-    public func resetZoomToFit() {
+    public func resetZoomToFit(announce: Bool = false) {
         zoomMode = .fitToScreen
         scrollView.magnification = 1.0
         updateLayout()
+        if announce { announceZoom() }
+    }
+
+    /// How large the image shows, in percent of its own size, where it fits the
+    /// view at magnification 1.
+    static func zoomPercent(imageSize: NSSize, viewSize: NSSize, magnification: CGFloat) -> Int? {
+        guard imageSize.width > 0, imageSize.height > 0, viewSize.width > 0, viewSize.height > 0 else { return nil }
+        let fit = min(viewSize.width / imageSize.width, viewSize.height / imageSize.height)
+        return Int((fit * magnification * 100).rounded())
+    }
+
+    /// Shows the zoom level for a moment.
+    func announceZoom() {
+        guard let size = displaySize,
+              let percent = Self.zoomPercent(imageSize: size, viewSize: bounds.size, magnification: scrollView.magnification) else { return }
+        var isFit = false
+        if case .fitToScreen = zoomMode, abs(scrollView.magnification - 1) < 0.001 { isFit = true }
+        HUDMessageView.show(isFit ? "Fit  ·  \(percent)%" : "\(percent)%", in: self)
+    }
+
+    /// Double click: back to fit when zoomed, else actual size around the click
+    /// (twice the size for an image that already fits at its own size).
+    private func toggleZoom(at point: NSPoint) {
+        guard rawImage != nil else { return }
+        if scrollView.magnification > 1.001 {
+            resetZoomToFit(announce: true)
+            return
+        }
+        setActualSize(centeredAt: point)
+        if scrollView.magnification <= 1.001 {
+            zoomMode = .custom(2)
+            imageView.frame = NSRect(origin: .zero, size: bounds.size)
+            scrollView.setMagnification(2, centeredAt: point)
+            window?.invalidateCursorRects(for: self)
+            announceZoom()
+        }
+    }
+
+    public func cancelFreehandSelection() {
+        outlineRemovesArea = false
+        isDrawingSelection = false
+        selectionPath = []
+        isFreehandSelectionMode = false
     }
 
     public func handleScrollWheel(with event: NSEvent) {
@@ -508,7 +577,8 @@ public class MainImageView: NSView {
         let targetMag = currentMag * (1.0 + deltaY * factor)
 
         if targetMag <= 1.001 {
-            resetZoomToFit()
+            // Only when this scroll is what brought it back to fit.
+            resetZoomToFit(announce: currentMag > 1.001)
         } else {
             let clampedMag = min(scrollView.maxMagnification, max(1.0, targetMag))
             if clampedMag <= 1.001 {
@@ -522,6 +592,7 @@ public class MainImageView: NSView {
                 let mouseInScrollView = scrollView.convert(event.locationInWindow, from: nil)
                 scrollView.setMagnification(clampedMag, centeredAt: mouseInScrollView)
                 window?.invalidateCursorRects(for: self)
+                announceZoom()
             }
         }
     }
@@ -778,11 +849,21 @@ public class MainImageView: NSView {
     }
 
     @objc private func contextSaveImageAction(_ sender: NSMenuItem) {
+        saveImageAs()
+    }
+
+    /// The name offered when saving: the shown file's, marked when the image was edited.
+    static func suggestedSaveName(sourceName: String?, isEdited: Bool) -> String {
+        let stem = sourceName.map { ($0 as NSString).deletingPathExtension }.flatMap { $0.isEmpty ? nil : $0 } ?? "Image"
+        return isEdited ? "\(stem) edited.png" : "\(stem).png"
+    }
+
+    public func saveImageAs() {
         guard let image = currentImage, let window = window,
               let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return }
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.png, .jpeg]
-        panel.nameFieldStringValue = uneditedImage != nil ? "Edited Image.png" : "Image.png"
+        panel.nameFieldStringValue = Self.suggestedSaveName(sourceName: sourceName, isEdited: uneditedImage != nil)
         panel.beginSheetModal(for: window) { response in
             guard response == .OK, let url = panel.url else { return }
             let isJPEG = ["jpg", "jpeg"].contains(url.pathExtension.lowercased())
@@ -799,11 +880,20 @@ public class MainImageView: NSView {
     }
 
     @objc private func contextCopyImageAction(_ sender: NSMenuItem) {
-        guard let img = currentImage else { return }
+        copyImageToPasteboard()
+    }
+
+    /// Returns false when there is no image to copy.
+    @discardableResult
+    public func copyImageToPasteboard() -> Bool {
+        guard let img = currentImage else { return false }
         NSPasteboard.general.copyImage(img)
+        HUDMessageView.show("Copied Image", in: self)
+        return true
     }
 
     override public func mouseDown(with event: NSEvent) {
+        onActivated?()
         if isCensoring {
             guard !censorBusy, rawImage != nil else { return }
             censorDragStart = convert(event.locationInWindow, from: nil)
@@ -817,6 +907,11 @@ public class MainImageView: NSView {
             selectionPath = [pt]
             isDrawingSelection = true
             updateOverlay()
+            return
+        }
+
+        if event.clickCount == 2 {
+            toggleZoom(at: convert(event.locationInWindow, from: nil))
             return
         }
 
@@ -904,7 +999,11 @@ public class MainImageView: NSView {
             if let toolbar = censorToolbar { addCursorRect(toolbar.frame, cursor: .arrow) }
             return
         }
-        if !isFreehandSelectionMode && scrollView.magnification > 1.001 {
+        if isFreehandSelectionMode {
+            addCursorRect(bounds, cursor: .crosshair)
+            return
+        }
+        if scrollView.magnification > 1.001 {
             let cursor: NSCursor = isDraggingImage ? .closedHand : .openHand
             addCursorRect(bounds, cursor: cursor)
         }
@@ -992,7 +1091,7 @@ public class MainImageView: NSView {
         updateOverlay()
     }
 
-    public func setActualSize() {
+    public func setActualSize(centeredAt point: NSPoint? = nil) {
         guard let imgSize = displaySize, bounds.width > 0, bounds.height > 0 else {
             zoomMode = .actualSize
             scrollView.magnification = 1.0
@@ -1010,14 +1109,15 @@ public class MainImageView: NSView {
 
         let actualMag = max(1.0, imgSize.width / max(1.0, fitW))
         if actualMag <= 1.001 {
-            resetZoomToFit()
+            resetZoomToFit(announce: true)
         } else {
             zoomMode = .actualSize
             scrollView.hasHorizontalScroller = true
             scrollView.hasVerticalScroller = true
             imageView.frame = NSRect(origin: .zero, size: bounds.size)
-            scrollView.setMagnification(actualMag, centeredAt: NSPoint(x: bounds.midX, y: bounds.midY))
+            scrollView.setMagnification(actualMag, centeredAt: point ?? NSPoint(x: bounds.midX, y: bounds.midY))
             window?.invalidateCursorRects(for: self)
+            announceZoom()
         }
     }
 
@@ -1027,7 +1127,7 @@ public class MainImageView: NSView {
     }
 
     private func updateLayout() {
-        guard let imgSize = displaySize else {
+        guard displaySize != nil else {
             imageView.frame = .zero
             return
         }
@@ -1041,15 +1141,8 @@ public class MainImageView: NSView {
             scrollView.hasHorizontalScroller = false
             scrollView.hasVerticalScroller = false
             imageView.frame = NSRect(origin: .zero, size: containerSize)
-        case .actualSize:
-            scrollView.hasHorizontalScroller = true
-            scrollView.hasVerticalScroller = true
-            let originX = max(0, (containerSize.width - imgSize.width) / 2)
-            let originY = max(0, (containerSize.height - imgSize.height) / 2)
-            let width = max(containerSize.width, imgSize.width)
-            let height = max(containerSize.height, imgSize.height)
-            imageView.frame = NSRect(x: originX, y: originY, width: width, height: height)
-        case .custom:
+        case .actualSize, .custom:
+            // Magnified from the fitted size, like `setActualSize`.
             scrollView.hasHorizontalScroller = true
             scrollView.hasVerticalScroller = true
             imageView.frame = NSRect(origin: .zero, size: containerSize)

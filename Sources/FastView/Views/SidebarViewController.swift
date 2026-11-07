@@ -58,6 +58,10 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
     private let thumbnailRefreshDelay: TimeInterval = 0.3
     private lazy var thumbnailGroup = "sidebar-\(ObjectIdentifier(self).hashValue)"
 
+    fileprivate var mainSplitVC: MainSplitViewController? {
+        (parent as? MainSplitViewController) ?? ((parent as? SidebarContainerViewController)?.parent as? MainSplitViewController)
+    }
+
     public var selectedItem: FileItem? {
         let selectedRow = tableView.selectedRow
         guard selectedRow >= 0 && selectedRow < items.count else { return nil }
@@ -239,6 +243,8 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("MainColumn"))
         column.resizingMask = .autoresizingMask
         tableView.addTableColumn(column)
+        // Rows dragged to other apps carry the file (see pasteboardWriterForRow).
+        tableView.setDraggingSourceOperationMask(.copy, forLocal: false)
 
         scrollView.documentView = tableView
 
@@ -469,6 +475,9 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
         if prev < items.count { selectRow(prev) }
     }
 
+    var isFirstRowSelected: Bool { !items.isEmpty && tableView.selectedRow == 0 }
+    var isLastRowSelected: Bool { !items.isEmpty && tableView.selectedRow == items.count - 1 }
+
     public func handlePageNavigation(keyType: PageKeyType) {
         guard !items.isEmpty else { return }
         let visibleRows = tableView.rows(in: scrollView.contentView.bounds)
@@ -527,6 +536,17 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
     // NSTableViewDataSource
     public func numberOfRows(in tableView: NSTableView) -> Int {
         return items.count
+    }
+
+    public func tableView(_ tableView: NSTableView, pasteboardWriterForRow row: Int) -> NSPasteboardWriting? {
+        guard row < items.count, FileActions.isOnDisk(items[row]) else { return nil }
+        return URL(fileURLWithPath: items[row].path) as NSURL
+    }
+
+    /// Typing a name jumps to it. The (..) row has none to type.
+    public func tableView(_ tableView: NSTableView, typeSelectStringFor tableColumn: NSTableColumn?, row: Int) -> String? {
+        guard row < items.count, items[row].type != .parentDirectory else { return nil }
+        return items[row].name
     }
 
     // NSTableViewDelegate
@@ -630,6 +650,19 @@ class CustomTableView: NSTableView {
             infoItem.representedObject = clickedRow
             menu.addItem(infoItem)
 
+            if item.type != .parentDirectory {
+                let finderItem = NSMenuItem(title: "Show in Finder", action: #selector(contextShowInFinderAction(_:)), keyEquivalent: "")
+                finderItem.target = self
+                finderItem.representedObject = item
+                menu.addItem(finderItem)
+            }
+            if FileActions.isOnDisk(item) {
+                let openItem = NSMenuItem(title: "Open in Default App", action: #selector(contextOpenInDefaultAppAction(_:)), keyEquivalent: "")
+                openItem.target = self
+                openItem.representedObject = item
+                menu.addItem(openItem)
+            }
+
             menu.addItem(NSMenuItem.separator())
 
             let copyImageItem = NSMenuItem(title: "Copy Image to Clipboard", action: #selector(contextCopyImageAction(_:)), keyEquivalent: "")
@@ -641,6 +674,14 @@ class CustomTableView: NSTableView {
             copyItem.target = self
             copyItem.representedObject = item.path
             menu.addItem(copyItem)
+
+            if let splitVC = vc.mainSplitVC, splitVC.canMoveToTrash(item, pane: vc.paneIndex) {
+                menu.addItem(NSMenuItem.separator())
+                let trashItem = NSMenuItem(title: "Move to Trash", action: #selector(contextMoveToTrashAction(_:)), keyEquivalent: "")
+                trashItem.target = self
+                trashItem.representedObject = item
+                menu.addItem(trashItem)
+            }
         }
 
         return menu
@@ -649,9 +690,21 @@ class CustomTableView: NSTableView {
     @objc private func contextAddObjectToCanvasAction(_ sender: NSMenuItem) {
         guard let item = sender.representedObject as? FileItem,
               let vc = delegate as? SidebarViewController else { return }
-        let splitVC = (vc.parent as? MainSplitViewController)
-            ?? ((vc.parent as? SidebarContainerViewController)?.parent as? MainSplitViewController)
-        splitVC?.addObjectToCanvas(from: item)
+        vc.mainSplitVC?.addObjectToCanvas(from: item)
+    }
+
+    @objc private func contextShowInFinderAction(_ sender: NSMenuItem) {
+        if let item = sender.representedObject as? FileItem { FileActions.showInFinder(item) }
+    }
+
+    @objc private func contextOpenInDefaultAppAction(_ sender: NSMenuItem) {
+        if let item = sender.representedObject as? FileItem { FileActions.openInDefaultApp(item) }
+    }
+
+    @objc private func contextMoveToTrashAction(_ sender: NSMenuItem) {
+        guard let item = sender.representedObject as? FileItem,
+              let vc = delegate as? SidebarViewController else { return }
+        vc.mainSplitVC?.moveToTrash(item, pane: vc.paneIndex)
     }
 
     @objc private func contextToggleFavoriteAction(_ sender: NSMenuItem) {
@@ -892,6 +945,8 @@ public class SidebarTableCellView: NSTableCellView {
     public func configure(with item: FileItem) {
         self.currentItem = item
         nameLabel.stringValue = item.name
+        // Images show only their thumbnail.
+        toolTip = item.name
 
         let badgeConfig = NSImage.SymbolConfiguration(pointSize: 28, weight: .bold)
         if item.isDirectory || item.type == .parentDirectory {

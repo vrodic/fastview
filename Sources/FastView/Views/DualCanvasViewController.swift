@@ -261,6 +261,7 @@ public class DualCanvasViewController: NSViewController, CombiningToolbarDelegat
     }
 
     public func setImage(_ image: NSImage?, pane: Int, itemPath: String? = nil, archivePath: String? = nil) {
+        self.imageView(pane: pane).sourceName = itemPath.map { ($0 as NSString).lastPathComponent }
         if pane == 1 {
             imageView1.setImage(image, keepZoom: true)
             combiningCanvasView.image1 = image
@@ -305,6 +306,15 @@ public class DualCanvasViewController: NSViewController, CombiningToolbarDelegat
             }
             canvas.setForegroundObject(fg, forPane: pane)
         }
+    }
+
+    public func imageView(pane: Int) -> MainImageView {
+        pane == 2 ? imageView2 : imageView1
+    }
+
+    /// A brief message over the panes and canvas.
+    public func showHUD(_ text: String) {
+        HUDMessageView.show(text, in: view)
     }
 
     public func rotateRight(pane: Int) {

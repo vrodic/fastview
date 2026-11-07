@@ -23,7 +23,19 @@ public final class MainTabsViewController: NSViewController {
     }
 
     override public func loadView() {
-        view = NSView()
+        let dropView = FileDropView()
+        dropView.dropTitle = { [weak self] point in
+            guard let self = self else { return "" }
+            return self.splitVC.dropPane(at: self.view.convert(point, to: nil)) == 2 ? "Open in 2nd View" : "Open in FastView"
+        }
+        dropView.onDrop = { [weak self] url, point in
+            guard let self = self else { return }
+            let pane = self.splitVC.dropPane(at: self.view.convert(point, to: nil))
+            self.select(.browser)
+            NSApp.activate(ignoringOtherApps: true)
+            globalAppDelegate?.open(path: url.path, pane: pane)
+        }
+        view = dropView
         tabBar.translatesAutoresizingMaskIntoConstraints = false
         tabBar.isHidden = true
         tabBar.onSelect = { [weak self] tab in self?.select(tab) }

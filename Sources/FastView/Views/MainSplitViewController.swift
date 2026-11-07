@@ -173,6 +173,8 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         super.viewDidAppear()
         splitView.delegate = self
         restoreSidebarWidth()
+        // So typing a name and the page keys work without clicking the list first.
+        focusActiveSidebar()
     }
 
     private func restoreSidebarWidth() {
@@ -224,6 +226,14 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         }
         dualCanvasVC.onCloseSecondPane = { [weak self] in
             self?.closeSecondView()
+        }
+
+        for pane in [1, 2] {
+            dualCanvasVC.imageView(pane: pane).onActivated = { [weak self] in
+                guard let self = self else { return }
+                self.activePane = pane
+                self.focusActiveSidebar()
+            }
         }
 
         dualCanvasVC.onPaneImageSet = { [weak self] pane, hasImage, itemPath in
@@ -319,6 +329,71 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         loadLocation(location, pane: 1, targetSelectedItemPath: targetSelectedItemPath)
     }
 
+    public enum OpenResult { case opened, missing, unsupported, combination }
+
+    /// The item to select when opening `path`: the image itself, or the one selected
+    /// when this location was last shown. Nil selects the first item.
+    static func selectionTarget(openingPath path: String, type: FileType, lastOpenedPath: String?, savedItem: String?) -> String? {
+        if type == .image { return path }
+        guard let lastOpenedPath = lastOpenedPath,
+              URL(fileURLWithPath: lastOpenedPath).standardized.path == URL(fileURLWithPath: path).standardized.path else { return nil }
+        return savedItem
+    }
+
+    /// Opens a folder, archive, image or saved combination by path, in `pane`, as the user asked
+    /// (File > Open, Open Recent, a drop). What the path is gets read off the main thread.
+    public func openPath(_ path: String, pane: Int = 1, completion: ((OpenResult) -> Void)? = nil) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let url = URL(fileURLWithPath: path)
+            let exists = FileManager.default.fileExists(atPath: path)
+            let type = ArchiveReader.fileType(for: url)
+            let location = NavigationManager.locationForPath(path)
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self else { return }
+                let name = url.lastPathComponent
+                guard exists else {
+                    self.dualCanvasVC.showHUD("“\(name)” is no longer available")
+                    completion?(.missing)
+                    return
+                }
+                if url.pathExtension.lowercased() == CombinationStateManager.fileExtension {
+                    self.restoreCombinationState(from: url)
+                    completion?(.combination)
+                    return
+                }
+                guard type != .unsupported else {
+                    self.dualCanvasVC.showHUD("FastView can’t open “\(name)”")
+                    completion?(.unsupported)
+                    return
+                }
+                if pane == 2 {
+                    if self.showFavoritesOnlyPane2 { self.showFavoritesOnlyPane2 = false }
+                    let target = Self.selectionTarget(openingPath: path, type: type, lastOpenedPath: nil, savedItem: nil)
+                    self.loadLocation(location, pane: 2, targetSelectedItemPath: target)
+                } else {
+                    let defaults = UserDefaults.standard
+                    let savedItem = defaults.string(forKey: "FastViewLastSelectedItemId") ?? defaults.string(forKey: "FastViewLastSelectedItemPath")
+                    let target = Self.selectionTarget(openingPath: path, type: type,
+                                                      lastOpenedPath: defaults.string(forKey: "FastViewLastOpenedPath"), savedItem: savedItem)
+                    self.activePane = 1
+                    self.openLocation(location, targetSelectedItemPath: target)
+                }
+                self.focusActiveSidebar()
+                completion?(.opened)
+            }
+        }
+    }
+
+    /// The pane a drop at a point in window coordinates opens in.
+    public func dropPane(at windowPoint: NSPoint) -> Int {
+        guard sidebarContainerVC.isDualView else { return 1 }
+        let paneTwoViews: [NSView] = [sidebarContainerVC.sidebarVC2.view, dualCanvasVC.imageView2]
+        let overPaneTwo = paneTwoViews.contains {
+            !$0.isHiddenOrHasHiddenAncestor && $0.window != nil && $0.convert($0.bounds, to: nil).contains(windowPoint)
+        }
+        return overPaneTwo ? 2 : 1
+    }
+
     /// `keepOtherPane` stops an archive location from cancelling the other pane's loading,
     /// for when both panes are being opened together.
     public func loadLocation(_ location: NavigationLocation, pane: Int = 1, targetSelectedItemPath: String? = nil, keepOtherPane: Bool = false) {
@@ -349,17 +424,7 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
 
         panel.begin { [weak self] response in
             guard let self = self, response == .OK, let url = panel.url else { return }
-            let path = url.path
-            let fileType = ArchiveReader.fileType(for: url)
-
-            if fileType == .image {
-                let parentPath = url.deletingLastPathComponent().path
-                let loc = NavigationManager.locationForPath(parentPath)
-                self.loadLocation(loc, pane: 2, targetSelectedItemPath: path)
-            } else {
-                let loc = NavigationManager.locationForPath(path)
-                self.loadLocation(loc, pane: 2)
-            }
+            self.openPath(url.path, pane: 2)
         }
     }
 
@@ -374,13 +439,72 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
     }
 
     /// The image view of the active pane.
-    private var activeImageView: MainImageView {
+    public var activeImageView: MainImageView {
         activePane == 2 && sidebarContainerVC.isDualView ? dualCanvasVC.imageView2 : dualCanvasVC.imageView1
     }
 
     /// The image view in censor mode, if any.
     public var censoringImageView: MainImageView? {
         [dualCanvasVC.imageView1, dualCanvasVC.imageView2].first { $0.isCensoring }
+    }
+
+    /// The image view drawing an outline, if any.
+    public var outliningImageView: MainImageView? {
+        [dualCanvasVC.imageView1, dualCanvasVC.imageView2].first { $0.isFreehandSelectionMode }
+    }
+
+    public func switchActivePane() {
+        guard sidebarContainerVC.isDualView else { return }
+        activePane = activePane == 1 ? 2 : 1
+        focusActiveSidebar()
+    }
+
+    public func canMoveToTrash(_ item: FileItem, pane: Int) -> Bool {
+        // The favorites list collects files from anywhere; it is not where they are managed.
+        let isFavoritesList = pane == 2 ? showFavoritesOnlyPane2 : showFavoritesOnly
+        return FileActions.isOnDisk(item) && !isFavoritesList
+    }
+
+    /// Moves the item's file to the Trash; the row now in its place gets selected, and
+    /// Edit > Undo puts it back.
+    public func moveToTrash(_ item: FileItem, pane: Int) {
+        let original = URL(fileURLWithPath: item.path)
+        NSWorkspace.shared.recycle([original]) { [weak self] newURLs, error in
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                if let error = error {
+                    self.showFileError(error)
+                    return
+                }
+                self.dualCanvasVC.showHUD("Moved “\(item.name)” to Trash")
+                if let trashed = newURLs[original] {
+                    let undo = self.view.window?.undoManager
+                    undo?.registerUndo(withTarget: self) { $0.putBack(trashed, to: original, pane: pane) }
+                    undo?.setActionName("Move to Trash")
+                }
+                self.refreshListing(pane: pane, modifiedPaths: [])
+            }
+        }
+    }
+
+    private func putBack(_ trashed: URL, to original: URL, pane: Int) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let result = Result { try FileManager.default.moveItem(at: trashed, to: original) }
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self else { return }
+                if case .failure(let error) = result {
+                    self.showFileError(error)
+                    return
+                }
+                self.dualCanvasVC.showHUD("Put Back “\(original.lastPathComponent)”")
+                self.refreshListing(pane: pane, modifiedPaths: [])
+            }
+        }
+    }
+
+    private func showFileError(_ error: Error) {
+        let alert = NSAlert(error: error)
+        if let window = view.window { alert.beginSheetModal(for: window) } else { alert.runModal() }
     }
 
     public func toggleCensoringForActivePane() {
@@ -1020,6 +1144,10 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         let archiveName = archiveURL.lastPathComponent
         let folderName = archiveURL.deletingLastPathComponent().lastPathComponent
 
+        if pane == 1 {
+            view.window?.title = (path as NSString).lastPathComponent
+        }
+
         let locationTitle: String
         if isArchive {
             if let targetPath = targetSelectedItemPath {
@@ -1109,15 +1237,23 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
                 } else if targetSelectedItemPath == nil,
                           let firstItem = items.first(where: { $0.type == .image || $0.type == .archiveZip || $0.type == .archiveRar }) {
                     self.displayItem(firstItem, pane: pane)
+                } else if targetSelectedItemPath != nil, self.restoreProgress == nil, items.contains(where: { $0.type != .parentDirectory }) {
+                    // The item asked for has gone: show what is here instead of nothing.
+                    // (A restore does not: another image would get a detected object of its own.)
+                    targetSidebar.selectRow(items[0].type == .parentDirectory ? 1 : 0)
                 } else {
                     // The item asked for is not here: nothing will be shown in this pane.
                     self.restorePaneHasNoImage(pane: pane)
                     if pane == 1 {
                         self.statusBarView.updateDirectoryStats(imageCount: imageItems.count, totalSizeBytes: archiveSize, locationName: locationTitle)
-                        if imageItems.isEmpty {
-                            self.dualCanvasVC.imageView1.hideLoading()
-                            self.dualCanvasVC.setImage(nil, pane: 1)
-                        }
+                    }
+                    // A selected folder is loading its preview, which stays.
+                    let selected = targetSidebar.selectedItem
+                    if imageItems.isEmpty && (selected == nil || selected?.type == .parentDirectory) {
+                        self.dualCanvasVC.setImage(nil, pane: pane)
+                        self.dualCanvasVC.imageView(pane: pane).showPlaceholder(
+                            symbol: "photo.on.rectangle.angled", title: "No Images Here",
+                            detail: "Drop a folder, archive or image here, or choose File > Open.")
                     }
                 }
 
@@ -1272,6 +1408,7 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
     private func showFavorites(_ favorites: [FileItem], pane: Int, targetSelectedItemPath: String?) {
         let targetSidebar = (pane == 2) ? sidebarContainerVC.sidebarVC2 : sidebarContainerVC.sidebarVC1
         targetSidebar.setHeaderTitle(pane == 2 ? "Pane 2: Favorites" : "Favorites")
+        if pane == 1 { view.window?.title = "Favorites" }
         targetSidebar.setItems(favorites, selectFirst: targetSelectedItemPath == nil)
         updateWatchedFolders()
         if pane == 1 {
@@ -1291,6 +1428,15 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
             displayItem(favorites[idx], pane: pane)
         } else if targetSelectedItemPath == nil, let first = favorites.first {
             displayItem(first, pane: pane)
+        } else if !favorites.isEmpty {
+            // The item asked for is no longer a favorite.
+            targetSidebar.selectRow(0)
+        }
+        if favorites.isEmpty {
+            dualCanvasVC.setImage(nil, pane: pane)
+            dualCanvasVC.imageView(pane: pane).showPlaceholder(
+                symbol: "star", title: "No Favorites Yet",
+                detail: "Press ⌘F on an image, folder or archive to add it. Press ⌘L to go back to browsing.")
         }
     }
 
@@ -1443,8 +1589,9 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         if item.type == .parentDirectory {
             if pane == 1 {
                 statusBarView.updateSelectedItemStats(item: item, position: containerStats, parentName: parentName)
-                dualCanvasVC.setImage(nil, pane: 1)
             }
+            dualCanvasVC.setImage(nil, pane: pane)
+            dualCanvasVC.imageView(pane: pane).showPlaceholder(symbol: "arrow.up.circle", title: "Parent Folder", detail: "Press Return to go up.")
             return
         }
 
@@ -1482,6 +1629,7 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
                 if pane == 1 {
                     self.dualCanvasVC.imageView1.hideLoading()
                 }
+                self.showLoadFailure(of: item, pane: pane, sidebar: targetSidebar)
             }
 
             if isContainer {
@@ -1500,13 +1648,36 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         }
     }
 
+    /// Says why the pane stays empty. A load that was cancelled also ends with no image, so this
+    /// waits a moment: a newer load of the same item will have started by then.
+    private func showLoadFailure(of item: FileItem, pane: Int, sidebar: SidebarViewController) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+            guard let self = self, sidebar.selectedItem?.id == item.id,
+                  !ThumbnailGenerator.shared.hasPendingFullImageLoad(inGroup: pane == 2 ? "pane2" : "main") else { return }
+            let imageView = self.dualCanvasVC.imageView(pane: pane)
+            if item.type == .image {
+                imageView.showPlaceholder(symbol: "exclamationmark.triangle", title: "Can’t Display “\(item.name)”",
+                                          detail: "The file may be damaged, or in a format this Mac can’t read.")
+            } else {
+                imageView.showPlaceholder(symbol: "photo.on.rectangle.angled", title: "No Images in “\(item.name)”")
+            }
+        }
+    }
+
     public func toggleFavoriteOnSelectedItem() {
         if let item = activeSidebar.selectedItem {
+            let sidebar = activeSidebar
+            // In a favorites list the item goes away: keep the place by selecting its neighbour.
+            let index = sidebar.items.firstIndex(where: { $0.id == item.id })
+            let neighbour = index.flatMap { i in
+                i + 1 < sidebar.items.count ? sidebar.items[i + 1] : (i > 0 ? sidebar.items[i - 1] : nil)
+            }
             let newState = SQLiteCache.shared.toggleFavorite(item: item)
             print("[MainSplitVC] Toggled favorite for item: \(item.name) (id: \(item.id), path: \(item.path)), newState isFavorite: \(newState)")
-            activeSidebar.reloadSelectedRow()
-            if showFavoritesOnly {
-                reloadDirectoryContentsAsync(pane: activePane)
+            dualCanvasVC.showHUD(newState ? "Added to Favorites" : "Removed from Favorites")
+            sidebar.reloadSelectedRow()
+            if activePane == 2 ? showFavoritesOnlyPane2 : showFavoritesOnly {
+                reloadDirectoryContentsAsync(pane: activePane, targetSelectedItemPath: neighbour?.id)
             }
         } else {
             print("[MainSplitVC] toggleFavoriteOnSelectedItem called but no item selected in active sidebar")
@@ -1553,23 +1724,34 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         }
     }
 
+    /// Steps through the list, saying so at its end instead of doing nothing.
+    private func step(_ sidebar: SidebarViewController, forward: Bool) {
+        if forward ? sidebar.isLastRowSelected : sidebar.isFirstRowSelected {
+            dualCanvasVC.showHUD(forward ? "Last Item" : "First Item")
+        } else if forward {
+            sidebar.selectNext()
+        } else {
+            sidebar.selectPrevious()
+        }
+    }
+
     public func selectNextImage() {
-        activeSidebar.selectNext()
+        step(activeSidebar, forward: true)
     }
 
     public func selectPreviousImage() {
-        activeSidebar.selectPrevious()
+        step(activeSidebar, forward: false)
     }
 
     public func selectNextImagePane2() {
         if sidebarContainerVC.isDualView {
-            sidebarContainerVC.sidebarVC2.selectNext()
+            step(sidebarContainerVC.sidebarVC2, forward: true)
         }
     }
 
     public func selectPreviousImagePane2() {
         if sidebarContainerVC.isDualView {
-            sidebarContainerVC.sidebarVC2.selectPrevious()
+            step(sidebarContainerVC.sidebarVC2, forward: false)
         }
     }
 
@@ -1839,10 +2021,6 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         cancelAllIOOperations()
         let result = navMgr.navigateUp()
         reloadDirectoryContentsAsync(pane: p, targetSelectedItemPath: result.exitedItemPath, isNavigatingUp: true)
-    }
-
-    public var imageView: MainImageView {
-        return dualCanvasVC.imageView1
     }
 
     public func showInfoForSelectedItem() {

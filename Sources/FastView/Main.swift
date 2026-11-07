@@ -126,7 +126,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation,
         return NSHomeDirectory()
     }
 
-    private func saveLastOpenedPath(_ path: String) {
+    func saveLastOpenedPath(_ path: String) {
         UserDefaults.standard.set(path, forKey: AppDelegate.lastPathKey)
 
         var recents = UserDefaults.standard.stringArray(forKey: AppDelegate.recentDirsKey) ?? []
@@ -150,7 +150,9 @@ public class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation,
         appMenu.addItem(withTitle: "About FastView", action: #selector(showAboutPanel(_:)), keyEquivalent: "")
         appMenu.addItem(NSMenuItem.separator())
         appMenu.addItem(withTitle: "Hide FastView", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
-        appMenu.addItem(withTitle: "Hide Others", action: #selector(NSApplication.hideOtherApplications(_:)), keyEquivalent: "h")
+        let hideOthersItem = NSMenuItem(title: "Hide Others", action: #selector(NSApplication.hideOtherApplications(_:)), keyEquivalent: "h")
+        hideOthersItem.keyEquivalentModifierMask = [.command, .option]
+        appMenu.addItem(hideOthersItem)
         appMenu.addItem(withTitle: "Show All", action: #selector(NSApplication.unhideAllApplications(_:)), keyEquivalent: "")
         appMenu.addItem(NSMenuItem.separator())
         appMenu.addItem(withTitle: "Quit FastView", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
@@ -193,8 +195,33 @@ public class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation,
 
         fileMenu.addItem(NSMenuItem.separator())
         fileMenu.addItem(withTitle: "Show Info", action: #selector(showInfoAction(_:)), keyEquivalent: "i")
+        let finderItem = NSMenuItem(title: "Show in Finder", action: #selector(showInFinderAction(_:)), keyEquivalent: "R")
+        fileMenu.addItem(finderItem)
+        fileMenu.addItem(withTitle: "Open in Default App", action: #selector(openInDefaultAppAction(_:)), keyEquivalent: "")
+        let saveImageItem = NSMenuItem(title: "Save Image As…", action: #selector(saveImageAction(_:)), keyEquivalent: "S")
+        fileMenu.addItem(saveImageItem)
+        fileMenu.addItem(NSMenuItem.separator())
+        let trashItem = NSMenuItem(title: "Move to Trash", action: #selector(moveToTrashAction(_:)), keyEquivalent: "\u{8}")
+        trashItem.keyEquivalentModifierMask = [.command]
+        fileMenu.addItem(trashItem)
         fileMenu.addItem(NSMenuItem.separator())
         fileMenu.addItem(withTitle: "Close Window", action: #selector(closeTabOrWindowAction(_:)), keyEquivalent: "w")
+
+        // Uppercase key equivalents include Shift (⇧⌘C), as in the standard Mac menus.
+        // Text fields (a combination's name, the search field) get cut, copy and paste from here too.
+        let editMenuItem = NSMenuItem()
+        mainMenu.addItem(editMenuItem)
+        let editMenu = NSMenu(title: "Edit")
+        editMenuItem.submenu = editMenu
+        editMenu.addItem(withTitle: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
+        editMenu.addItem(withTitle: "Redo", action: Selector(("redo:")), keyEquivalent: "Z")
+        editMenu.addItem(NSMenuItem.separator())
+        editMenu.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        editMenu.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        let copyPathItem = NSMenuItem(title: "Copy File Path", action: #selector(copyFilePathAction(_:)), keyEquivalent: "C")
+        editMenu.addItem(copyPathItem)
+        editMenu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
 
         // 3. View Menu
         let viewMenuItem = NSMenuItem()
@@ -208,10 +235,10 @@ public class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation,
         favoritesViewerItem.keyEquivalentModifierMask = [.command, .shift]
         viewMenu.addItem(favoritesViewerItem)
         viewMenu.addItem(NSMenuItem.separator())
-        viewMenu.addItem(withTitle: "Toggle Preview Pane", action: #selector(togglePreviewPaneAction(_:)), keyEquivalent: "b")
+        viewMenu.addItem(withTitle: "Hide Sidebar", action: #selector(togglePreviewPaneAction(_:)), keyEquivalent: "b")
 
-        let ratioItem = NSMenuItem(title: "Preview Area Size", action: nil, keyEquivalent: "")
-        let ratioSubmenu = NSMenu(title: "Preview Area Size")
+        let ratioItem = NSMenuItem(title: "Sidebar Width", action: nil, keyEquivalent: "")
+        let ratioSubmenu = NSMenu(title: "Sidebar Width")
         ratioSubmenu.addItem(withTitle: "25% Window Width (1/4)", action: #selector(setRatio25Action), keyEquivalent: "")
         ratioSubmenu.addItem(withTitle: "33% Window Width (1/3)", action: #selector(setRatio33Action), keyEquivalent: "")
         ratioSubmenu.addItem(withTitle: "50% Window Width (1/2)", action: #selector(setRatio50Action), keyEquivalent: "")
@@ -373,10 +400,11 @@ public class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation,
         mainMenu.addItem(helpMenuItem)
         let helpMenu = NSMenu(title: "Help")
         helpMenuItem.submenu = helpMenu
-        helpMenu.addItem(withTitle: "FastView Help", action: nil, keyEquivalent: "")
+        helpMenu.addItem(withTitle: "Keyboard Shortcuts", action: #selector(showKeyboardShortcutsAction(_:)), keyEquivalent: "/")
 
         NSApp.mainMenu = mainMenu
         NSApp.windowsMenu = windowMenu
+        NSApp.helpMenu = helpMenu
     }
 
     /// The executable's modification time: when it was last linked, i.e.
@@ -424,17 +452,83 @@ public class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation,
         panel.canChooseFiles = true
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
+        if let current = windowController?.splitVC.currentLocationPath {
+            panel.directoryURL = URL(fileURLWithPath: current)
+        }
 
         panel.begin { [weak self] response in
             if response == .OK, let url = panel.url {
-                let path = url.path
-                self?.saveLastOpenedPath(path)
-                let loc = NavigationManager.locationForPath(path)
-                let lastSavedSelectedItem = UserDefaults.standard.string(forKey: AppDelegate.lastSelectedItemKey)
-                let lastSavedSelectedItemId = UserDefaults.standard.string(forKey: AppDelegate.lastSelectedItemIdKey)
-                self?.windowController?.splitVC.openLocation(loc, targetSelectedItemPath: lastSavedSelectedItemId ?? lastSavedSelectedItem)
+                self?.open(path: url.path)
             }
         }
+    }
+
+    /// Opens a path the user chose, keeping the recent menu up to date.
+    public func open(path: String, pane: Int = 1) {
+        windowController?.tabsVC.select(.browser)
+        windowController?.splitVC.openPath(path, pane: pane) { [weak self] result in
+            switch result {
+            case .opened where pane == 1:
+                self?.saveLastOpenedPath(path)
+            case .missing:
+                self?.removeRecentDir(path)
+            default:
+                break
+            }
+        }
+    }
+
+    /// The item menu commands act on: the Favorites tab's selection while it shows,
+    /// else the active pane's.
+    private var currentItem: FileItem? {
+        guard let tabsVC = windowController?.tabsVC else { return nil }
+        if let favorites = tabsVC.activeFavoritesVC { return favorites.selectedItem }
+        return tabsVC.splitVC.activeSidebar.selectedItem
+    }
+
+    private var isBrowserShowing: Bool {
+        windowController?.tabsVC.selectedTab == .browser
+    }
+
+    private var activeImageView: MainImageView? {
+        isBrowserShowing ? windowController?.splitVC.activeImageView : nil
+    }
+
+    @objc private func showInFinderAction(_ sender: Any?) {
+        if let item = currentItem { FileActions.showInFinder(item) }
+    }
+
+    @objc private func openInDefaultAppAction(_ sender: Any?) {
+        if let item = currentItem { FileActions.openInDefaultApp(item) }
+    }
+
+    @objc private func saveImageAction(_ sender: Any?) {
+        activeImageView?.saveImageAs()
+    }
+
+    @objc private func moveToTrashAction(_ sender: Any?) {
+        guard let splitVC = windowController?.splitVC, let item = currentItem, isBrowserShowing else { return }
+        splitVC.moveToTrash(item, pane: splitVC.activePane)
+    }
+
+    /// Edit > Copy when no text field takes it: the shown image.
+    @objc public func copy(_ sender: Any?) {
+        if let favorites = windowController?.tabsVC.activeFavoritesVC {
+            if let item = favorites.selectedItem { favorites.copyImage(of: item) }
+        } else {
+            activeImageView?.copyImageToPasteboard()
+        }
+    }
+
+    @objc private func copyFilePathAction(_ sender: Any?) {
+        guard let item = currentItem else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(item.path, forType: .string)
+        if let window = windowController?.window?.contentView { HUDMessageView.show("Copied File Path", in: window) }
+    }
+
+    @objc private func showKeyboardShortcutsAction(_ sender: Any?) {
+        KeyboardShortcutsWindowController.shared.showWindowInFront()
     }
 
     @objc private func toggleFavoriteAction(_ sender: Any?) {
@@ -581,19 +675,19 @@ public class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation,
     }
 
     @objc private func zoomInAction() {
-        windowController?.splitVC.imageView.zoomIn()
+        activeImageView?.zoomIn()
     }
 
     @objc private func zoomOutAction() {
-        windowController?.splitVC.imageView.zoomOut()
+        activeImageView?.zoomOut()
     }
 
     @objc private func actualSizeAction() {
-        windowController?.splitVC.imageView.setActualSize()
+        activeImageView?.setActualSize()
     }
 
     @objc private func zoomToFitAction() {
-        windowController?.splitVC.imageView.resetZoomToFit()
+        activeImageView?.resetZoomToFit(announce: true)
     }
 
     @objc private func openSecondFolderAction(_ sender: Any?) {
@@ -682,10 +776,10 @@ public class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation,
             emptyItem.isEnabled = false
             submenu.addItem(emptyItem)
         } else {
-            for path in recents {
-                let name = (path as NSString).lastPathComponent
-                let item = NSMenuItem(title: name, action: #selector(openRecentDirAction(_:)), keyEquivalent: "")
+            for (path, title) in zip(recents, AppDelegate.recentMenuTitles(for: recents)) {
+                let item = NSMenuItem(title: title, action: #selector(openRecentDirAction(_:)), keyEquivalent: "")
                 item.representedObject = path
+                item.toolTip = path
                 submenu.addItem(item)
             }
             submenu.addItem(NSMenuItem.separator())
@@ -694,12 +788,26 @@ public class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation,
         }
     }
 
+    /// Names for the recent menu, with the parent folder added where names are the same.
+    static func recentMenuTitles(for paths: [String]) -> [String] {
+        let names = paths.map { ($0 as NSString).lastPathComponent }
+        return zip(paths, names).map { path, name in
+            guard names.filter({ $0 == name }).count > 1 else { return name }
+            let parent = ((path as NSString).deletingLastPathComponent as NSString).lastPathComponent
+            return "\(name) — \(parent)"
+        }
+    }
+
+    private func removeRecentDir(_ path: String) {
+        var recents = UserDefaults.standard.stringArray(forKey: AppDelegate.recentDirsKey) ?? []
+        recents.removeAll { $0 == path }
+        UserDefaults.standard.set(recents, forKey: AppDelegate.recentDirsKey)
+        updateRecentDirsMenu()
+    }
+
     @objc private func openRecentDirAction(_ sender: NSMenuItem) {
-        guard let path = sender.representedObject as? String,
-              FileManager.default.fileExists(atPath: path) else { return }
-        saveLastOpenedPath(path)
-        let loc = NavigationManager.locationForPath(path)
-        windowController?.splitVC.openLocation(loc)
+        guard let path = sender.representedObject as? String else { return }
+        open(path: path)
     }
 
     @objc private func clearRecentDirsAction() {
@@ -788,6 +896,47 @@ public class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation,
     }
 
     public func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        guard let action = menuItem.action else { return true }
+        let splitVC = windowController?.splitVC
+        switch action {
+        case #selector(showInfoAction(_:)), #selector(toggleFavoriteAction(_:)):
+            return currentItem != nil
+        case #selector(copyFilePathAction(_:)):
+            return currentItem.map { $0.type != .parentDirectory } ?? false
+        case #selector(showInFinderAction(_:)):
+            return currentItem.map { $0.type != .parentDirectory } ?? false
+        case #selector(openInDefaultAppAction(_:)):
+            return currentItem.map(FileActions.isOnDisk) ?? false
+        case #selector(moveToTrashAction(_:)):
+            guard isBrowserShowing, let item = currentItem, let splitVC = splitVC else { return false }
+            return splitVC.canMoveToTrash(item, pane: splitVC.activePane)
+        case #selector(copy(_:)):
+            if let favorites = windowController?.tabsVC.activeFavoritesVC { return favorites.selectedItem != nil }
+            return activeImageView?.rawImage != nil
+        case #selector(saveImageAction(_:)), #selector(zoomInAction), #selector(zoomOutAction), #selector(actualSizeAction), #selector(zoomToFitAction),
+             #selector(rotateRightAction), #selector(rotateLeftAction), #selector(flipHorizontalAction), #selector(flipVerticalAction):
+            return activeImageView?.rawImage != nil
+        case #selector(resetOrientationAction):
+            return activeImageView.map { $0.rawImage != nil && !$0.orientation.isIdentity } ?? false
+        case #selector(togglePreviewPaneAction(_:)):
+            menuItem.title = splitVC?.isPreviewPaneHidden == true ? "Show Sidebar" : "Hide Sidebar"
+            return isBrowserShowing
+        case #selector(showFavoritesOnlyAction(_:)):
+            menuItem.state = splitVC?.showFavoritesOnly == true ? .on : .off
+            return true
+        case #selector(showAllItemsAction(_:)):
+            menuItem.state = splitVC?.showFavoritesOnly == true ? .off : .on
+            return true
+        case #selector(toggleFavoritesPane2Action):
+            menuItem.state = splitVC?.showFavoritesOnlyPane2 == true && splitVC?.sidebarContainerVC.isDualView == true ? .on : .off
+            return true
+        case #selector(setSubSplitHorizontalAction(_:)), #selector(setSubSplitVerticalAction(_:)):
+            let isVertical = splitVC?.sidebarContainerVC.isSubSplitVertical == true
+            menuItem.state = isVertical == (action == #selector(setSubSplitVerticalAction(_:))) ? .on : .off
+            return splitVC?.sidebarContainerVC.isDualView ?? false
+        default:
+            break
+        }
         if menuItem.action == #selector(toggleTrackViewedImagesAction(_:)) {
             menuItem.state = SQLiteCache.shared.isTrackingViewedImagesEnabled ? .on : .off
             return true

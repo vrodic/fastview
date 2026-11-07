@@ -43,6 +43,11 @@ public class MainWindowController: NSWindowController, NSWindowDelegate {
         setupKeyboardMonitors()
     }
 
+    /// There is one main window and nothing to do without it.
+    public func windowWillClose(_ notification: Notification) {
+        NSApp.terminate(nil)
+    }
+
     public func windowWillEnterFullScreen(_ notification: Notification) {
         splitVC.setFullScreenMode(true)
     }
@@ -84,6 +89,18 @@ public class MainWindowController: NSWindowController, NSWindowDelegate {
                 }
             }
 
+            // Esc stops drawing an outline, and leaves full screen before going up a folder.
+            if event.keyCode == 53 {
+                if let outlining = self.splitVC.outliningImageView {
+                    outlining.cancelFreehandSelection()
+                    return nil
+                }
+                if self.window?.styleMask.contains(.fullScreen) == true {
+                    self.window?.toggleFullScreen(nil)
+                    return nil
+                }
+            }
+
             switch event.keyCode {
             case 125: // Down arrow
                 if isControlPressed {
@@ -116,8 +133,16 @@ public class MainWindowController: NSWindowController, NSWindowDelegate {
                 }
                 self.splitVC.activateSelectedItem()
                 return nil
-            case 53, 51: // Escape or Backspace
+            case 53, 51: // Escape or Backspace (Cmd+Backspace is Move to Trash)
+                if isCmdPressed { return event }
                 self.splitVC.navigateUp()
+                return nil
+            case 116, 121, 115, 119: // Page Up, Page Down, Home, End
+                let keys: [UInt16: PageKeyType] = [116: .pageUp, 121: .pageDown, 115: .home, 119: .end]
+                if let key = keys[event.keyCode] { self.splitVC.activeSidebar.handlePageNavigation(keyType: key) }
+                return nil
+            case 48 where !isControlPressed && !isCmdPressed: // Tab
+                self.splitVC.switchActivePane()
                 return nil
             default:
                 break
@@ -127,13 +152,13 @@ public class MainWindowController: NSWindowController, NSWindowDelegate {
             if isCmdPressed {
                 let chars = event.characters?.lowercased() ?? ""
                 if chars == "+" || chars == "=" {
-                    self.splitVC.imageView.zoomIn()
+                    self.splitVC.activeImageView.zoomIn()
                     return nil
                 } else if chars == "-" {
-                    self.splitVC.imageView.zoomOut()
+                    self.splitVC.activeImageView.zoomOut()
                     return nil
                 } else if chars == "0" {
-                    self.splitVC.imageView.resetZoomToFit()
+                    self.splitVC.activeImageView.resetZoomToFit(announce: true)
                     return nil
                 } else if chars == "f" && !event.modifierFlags.contains(.shift) {
                     self.splitVC.toggleFavoriteOnSelectedItem()

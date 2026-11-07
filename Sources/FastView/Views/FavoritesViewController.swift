@@ -541,6 +541,7 @@ public final class FavoritesViewController: NSViewController, NSCollectionViewDa
         add("View Large", #selector(viewLargeAction(_:)))
         add("Show in Browser", #selector(showInBrowserAction(_:)))
         add("Show Info", #selector(showInfoAction(_:)))
+        add("Show in Finder", #selector(showInFinderAction(_:)))
         menu.addItem(.separator())
         add("Copy Image to Clipboard", #selector(copyImageAction(_:)))
         add("Copy File Path", #selector(copyPathAction(_:)))
@@ -566,11 +567,23 @@ public final class FavoritesViewController: NSViewController, NSCollectionViewDa
         if let item = sender.representedObject as? FileItem { splitVC?.showInfo(for: item) }
     }
 
+    @objc private func showInFinderAction(_ sender: NSMenuItem) {
+        if let item = sender.representedObject as? FileItem { FileActions.showInFinder(item) }
+    }
+
     @objc private func copyImageAction(_ sender: NSMenuItem) {
         guard let item = sender.representedObject as? FileItem else { return }
-        ThumbnailGenerator.shared.loadFullImage(for: item, group: fullImageGroup) { image in
+        copyImage(of: item)
+    }
+
+    /// Copies the full image of `item`.
+    public func copyImage(of item: FileItem) {
+        ThumbnailGenerator.shared.loadFullImage(for: item, group: fullImageGroup) { [weak self] image in
             guard let image = image else { return }
-            DispatchQueue.main.async { NSPasteboard.general.copyImage(image) }
+            DispatchQueue.main.async {
+                NSPasteboard.general.copyImage(image)
+                if let view = self?.view { HUDMessageView.show("Copied Image", in: view) }
+            }
         }
     }
 

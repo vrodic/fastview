@@ -13,6 +13,10 @@ FastView is a high-performance macOS image viewer written in Swift and AppKit, b
 - **File Information Panel**: Metadata panel (Cmd+I) with thumbnail, kind, size, location, image properties (dimensions, colour profile, DPI), camera EXIF (camera, lens, exposure, date taken, GPS), folder/archive contents and dates. It follows the selection while open.
 - **Random Image**: Jump to a random image anywhere under the current location (Cmd+J) or inside the selected folder or archive (Cmd+Option+J), descending through subfolders and archives.
 - **Dual View**: A second pane for comparing and combining images; close it with the small close button in its header or at the top right of the canvas.
+- **Drag and Drop**: Drop a folder, archive, image or `.fastview` combination on the window to open it (on the 2nd view to open it there); drag files out of the list to other apps.
+- **Finder Actions**: Show in Finder, Open in Default App and Move to Trash (Edit → Undo puts the file back) from the File menu or a list item's context menu.
+- **On-Screen Feedback**: Brief messages for zoom level, favorites and the ends of the list, also in full screen; empty areas say why (no images here, a file that can't be displayed).
+- **Keyboard Shortcuts Window**: Help → Keyboard Shortcuts (`Cmd + /`).
 - **Command-Line Integration**: Launch with a directory parameter (`FastView /path/to/folder`) to automatically open in Show All mode.
 
 ## Shortcuts & Controls
@@ -27,7 +31,16 @@ FastView is a high-performance macOS image viewer written in Swift and AppKit, b
 - `Cmd + J`: Random image in the current folder or archive (including its subfolders and archives)
 - `Cmd + Option + J`: Random image in the selected folder or archive
 - `Enter`: Open directory / archive or advance selection
-- `Escape`: Navigate up / exit archive
+- `Escape`: Exit full screen, cancel drawing an outline, else navigate up / exit archive
+- `Page Up / Page Down / Home / End`: Move through the list
+- Type a name: Jump to that item in the list
+- `Tab`: Switch between the 1st and 2nd view
+- `Cmd + C` / `Cmd + Shift + C`: Copy the image / its file path
+- `Cmd + Shift + S`: Save the image as…
+- `Cmd + Shift + R`: Show in Finder
+- `Cmd + Backspace`: Move to Trash (`Cmd + Z` undoes it)
+- `Cmd + 0 / Cmd + 1`, double click: Zoom to fit / actual size, on the active view
+- `Cmd + /`: Keyboard Shortcuts
 
 ## Building & Running
 
