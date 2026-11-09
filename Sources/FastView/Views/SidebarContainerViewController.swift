@@ -55,6 +55,7 @@ public class SidebarContainerViewController: NSSplitViewController {
         guard let i2 = item2 else { return }
 
         if isDual {
+            sidebarVC1.preserveScrollAndSelection()
             // Read before expanding: the resizes while pane 2 opens would
             // overwrite it.
             let savedPosition = UserDefaults.standard.double(forKey: SidebarContainerViewController.previewSubSplitPositionKey)
@@ -62,9 +63,12 @@ public class SidebarContainerViewController: NSSplitViewController {
             i2.isCollapsed = false
             sidebarVC1.showHeader = true
             sidebarVC2.showHeader = true
+            sidebarVC1.restorePreservedScrollStateIfNeeded(keepPending: true)
 
             DispatchQueue.main.async { [weak self] in
-                self?.restoreSubSplit(savedPosition: CGFloat(savedPosition))
+                guard let self = self else { return }
+                self.restoreSubSplit(savedPosition: CGFloat(savedPosition))
+                self.sidebarVC1.restorePreservedScrollStateIfNeeded(keepPending: false)
             }
         } else {
             sidebarVC1.preserveScrollAndSelection()

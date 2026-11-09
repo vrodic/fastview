@@ -97,5 +97,12 @@ final class UserExperienceTests: XCTestCase {
 
         // Selection should remain item 20
         XCTAssertEqual(sidebar.selectedItem?.id, "item20")
+
+        // Now test contracting width and height (like opening Pane 2)
+        sidebar.preserveScrollAndSelection()
+        sidebar.view.frame = NSRect(x: 0, y: 0, width: 200, height: 400)
+        sidebar.viewDidLayout()
+
+        XCTAssertEqual(sidebar.selectedItem?.id, "item20")
     }
 }
