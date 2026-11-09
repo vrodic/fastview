@@ -26,7 +26,7 @@ public class FileLogger {
             msg = "[DiskOp \(timestamp)] \(operation) | \(path)"
         }
 
-        print(msg)
+        // Terminal logging disabled to prevent opening a terminal window and keep terminal quiet.
     }
 
     /// Logs a read of `bytes` with its throughput, e.g. "path | 1.2 GB @ 98.4 MB/s".

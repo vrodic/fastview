@@ -145,7 +145,6 @@ public class ForegroundDetector {
                             }
                         }
                     } catch {
-                        print("[ForegroundDetector] Instance mask error: \(error)")
                     }
                 }
 
@@ -188,7 +187,6 @@ public class ForegroundDetector {
                         }
                     }
                 } catch {
-                    print("[ForegroundDetector] Saliency error: \(error)")
                 }
 
                 // Fallback: Full Region

@@ -1240,7 +1240,6 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
                        targetPath.hasSuffix($0.path) ||
                        (targetPath.contains("#") && targetPath.hasSuffix("#" + $0.id))
                    }) {
-                    print("[MainSplitVC] Pane \(pane) selected target item '\(items[idx].name)' at index \(idx)")
                     targetSidebar.selectRow(idx)
                     self.displayItem(items[idx], pane: pane)
                 } else if targetSelectedItemPath == nil,
@@ -1521,7 +1520,6 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         let targetPath = item.id.isEmpty ? item.path : item.id
         let loc = Self.location(containing: item)
 
-        print("[MainSplitVC] switchToCurrentItemLocationMode for item '\(item.name)', targetPath: '\(targetPath)', locPath: '\(loc.physicalPath)' (archiveSubfolder: '\(loc.archiveSubfolder ?? "")')")
         loadLocation(loc, pane: 1, targetSelectedItemPath: targetPath)
     }
 
@@ -1535,7 +1533,6 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
         let targetPath = item.id.isEmpty ? item.path : item.id
         let loc = Self.location(containing: item)
 
-        print("[MainSplitVC] switchToCurrentItemLocationModePane2 for item '\(item.name)', targetPath: '\(targetPath)', locPath: '\(loc.physicalPath)' (archiveSubfolder: '\(loc.archiveSubfolder ?? "")')")
         loadLocation(loc, pane: 2, targetSelectedItemPath: targetPath)
     }
 
@@ -1682,14 +1679,11 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
                 i + 1 < sidebar.items.count ? sidebar.items[i + 1] : (i > 0 ? sidebar.items[i - 1] : nil)
             }
             let newState = SQLiteCache.shared.toggleFavorite(item: item)
-            print("[MainSplitVC] Toggled favorite for item: \(item.name) (id: \(item.id), path: \(item.path)), newState isFavorite: \(newState)")
             dualCanvasVC.showHUD(newState ? "Added to Favorites" : "Removed from Favorites")
             sidebar.reloadSelectedRow()
             if activePane == 2 ? showFavoritesOnlyPane2 : showFavoritesOnly {
                 reloadDirectoryContentsAsync(pane: activePane, targetSelectedItemPath: neighbour?.id)
             }
-        } else {
-            print("[MainSplitVC] toggleFavoriteOnSelectedItem called but no item selected in active sidebar")
         }
     }
 

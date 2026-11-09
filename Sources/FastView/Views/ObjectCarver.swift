@@ -60,7 +60,6 @@ public enum ObjectCarver {
             let mask = try result.generateScaledMaskForImage(forInstances: result.allInstances, from: handler)
             return CIImage(cvPixelBuffer: mask)
         } catch {
-            print("[ObjectCarver] Foreground mask error: \(error)")
             return nil
         }
     }
