@@ -73,4 +73,29 @@ final class UserExperienceTests: XCTestCase {
         XCTAssertFalse(FileActions.isOnDisk(FileItem(id: "e.png", name: "e.png", path: "e.png", type: .image, archivePath: "/a.zip")))
         XCTAssertFalse(FileActions.isOnDisk(FileItem.parentItem(for: "/a/b")))
     }
+
+    // MARK: - Sidebar Selection & Relative Scroll Position Preservation
+
+    func testPreservedScrollRelativeOffsetCalculations() {
+        let sidebar = SidebarViewController()
+        sidebar.view.frame = NSRect(x: 0, y: 0, width: 200, height: 400)
+        let sampleItems = (0..<50).map {
+            FileItem(id: "item\($0)", name: "item\($0).png", path: "/path/item\($0).png", type: .image)
+        }
+        sidebar.setItems(sampleItems, selectFirst: false)
+
+        // Select row 20
+        sidebar.selectRow(20)
+        XCTAssertEqual(sidebar.selectedItem?.id, "item20")
+
+        // Capture preserved scroll & selection
+        sidebar.preserveScrollAndSelection()
+
+        // Simulate layout change with expanded width and height (like closing Pane 2)
+        sidebar.view.frame = NSRect(x: 0, y: 0, width: 400, height: 800)
+        sidebar.viewDidLayout()
+
+        // Selection should remain item 20
+        XCTAssertEqual(sidebar.selectedItem?.id, "item20")
+    }
 }

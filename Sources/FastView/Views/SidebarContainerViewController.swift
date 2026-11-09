@@ -67,6 +67,7 @@ public class SidebarContainerViewController: NSSplitViewController {
                 self?.restoreSubSplit(savedPosition: CGFloat(savedPosition))
             }
         } else {
+            sidebarVC1.preserveScrollAndSelection()
             if let window = view.window, let responder = window.firstResponder as? NSView {
                 if responder.isDescendant(of: sidebarVC2.view) {
                     window.makeFirstResponder(sidebarVC1.view)
@@ -74,6 +75,10 @@ public class SidebarContainerViewController: NSSplitViewController {
             }
             i2.isCollapsed = true
             sidebarVC1.showHeader = false
+            sidebarVC1.restorePreservedScrollStateIfNeeded(keepPending: true)
+            DispatchQueue.main.async { [weak self] in
+                self?.sidebarVC1.restorePreservedScrollStateIfNeeded(keepPending: false)
+            }
         }
     }
 

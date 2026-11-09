@@ -429,13 +429,22 @@ public class MainSplitViewController: NSSplitViewController, SidebarDelegate {
     }
 
     @objc public func closeSecondView() {
-        cancelAllIOOperations()
+        sidebarContainerVC.sidebarVC1.preserveScrollAndSelection()
+        cancelIOOperations(forPane: 2)
+        ThumbnailGenerator.shared.cancelThumbnailTasks(inGroup: "pane2", keeping: [])
+        ThumbnailGenerator.shared.cancelThumbnailTasks(inGroup: "sidebar-\(ObjectIdentifier(sidebarContainerVC.sidebarVC2).hashValue)", keeping: [])
         activePane = 1
         dualCanvasVC.setDualViewEnabled(false)
         sidebarContainerVC.updateViewMode(isDual: false)
         navigationManager2 = nil
         updateWatchedFolders()
         UserDefaults.standard.set(false, forKey: "FastViewIsDualViewEnabled")
+        sidebarContainerVC.sidebarVC1.restorePreservedScrollStateIfNeeded(keepPending: true)
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            self.sidebarContainerVC.sidebarVC1.restorePreservedScrollStateIfNeeded(keepPending: false)
+            self.focusActiveSidebar()
+        }
     }
 
     /// The image view of the active pane.
