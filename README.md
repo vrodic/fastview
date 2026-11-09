@@ -50,3 +50,9 @@ FastView uses Swift Package Manager:
 swift build
 swift run FastView [/optional/path/to/directory]
 ```
+
+To build a standalone macOS application bundle (`FastView.app`):
+
+```bash
+./build_app.sh
+```
