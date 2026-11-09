@@ -13,6 +13,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation,
     private static let recentDirsKey = "FastViewRecentCmdLineDirs"
 
     public static func main() {
+        silenceTerminalOutput()
         let app = NSApplication.shared
         app.setActivationPolicy(.regular)
         // Set before the run loop starts, so the Dock shows it from launch.
@@ -23,6 +24,13 @@ public class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation,
         globalAppDelegate = delegate
         app.delegate = delegate
         app.run()
+    }
+
+    /// Redirects standard output and standard error to /dev/null so the application
+    /// does not output to the terminal or open a terminal window.
+    private static func silenceTerminalOutput() {
+        freopen("/dev/null", "w", stdout)
+        freopen("/dev/null", "w", stderr)
     }
 
     /// AppIcon.png from the package's resource bundle.  Looked up by hand
@@ -533,12 +541,10 @@ public class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation,
     }
 
     @objc private func toggleFavoriteAction(_ sender: Any?) {
-        print("[AppDelegate] toggleFavoriteAction menu item triggered")
         windowController?.splitVC.toggleFavoriteOnSelectedItem()
     }
 
     public func toggleFavoriteActionFromSidebar() {
-        print("[AppDelegate] toggleFavoriteActionFromSidebar triggered")
         windowController?.splitVC.toggleFavoriteOnSelectedItem()
     }
 
@@ -547,7 +553,6 @@ public class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation,
     }
 
     @objc private func showAllItemsAction(_ sender: Any?) {
-        print("[AppDelegate] showAllItemsAction menu item triggered")
         windowController?.splitVC.switchToCurrentItemLocationMode()
     }
 

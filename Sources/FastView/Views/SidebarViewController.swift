@@ -45,6 +45,7 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
     private let sortKeyPopUp = NSPopUpButton(frame: .zero, pullsDown: false)
     private let sortDirectionButton = NSButton(title: "", target: nil, action: nil)
     private var isRestoringSelection = false
+    private var pendingPreservedScrollState: (selectedID: String, relativeOffset: CGFloat)?
     private var headerTitleLeadingConstraint: NSLayoutConstraint?
     private var sortLabelLeadingConstraint: NSLayoutConstraint?
     private let headerTitleLeadingPadding: CGFloat = 6
@@ -360,7 +361,41 @@ public class SidebarViewController: NSViewController, NSTableViewDataSource, NST
                 tableView.rowHeight = targetRowHeight
                 tableView.noteHeightOfRows(withIndexesChanged: IndexSet(integersIn: 0..<items.count))
             }
+            restorePreservedScrollStateIfNeeded()
         }
+    }
+
+    /// Captures the currently selected item and its relative vertical offset within the visible clip view,
+    /// so it can be restored to the exact same position after resizing or layout changes.
+    public func preserveScrollAndSelection() {
+        guard let item = selectedItem else { return }
+        let row = tableView.selectedRow
+        guard row >= 0 && row < items.count else { return }
+        let rowRect = tableView.rect(ofRow: row)
+        let clip = scrollView.contentView
+        let offset = rowRect.minY - clip.bounds.minY
+        pendingPreservedScrollState = (selectedID: item.id, relativeOffset: offset)
+    }
+
+    /// Restores the preserved selection and relative vertical offset if pending.
+    /// If `keepPending` is true, keeps the preserved state so subsequent layout passes can re-apply it.
+    public func restorePreservedScrollStateIfNeeded(keepPending: Bool = false) {
+        guard let state = pendingPreservedScrollState else { return }
+        if !keepPending {
+            pendingPreservedScrollState = nil
+        }
+
+        guard let index = items.firstIndex(where: { $0.id == state.selectedID }) else { return }
+        let clip = scrollView.contentView
+        isRestoringSelection = true
+        tableView.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
+        let rowRect = tableView.rect(ofRow: index)
+        let maxY = max(0, tableView.bounds.height - clip.bounds.height)
+        let targetY = max(0, min(maxY, rowRect.minY - state.relativeOffset))
+        clip.scroll(to: NSPoint(x: 0, y: targetY))
+        scrollView.reflectScrolledClipView(clip)
+        isRestoringSelection = false
+        loadVisibleThumbnailsIfIdle()
     }
 
     public func setItems(_ items: [FileItem], selectFirst: Bool = true) {

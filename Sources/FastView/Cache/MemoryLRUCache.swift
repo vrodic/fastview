@@ -83,6 +83,5 @@ public class MemoryLRUCache {
         defer { lock.unlock() }
         cache.removeAll()
         totalCost = 0
-        print("[CacheStats] Memory cache cleared.")
     }
 }
