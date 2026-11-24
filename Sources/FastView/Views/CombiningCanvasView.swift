@@ -32,6 +32,10 @@ public class CombiningCanvasView: NSView {
 
     public var objects: [ForegroundObject] = [] {
         didSet {
+            if !extraSelectedIDs.isEmpty {
+                let ids = Set(objects.map(\.id))
+                if !extraSelectedIDs.isSubset(of: ids) { extraSelectedIDs.formIntersection(ids) }
+            }
             needsDisplay = true
         }
     }
@@ -236,6 +240,7 @@ public class CombiningCanvasView: NSView {
     // Interactivity
     public var selectedObjectIndex: Int? = nil {
         didSet {
+            if selectedObjectIndex == nil { extraSelectedIDs.removeAll() }
             needsDisplay = true
             if let idx = selectedObjectIndex, idx >= 0 && idx < objects.count {
                 let pane = idx + 1
@@ -250,6 +255,7 @@ public class CombiningCanvasView: NSView {
             return idx + 1
         }
         set {
+            extraSelectedIDs.removeAll()
             if let val = newValue, val >= 1 && val <= objects.count {
                 selectedObjectIndex = val - 1
             } else {
@@ -258,13 +264,45 @@ public class CombiningCanvasView: NSView {
         }
     }
 
+    /// Objects selected along with `selectedObjectIndex` (⇧/⌘-click or a drag over empty canvas);
+    /// they move, resize and rotate together.
+    private var extraSelectedIDs: Set<UUID> = [] { didSet { needsDisplay = true } }
+
+    /// Indices of all selected objects, in z order.
+    var selectedIndices: [Int] {
+        guard let primary = selectedObjectIndex, primary >= 0 && primary < objects.count else { return [] }
+        return objects.indices.filter { $0 == primary || extraSelectedIDs.contains(objects[$0].id) }
+    }
+
+    private func isSelected(_ i: Int) -> Bool {
+        return i == selectedObjectIndex || extraSelectedIDs.contains(objects[i].id)
+    }
+
+    /// Makes `indices` the selection, with `primary` (one of them) as `selectedObjectIndex`.
+    private func setSelection(_ indices: [Int], primary: Int?) {
+        let primary = primary ?? indices.last
+        extraSelectedIDs = Set(indices.filter { $0 != primary }.map { objects[$0].id })
+        if selectedObjectIndex != primary { selectedObjectIndex = primary }
+    }
+
+    private struct ObjectTransform { let position: CGPoint; let scale: CGFloat; let rotation: CGFloat }
+
+    // Moving, resizing and rotating several objects at once.
+    private var groupStart: [UUID: ObjectTransform] = [:]
+    private var groupCenter: CGPoint = .zero
+    private var isResizingGroup = false
+    private var isRotatingGroup = false
+
+    // Rubber-band selection over empty canvas.
+    private var selectionRect: CGRect?
+    private var selectionBase: [Int] = []
+
     private var isDraggingObject: Bool = false
     private var isResizingObject: Bool = false
     private var isRotatingObject: Bool = false
     private var isBottomRotateHandle: Bool = false
 
     private var dragStartPoint: CGPoint = .zero
-    private var initialObjPosition: CGPoint = .zero
     private var initialObjScale: CGFloat = 1.0
     private var initialObjRotation: CGFloat = 0.0
     private var initialDistToCenter: CGFloat = 1.0
@@ -314,7 +352,7 @@ public class CombiningCanvasView: NSView {
     public func positionFromSlider(pane: Int) {
         guard bounds.width > 0 && bounds.height > 0,
               let idx = objects.firstIndex(where: { $0.sourcePane == pane }) else { return }
-        if isDraggingObject && selectedObjectIndex == idx { return }
+        if isDraggingObject && isSelected(idx) { return }
         let midX = bounds.width / 2.0
         let midY = bounds.height / 2.0
         if pane == 1 {
@@ -439,8 +477,23 @@ public class CombiningCanvasView: NSView {
         }
 
         // 2. Overlay pass: Draw selection outline & handles on top of ALL objects for selected object
-        if !isRenderingPreview, let selIdx = selectedObjectIndex, selIdx >= 0 && selIdx < objects.count {
-            drawSelectedObjectHandles(objects[selIdx], in: rect, context: context)
+        if !isRenderingPreview {
+            let selected = selectedIndices
+            if selected.count == 1 {
+                drawSelectedObjectHandles(objects[selected[0]], in: rect, context: context)
+            } else if selected.count > 1 {
+                for i in selected { drawObjectOutline(objects[i], context: context) }
+                drawGroupHandles(groupBounds(of: selected), context: context)
+            }
+            if let band = selectionRect {
+                context.saveGState()
+                context.setFillColor(NSColor.controlAccentColor.withAlphaComponent(0.15).cgColor)
+                context.fill(band)
+                context.setStrokeColor(NSColor.controlAccentColor.cgColor)
+                context.setLineWidth(1.0)
+                context.stroke(band.insetBy(dx: 0.5, dy: 0.5))
+                context.restoreGState()
+            }
         }
 
         // 3. The carve outline being drawn
@@ -672,6 +725,68 @@ public class CombiningCanvasView: NSView {
         context.restoreGState()
     }
 
+    /// The rotated frame of a selected object, without handles.
+    private func drawObjectOutline(_ obj: ForegroundObject, context: CGContext) {
+        let scale = defaultFitScale(for: obj)
+        let w = obj.image.size.width * scale, h = obj.image.size.height * scale
+        context.saveGState()
+        context.translateBy(x: obj.position.x, y: obj.position.y)
+        context.rotate(by: obj.rotationDegrees * .pi / 180.0)
+        context.setStrokeColor(NSColor.controlAccentColor.cgColor)
+        context.setLineWidth(1.5)
+        context.stroke(CGRect(x: -w / 2, y: -h / 2, width: w, height: h))
+        context.restoreGState()
+    }
+
+    private func groupBounds(of indices: [Int]) -> CGRect {
+        return indices.reduce(CGRect.null) { $0.union(canvasBounds(of: objects[$1])) }
+    }
+
+    private static let groupRotateStem: CGFloat = 20.0
+
+    private func groupCornerHandles(_ box: CGRect) -> [CGPoint] {
+        return [CGPoint(x: box.minX, y: box.minY), CGPoint(x: box.maxX, y: box.minY),
+                CGPoint(x: box.minX, y: box.maxY), CGPoint(x: box.maxX, y: box.maxY)]
+    }
+
+    private func groupRotateHandle(_ box: CGRect) -> CGPoint {
+        return CGPoint(x: box.midX, y: box.maxY + Self.groupRotateStem)
+    }
+
+    /// The selection's bounding box with corner handles (resize all) and a rotate handle above.
+    private func drawGroupHandles(_ box: CGRect, context: CGContext) {
+        context.saveGState()
+        context.setStrokeColor(NSColor.controlAccentColor.cgColor)
+        context.setLineWidth(1.5)
+        context.setLineDash(phase: 0, lengths: [6.0, 3.0])
+        context.stroke(box)
+        context.setLineDash(phase: 0, lengths: [])
+
+        let handleSize: CGFloat = 10.0
+        context.setFillColor(NSColor.controlAccentColor.cgColor)
+        for h in groupCornerHandles(box) {
+            context.fill(CGRect(x: h.x - handleSize / 2, y: h.y - handleSize / 2, width: handleSize, height: handleSize))
+        }
+
+        let rot = groupRotateHandle(box)
+        context.move(to: CGPoint(x: box.midX, y: box.maxY))
+        context.addLine(to: rot)
+        context.strokePath()
+        context.setFillColor(NSColor.systemYellow.cgColor)
+        context.fillEllipse(in: CGRect(x: rot.x - 6, y: rot.y - 6, width: 12, height: 12))
+        context.restoreGState()
+    }
+
+    /// Remembers where the selected objects start, for moving, resizing or rotating them together.
+    private func beginGroupTransform(around center: CGPoint) {
+        groupCenter = center
+        groupStart = [:]
+        for i in selectedIndices {
+            let o = objects[i]
+            groupStart[o.id] = ObjectTransform(position: o.position, scale: o.scale, rotation: o.rotationDegrees)
+        }
+    }
+
     private func drawCarvePath(in context: CGContext) {
         context.saveGState()
         let cgPath = CGMutablePath()
@@ -796,7 +911,8 @@ public class CombiningCanvasView: NSView {
             if normPt.x >= 0 && normPt.x <= 1 && normPt.y >= 0 && normPt.y <= 1 {
                 if isPixelOpaque(in: fg.image, atNormalizedPoint: normPt) {
                     clickedIdx = i
-                    selectedObjectIndex = i
+                    // Right-clicking one of several selected objects keeps them selected.
+                    setSelection(isSelected(i) ? selectedIndices : [i], primary: i)
                     needsDisplay = true
                     break
                 }
@@ -1185,9 +1301,29 @@ public class CombiningCanvasView: NSView {
             return
         }
         dragStartPoint = pt
+        let additive = !event.modifierFlags.intersection([.shift, .command]).isEmpty
+        let selected = selectedIndices
+
+        // Phase 0: the handles of a multiple selection resize or rotate all its objects.
+        if selected.count > 1 && !additive {
+            let box = groupBounds(of: selected)
+            let center = CGPoint(x: box.midX, y: box.midY)
+            let rot = groupRotateHandle(box)
+            if hypot(pt.x - rot.x, pt.y - rot.y) <= 12 {
+                beginGroupTransform(around: center)
+                isRotatingGroup = true
+                return
+            }
+            if groupCornerHandles(box).contains(where: { hypot(pt.x - $0.x, pt.y - $0.y) <= 12 }) {
+                beginGroupTransform(around: center)
+                initialDistToCenter = max(1.0, hypot(pt.x - center.x, pt.y - center.y))
+                isResizingGroup = true
+                return
+            }
+        }
 
         // Phase 1: Check handles across ALL objects (reverse Z-order)
-        for i in stride(from: objects.count - 1, through: 0, by: -1) {
+        for i in stride(from: objects.count - 1, through: 0, by: -1) where selected.count <= 1 && !additive {
             let fg = objects[i]
             let effectiveScale = defaultFitScale(for: fg)
             let w = fg.image.size.width * effectiveScale
@@ -1203,7 +1339,7 @@ public class CombiningCanvasView: NSView {
 
             let topRotHandleLocal = CGPoint(x: 0, y: h/2 + 20)
             if hypot(localPt.x - topRotHandleLocal.x, localPt.y - topRotHandleLocal.y) <= 12 {
-                selectedObjectIndex = i
+                setSelection([i], primary: i)
                 isRotatingObject = true
                 isBottomRotateHandle = false
                 initialObjRotation = fg.rotationDegrees
@@ -1213,7 +1349,7 @@ public class CombiningCanvasView: NSView {
 
             let bottomRotHandleLocal = CGPoint(x: 0, y: -h/2 - 20)
             if hypot(localPt.x - bottomRotHandleLocal.x, localPt.y - bottomRotHandleLocal.y) <= 12 {
-                selectedObjectIndex = i
+                setSelection([i], primary: i)
                 isRotatingObject = true
                 isBottomRotateHandle = true
                 initialObjRotation = fg.rotationDegrees
@@ -1232,7 +1368,7 @@ public class CombiningCanvasView: NSView {
             ]
             for hPt in localHandles {
                 if hypot(localPt.x - hPt.x, localPt.y - hPt.y) <= 12 {
-                    selectedObjectIndex = i
+                    setSelection([i], primary: i)
                     isResizingObject = true
                     initialObjScale = fg.scale
                     initialDistToCenter = max(1.0, hypot(pt.x - fg.position.x, pt.y - fg.position.y))
@@ -1263,16 +1399,29 @@ public class CombiningCanvasView: NSView {
 
             if normPt.x >= 0 && normPt.x <= 1 && normPt.y >= 0 && normPt.y <= 1 {
                 if isPixelOpaque(in: fg.image, atNormalizedPoint: normPt) {
-                    selectedObjectIndex = i
+                    if additive {
+                        // ⇧/⌘-click adds the object to the selection, or takes it out.
+                        if isSelected(i) {
+                            let rest = selected.filter { $0 != i }
+                            setSelection(rest, primary: rest.last)
+                            return
+                        }
+                        setSelection(selected + [i], primary: i)
+                    } else if !(isSelected(i) && selected.count > 1) {
+                        setSelection([i], primary: i)
+                    }
                     isDraggingObject = true
-                    initialObjPosition = fg.position
+                    beginGroupTransform(around: .zero)
                     needsDisplay = true
                     return
                 }
             }
         }
 
-        selectedObjectIndex = nil
+        // Empty canvas: a drag selects the objects it touches.
+        if !additive { selectedObjectIndex = nil }
+        selectionBase = additive ? selected : []
+        selectionRect = CGRect(origin: pt, size: .zero)
         isDraggingObject = false
         isResizingObject = false
         isRotatingObject = false
@@ -1287,12 +1436,25 @@ public class CombiningCanvasView: NSView {
             }
             return
         }
+        let currentPt = convert(event.locationInWindow, from: nil)
+        if combiningMode == .foregroundCombine, selectionRect != nil {
+            let band = CGRect(x: min(dragStartPoint.x, currentPt.x), y: min(dragStartPoint.y, currentPt.y),
+                              width: abs(currentPt.x - dragStartPoint.x), height: abs(currentPt.y - dragStartPoint.y))
+            selectionRect = band
+            let touched = objects.indices.filter { canvasBounds(of: objects[$0]).intersects(band) }
+            let all = objects.indices.filter { selectionBase.contains($0) || touched.contains($0) }
+            setSelection(all, primary: all.isEmpty ? nil : (selectedObjectIndex.flatMap { all.contains($0) ? $0 : nil } ?? all.last))
+            return
+        }
+        if combiningMode == .foregroundCombine, isResizingGroup || isRotatingGroup || (isDraggingObject && selectedIndices.count > 1) {
+            transformGroup(to: currentPt)
+            needsDisplay = true
+            return
+        }
         guard combiningMode == .foregroundCombine, let idx = selectedObjectIndex, idx < objects.count else {
             super.mouseDragged(with: event)
             return
         }
-
-        let currentPt = convert(event.locationInWindow, from: nil)
 
         if isRotatingObject {
             let fgObj = objects[idx]
@@ -1307,10 +1469,37 @@ public class CombiningCanvasView: NSView {
         } else if isDraggingObject {
             let deltaX = currentPt.x - dragStartPoint.x
             let deltaY = currentPt.y - dragStartPoint.y
-            objects[idx].position = CGPoint(x: initialObjPosition.x + deltaX, y: initialObjPosition.y + deltaY)
+            if let start = groupStart[objects[idx].id] {
+                objects[idx].position = CGPoint(x: start.position.x + deltaX, y: start.position.y + deltaY)
+            }
         }
 
         needsDisplay = true
+    }
+
+    /// Moves, scales or rotates every selected object from where it started, about the selection's centre.
+    private func transformGroup(to pt: CGPoint) {
+        let c = groupCenter
+        var factor: CGFloat = 1, angle: CGFloat = 0, shift = CGPoint.zero
+        if isResizingGroup {
+            factor = max(0.05, hypot(pt.x - c.x, pt.y - c.y) / initialDistToCenter)
+        } else if isRotatingGroup {
+            let start = atan2(dragStartPoint.y - c.y, dragStartPoint.x - c.x)
+            angle = atan2(pt.y - c.y, pt.x - c.x) - start
+        } else {
+            shift = CGPoint(x: pt.x - dragStartPoint.x, y: pt.y - dragStartPoint.y)
+        }
+        let cosA = cos(angle), sinA = sin(angle)
+        var updated = objects
+        for i in updated.indices {
+            guard let start = groupStart[updated[i].id] else { continue }
+            let dx = (start.position.x - c.x) * factor, dy = (start.position.y - c.y) * factor
+            updated[i].position = CGPoint(x: c.x + dx * cosA - dy * sinA + shift.x,
+                                          y: c.y + dx * sinA + dy * cosA + shift.y)
+            updated[i].scale = start.scale * factor
+            updated[i].rotationDegrees = start.rotation + angle * 180.0 / .pi
+        }
+        objects = updated
     }
 
     override public func mouseUp(with event: NSEvent) {
@@ -1321,6 +1510,13 @@ public class CombiningCanvasView: NSView {
         isDraggingObject = false
         isResizingObject = false
         isRotatingObject = false
+        isResizingGroup = false
+        isRotatingGroup = false
+        groupStart = [:]
+        if selectionRect != nil {
+            selectionRect = nil
+            needsDisplay = true
+        }
         super.mouseUp(with: event)
     }
 }

@@ -53,6 +53,8 @@ final class KeyboardShortcutsWindowController: NSWindowController {
             ("⌥⌘C", "Show or hide the combining controls"),
             ("⌘S", "Save the combination"),
             ("⌥⌘K", "Saved combinations"),
+            ("⇧-click  ⌘-click", "Add or remove an object from the selection (foreground combine)"),
+            ("Drag on empty canvas", "Select the objects it touches; selected objects move, resize and rotate together"),
         ]),
     ]
 
