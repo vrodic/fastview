@@ -31,7 +31,7 @@ final class KeyboardShortcutsWindowController: NSWindowController {
         ]),
         ("Files", [
             ("⌘O", "Open a folder, archive or image (or drop it on the window)"),
-            ("⌘C", "Copy the image"),
+            ("⌘C", "Copy the image (the combined image while the combining canvas shows)"),
             ("⇧⌘C", "Copy the file path"),
             ("⇧⌘S", "Save the image as…"),
             ("⇧⌘R", "Show in Finder"),

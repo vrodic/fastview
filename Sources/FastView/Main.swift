@@ -229,6 +229,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation,
         editMenu.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
         let copyPathItem = NSMenuItem(title: "Copy File Path", action: #selector(copyFilePathAction(_:)), keyEquivalent: "C")
         editMenu.addItem(copyPathItem)
+        editMenu.addItem(withTitle: "Copy Combined Image", action: #selector(copyCombinedImageAction(_:)), keyEquivalent: "")
         editMenu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
         editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
 
@@ -520,13 +521,25 @@ public class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation,
         splitVC.moveToTrash(item, pane: splitVC.activePane)
     }
 
-    /// Edit > Copy when no text field takes it: the shown image.
+    /// The combining canvas, while it is what the browser tab shows.
+    private var shownCombiningCanvas: CombiningCanvasView? {
+        guard isBrowserShowing, let dual = windowController?.splitVC.dualCanvasVC, dual.isCombiningCanvasShowing else { return nil }
+        return dual.combiningCanvasView
+    }
+
+    /// Edit > Copy when no text field takes it: the shown image, or the combined image while the combining canvas shows.
     @objc public func copy(_ sender: Any?) {
         if let favorites = windowController?.tabsVC.activeFavoritesVC {
             if let item = favorites.selectedItem { favorites.copyImage(of: item) }
+        } else if let canvas = shownCombiningCanvas {
+            canvas.copyCombinedImageToPasteboard()
         } else {
             activeImageView?.copyImageToPasteboard()
         }
+    }
+
+    @objc private func copyCombinedImageAction(_ sender: Any?) {
+        shownCombiningCanvas?.copyCombinedImageToPasteboard()
     }
 
     @objc private func copyFilePathAction(_ sender: Any?) {
@@ -918,7 +931,10 @@ public class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation,
             return splitVC.canMoveToTrash(item, pane: splitVC.activePane)
         case #selector(copy(_:)):
             if let favorites = windowController?.tabsVC.activeFavoritesVC { return favorites.selectedItem != nil }
+            if shownCombiningCanvas != nil { return true }
             return activeImageView?.rawImage != nil
+        case #selector(copyCombinedImageAction(_:)):
+            return shownCombiningCanvas != nil
         case #selector(saveImageAction(_:)), #selector(zoomInAction), #selector(zoomOutAction), #selector(actualSizeAction), #selector(zoomToFitAction),
              #selector(rotateRightAction), #selector(rotateLeftAction), #selector(flipHorizontalAction), #selector(flipVerticalAction):
             return activeImageView?.rawImage != nil

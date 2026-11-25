@@ -39,6 +39,11 @@ public class DualCanvasViewController: NSViewController, CombiningToolbarDelegat
         }
     }
 
+    /// Whether the combining canvas (merge or foreground combine) is what the window shows.
+    public var isCombiningCanvasShowing: Bool {
+        isDualView && combiningMode != .split
+    }
+
     public var isForegroundCombineAvailable: Bool {
         return !combiningCanvasView.objects.isEmpty
     }

@@ -97,24 +97,40 @@ public class CombiningCanvasView: NSView {
 
     private var isRenderingPreview = false
 
-    /// The canvas as it looks now, without selection handles, at most `maxDimension` points on its long side.
-    public func renderPreview(maxDimension: CGFloat) -> NSImage? {
+    /// The canvas as it looks now, without selection handles, at the display's pixel resolution.
+    /// The image's size is its pixel size, so it pastes elsewhere at full resolution.
+    public func renderImage() -> NSImage? {
         guard bounds.width > 0 && bounds.height > 0,
               let rep = bitmapImageRepForCachingDisplay(in: bounds) else { return nil }
         isRenderingPreview = true
         cacheDisplay(in: bounds, to: rep)
         isRenderingPreview = false
+        rep.size = NSSize(width: rep.pixelsWide, height: rep.pixelsHigh)
+        let image = NSImage(size: rep.size)
+        image.addRepresentation(rep)
+        return image
+    }
 
+    /// The canvas as it looks now, without selection handles, at most `maxDimension` points on its long side.
+    public func renderPreview(maxDimension: CGFloat) -> NSImage? {
+        guard let full = renderImage() else { return nil }
         let scale = min(1.0, maxDimension / max(bounds.width, bounds.height))
         let size = NSSize(width: (bounds.width * scale).rounded(), height: (bounds.height * scale).rounded())
-        let full = NSImage(size: bounds.size)
-        full.addRepresentation(rep)
         let preview = NSImage(size: size)
         preview.lockFocus()
         NSGraphicsContext.current?.imageInterpolation = .high
         full.draw(in: NSRect(origin: .zero, size: size))
         preview.unlockFocus()
         return preview
+    }
+
+    /// Copies the combined image (what the canvas shows, without selection handles) to the clipboard.
+    @discardableResult
+    public func copyCombinedImageToPasteboard() -> Bool {
+        guard let image = renderImage() else { return false }
+        NSPasteboard.general.copyImage(image)
+        HUDMessageView.show("Copied Combined Image", in: self)
+        return true
     }
 
     /// Called after a colour match with how many objects were matched by their skin, and how many in all.
@@ -884,7 +900,7 @@ public class CombiningCanvasView: NSView {
     // MARK: - Context Menu for Foreground Objects
     override public func menu(for event: NSEvent) -> NSMenu? {
         guard combiningMode == .foregroundCombine else {
-            return super.menu(for: event)
+            return canvasMenu()
         }
 
         let pt = convert(event.locationInWindow, from: nil)
@@ -919,7 +935,7 @@ public class CombiningCanvasView: NSView {
             }
         }
 
-        guard let idx = clickedIdx else { return super.menu(for: event) }
+        guard let idx = clickedIdx else { return canvasMenu() }
 
         let menu = NSMenu(title: "Foreground Object Menu")
         menu.autoenablesItems = false
@@ -928,6 +944,7 @@ public class CombiningCanvasView: NSView {
         copyItem.target = self
         copyItem.representedObject = idx
         menu.addItem(copyItem)
+        menu.addItem(combinedCopyMenuItem())
 
         menu.addItem(NSMenuItem.separator())
 
@@ -1050,6 +1067,23 @@ public class CombiningCanvasView: NSView {
         menu.addItem(removeItem)
 
         return menu
+    }
+
+    /// The menu for the canvas outside any object.
+    private func canvasMenu() -> NSMenu {
+        let menu = NSMenu(title: "Combined Image Menu")
+        menu.addItem(combinedCopyMenuItem())
+        return menu
+    }
+
+    private func combinedCopyMenuItem() -> NSMenuItem {
+        let item = NSMenuItem(title: "Copy Combined Image to Clipboard", action: #selector(contextCopyCombinedImageAction(_:)), keyEquivalent: "")
+        item.target = self
+        return item
+    }
+
+    @objc private func contextCopyCombinedImageAction(_ sender: NSMenuItem) {
+        copyCombinedImageToPasteboard()
     }
 
     @objc private func contextCopyObjectAction(_ sender: NSMenuItem) {
