@@ -84,6 +84,79 @@ cat << 'EOF' > "${CONTENTS_DIR}/Info.plist"
     <true/>
     <key>NSPrincipalClass</key>
     <string>NSApplication</string>
+    <key>CFBundleDocumentTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>FastView Combination</string>
+            <key>CFBundleTypeRole</key>
+            <string>Editor</string>
+            <key>LSHandlerRank</key>
+            <string>Owner</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>com.fastview.combination</string>
+            </array>
+        </dict>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>Image</string>
+            <key>CFBundleTypeRole</key>
+            <string>Viewer</string>
+            <key>LSHandlerRank</key>
+            <string>Alternate</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>public.image</string>
+            </array>
+        </dict>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>Archive</string>
+            <key>CFBundleTypeRole</key>
+            <string>Viewer</string>
+            <key>LSHandlerRank</key>
+            <string>Alternate</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>public.zip-archive</string>
+                <string>com.rarlab.rar-archive</string>
+            </array>
+        </dict>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>Folder</string>
+            <key>CFBundleTypeRole</key>
+            <string>Viewer</string>
+            <key>LSHandlerRank</key>
+            <string>Alternate</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>public.folder</string>
+            </array>
+        </dict>
+    </array>
+    <key>UTExportedTypeDeclarations</key>
+    <array>
+        <dict>
+            <key>UTTypeIdentifier</key>
+            <string>com.fastview.combination</string>
+            <key>UTTypeDescription</key>
+            <string>FastView Combination</string>
+            <key>UTTypeConformsTo</key>
+            <array>
+                <string>public.json</string>
+                <string>public.data</string>
+            </array>
+            <key>UTTypeTagSpecification</key>
+            <dict>
+                <key>public.filename-extension</key>
+                <array>
+                    <string>fastview</string>
+                </array>
+            </dict>
+        </dict>
+    </array>
 </dict>
 </plist>
 EOF

@@ -7,13 +7,14 @@ FastView is a high-performance macOS image viewer written in Swift and AppKit, b
 - **Fast Directory & Archive Navigation**: Browse through image collections, nested subfolders, and compressed archives seamlessly.
 - **Archive Support**: Native in-memory archive reading for ZIP and RAR files (including nested archive directories).
 - **Favorites Management**: Toggle favorite items (Cmd+F) and browse favorites mode (Option-F / ⌥F).
-- **Low Memory Mode**: Optional minimal caching mode limiting memory cache to at most 10 LRU items.
+- **Low Memory Mode**: Optional minimal caching mode limiting the in-memory image cache (thumbnails included) to 50 items. The cache also shrinks when macOS reports memory pressure.
 - **Recursive Thumbnail Peeking**: Automatic thumbnail extraction for directories/archives by naturally sorting contents and recursively traversing until the first image is found.
 - **Visual Sidebar Badges**: Large overlay badges for favorites (star) and folders/archives (type icons) on sidebar cells.
 - **File Information Panel**: Metadata panel (Cmd+I) with thumbnail, kind, size, location, image properties (dimensions, colour profile, DPI), camera EXIF (camera, lens, exposure, date taken, GPS), folder/archive contents and dates. It follows the selection while open.
 - **Random Image**: Jump to a random image anywhere under the current location (Cmd+J) or inside the selected folder or archive (Cmd+Option+J), descending through subfolders and archives.
 - **Dual View**: A second pane for comparing and combining images; close it with the small close button in its header or at the top right of the canvas.
 - **Drag and Drop**: Drop a folder, archive, image or `.fastview` combination on the window to open it (on the 2nd view to open it there); drag files out of the list to other apps.
+- **Open from Finder**: Open With → FastView, a drop on the Dock icon, `open -a FastView <path>`, and double-clicking a `.fastview` file (the `FastView.app` bundle registers these types).
 - **Finder Actions**: Show in Finder, Open in Default App and Move to Trash (Edit → Undo puts the file back) from the File menu or a list item's context menu.
 - **On-Screen Feedback**: Brief messages for zoom level, favorites and the ends of the list, also in full screen; empty areas say why (no images here, a file that can't be displayed).
 - **Keyboard Shortcuts Window**: Help → Keyboard Shortcuts (`Cmd + /`).

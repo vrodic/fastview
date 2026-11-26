@@ -8,26 +8,51 @@ public class SQLiteCache {
     private var db: OpaquePointer?
     private let lock = NSLock()
 
+    /// Images marked viewed but not yet written (key → when first viewed). Written together
+    /// every `viewedFlushInterval` and at `shutdown()`, so browsing new images costs a few
+    /// small transactions rather than one per image. Never holds a key already in the database.
+    private var pendingViewed = [String: Double]()
+    private var isViewedFlushScheduled = false
+    private let viewedFlushInterval: TimeInterval
+    private let flushQueue = DispatchQueue(label: "SQLiteCache.viewedFlush", qos: .utility)
+
     /// `databaseURL` is the default location unless a test gives its own.
-    public init(databaseURL: URL? = nil) {
+    public init(databaseURL: URL? = nil, viewedFlushInterval: TimeInterval = 30) {
+        self.viewedFlushInterval = viewedFlushInterval
         setupDatabase(at: databaseURL ?? SQLiteCache.defaultDatabaseURL())
     }
 
     deinit {
         if db != nil {
+            writePendingViewedUnlocked()
             sqlite3_close(db)
         }
     }
 
-    /// Closes the database for the app's exit. Waits for a write in progress, so the process does
-    /// not die in the middle of one and leave a journal for the next launch to roll back; writes
-    /// arriving after this are dropped.
+    /// Closes the database for the app's exit, writing viewed images still pending. Waits for a
+    /// write in progress, so the process does not die in the middle of one; writes arriving
+    /// after this are dropped.
     public func shutdown() {
         lock.lock()
         defer { lock.unlock() }
         guard db != nil else { return }
+        writePendingViewedUnlocked()
         sqlite3_close(db)
         db = nil
+    }
+
+    /// Writes the viewed images still pending now, rather than at the next scheduled flush.
+    func flushViewedImages() {
+        lock.lock()
+        defer { lock.unlock() }
+        writePendingViewedUnlocked()
+    }
+
+    /// Viewed images marked but not yet written.
+    var pendingViewedCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return pendingViewed.count
     }
 
     /// Rows changed so far by this connection.
@@ -37,18 +62,37 @@ public class SQLiteCache {
         return db == nil ? 0 : sqlite3_total_changes(db)
     }
 
+    static let databaseFileName = "fastview_cache.sqlite"
+
+    /// In Application Support, not Caches: the database holds favorites and viewed history,
+    /// which macOS or a cleaner app may delete along with anything in Caches.
     private static func defaultDatabaseURL() -> URL {
         let fm = FileManager.default
-        let cacheDir: URL
-        if let userCache = fm.urls(for: .cachesDirectory, in: .userDomainMask).first {
-            cacheDir = userCache.appendingPathComponent("FastView", isDirectory: true)
-        } else {
+        guard let support = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first,
+              let caches = fm.urls(for: .cachesDirectory, in: .userDomainMask).first else {
             let execDir = URL(fileURLWithPath: CommandLine.arguments[0]).deletingLastPathComponent()
-            cacheDir = execDir
+            return execDir.appendingPathComponent(databaseFileName)
         }
+        let dir = support.appendingPathComponent("FastView", isDirectory: true)
+        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        let url = dir.appendingPathComponent(databaseFileName)
+        moveLegacyDatabase(from: caches.appendingPathComponent("FastView", isDirectory: true), to: url)
+        return url
+    }
 
-        try? fm.createDirectory(at: cacheDir, withIntermediateDirectories: true)
-        return cacheDir.appendingPathComponent("fastview_cache.sqlite")
+    /// Moves the database (and any journal beside it) from where older versions kept it,
+    /// unless one is already at `newURL`.
+    static func moveLegacyDatabase(from oldDirectory: URL, to newURL: URL) {
+        let fm = FileManager.default
+        let oldURL = oldDirectory.appendingPathComponent(databaseFileName)
+        guard fm.fileExists(atPath: oldURL.path), !fm.fileExists(atPath: newURL.path) else { return }
+        // The database first: a journal must never arrive without the database it belongs to.
+        guard (try? fm.moveItem(at: oldURL, to: newURL)) != nil else { return }
+        for suffix in ["-journal", "-wal", "-shm"] {
+            let from = URL(fileURLWithPath: oldURL.path + suffix)
+            guard fm.fileExists(atPath: from.path) else { continue }
+            try? fm.moveItem(at: from, to: URL(fileURLWithPath: newURL.path + suffix))
+        }
     }
 
     private func setupDatabase(at dbURL: URL) {
@@ -59,8 +103,11 @@ public class SQLiteCache {
             return
         }
 
-        // Disable explicit disk syncs to avoid NVMe wear and let OS handle flushing opportunistically
-        sqlite3_exec(db, "PRAGMA synchronous = OFF;", nil, nil, nil)
+        // WAL with NORMAL syncs only at checkpoints, so writes stay cheap, and a crash or power
+        // loss can lose the last writes but not corrupt the database (as OFF with a rollback
+        // journal could).
+        sqlite3_exec(db, "PRAGMA journal_mode = WAL;", nil, nil, nil)
+        sqlite3_exec(db, "PRAGMA synchronous = NORMAL;", nil, nil, nil)
 
         let createDirectoryTable = """
         CREATE TABLE IF NOT EXISTS directory_entries (
@@ -185,19 +232,56 @@ public class SQLiteCache {
         lock.lock()
         defer { lock.unlock() }
 
+        guard db != nil else { return }
+        // Read whether it is stored already (a cheap lookup in cached pages), so a key viewed
+        // in an earlier session is never queued and the counts below never count it twice.
+        if viewedCache[key] == nil { loadViewedStateUnlocked([key]) }
         if viewedCache[key] == true { return }
         viewedCache[key] = true
         prefixesWithoutViewed.removeAll()
 
-        guard db != nil else { return }
-        let query = "INSERT OR REPLACE INTO viewed_images (path, timestamp) VALUES (?, ?);"
+        pendingViewed[key] = Date().timeIntervalSince1970
+        scheduleViewedFlushUnlocked()
+    }
+
+    private func scheduleViewedFlushUnlocked() {
+        guard !isViewedFlushScheduled else { return }
+        isViewedFlushScheduled = true
+        flushQueue.asyncAfter(deadline: .now() + viewedFlushInterval) { [weak self] in
+            guard let self = self else { return }
+            self.lock.lock()
+            defer { self.lock.unlock() }
+            self.isViewedFlushScheduled = false
+            self.writePendingViewedUnlocked()
+        }
+    }
+
+    /// Writes every pending viewed image in one transaction. Call with `lock` held.
+    private func writePendingViewedUnlocked() {
+        guard db != nil, !pendingViewed.isEmpty else { return }
+        sqlite3_exec(db, "BEGIN;", nil, nil, nil)
+        // IGNORE: a row already there keeps the time it was first viewed and costs no write.
+        let query = "INSERT OR IGNORE INTO viewed_images (path, timestamp) VALUES (?, ?);"
         var statement: OpaquePointer?
         if sqlite3_prepare_v2(db, query, -1, &statement, nil) == SQLITE_OK {
-            sqlite3_bind_text(statement, 1, key, -1, SQLITE_TRANSIENT)
-            sqlite3_bind_double(statement, 2, Date().timeIntervalSince1970)
-            sqlite3_step(statement)
+            for (key, timestamp) in pendingViewed {
+                sqlite3_reset(statement)
+                sqlite3_bind_text(statement, 1, key, -1, SQLITE_TRANSIENT)
+                sqlite3_bind_double(statement, 2, timestamp)
+                sqlite3_step(statement)
+            }
         }
         sqlite3_finalize(statement)
+        if sqlite3_exec(db, "COMMIT;", nil, nil, nil) == SQLITE_OK {
+            pendingViewed.removeAll()
+        } else {
+            sqlite3_exec(db, "ROLLBACK;", nil, nil, nil)
+        }
+    }
+
+    /// Pending viewed keys under `prefix`, matched as SQLite's key range matches stored ones.
+    private func pendingViewedCountUnlocked(withPrefix prefix: String) -> Int {
+        pendingViewed.keys.reduce(0) { $0 + ($1.utf8.starts(with: prefix.utf8) ? 1 : 0) }
     }
 
     public func isImageViewed(key: String) -> Bool {
@@ -208,9 +292,12 @@ public class SQLiteCache {
         guard isTrackingViewedImagesEnabled, !keys.isEmpty else { return 0 }
         lock.lock()
         defer { lock.unlock() }
+        loadViewedStateUnlocked(keys.filter { viewedCache[$0] == nil })
+        return keys.filter { viewedCache[$0] == true }.count
+    }
 
-        let missingKeys = keys.filter { viewedCache[$0] == nil }
-
+    /// Reads into `viewedCache` whether each of `missingKeys` is stored. Call with `lock` held.
+    private func loadViewedStateUnlocked(_ missingKeys: [String]) {
         if !missingKeys.isEmpty, db != nil {
             let chunkSize = 500
             for i in stride(from: 0, to: missingKeys.count, by: chunkSize) {
@@ -242,8 +329,6 @@ public class SQLiteCache {
                 }
             }
         }
-
-        return keys.filter { viewedCache[$0] == true }.count
     }
 
     /// Number of viewed images whose key starts with `prefix`: "<archive>#"
@@ -266,7 +351,7 @@ public class SQLiteCache {
             }
         }
         sqlite3_finalize(statement)
-        return count
+        return count + pendingViewedCountUnlocked(withPrefix: prefix)
     }
 
     /// How many of `prefixes` have at least one viewed image under them, if
@@ -299,6 +384,10 @@ public class SQLiteCache {
             var statement: OpaquePointer?
             if sqlite3_prepare_v2(db, query, -1, &statement, nil) == SQLITE_OK {
                 for prefix in missing {
+                    if pendingViewedCountUnlocked(withPrefix: prefix) > 0 {
+                        prefixesWithViewed.insert(prefix)
+                        continue
+                    }
                     sqlite3_reset(statement)
                     sqlite3_bind_text(statement, 1, prefix, -1, SQLITE_TRANSIENT)
                     sqlite3_bind_text(statement, 2, prefix + "\u{10FFFF}", -1, SQLITE_TRANSIENT)

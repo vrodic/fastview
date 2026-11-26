@@ -49,8 +49,29 @@ public class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation,
         return nil
     }
 
+    /// Paths Finder or the Dock asked to open before launching finished (a document opened with
+    /// FastView while it was not running arrives before `applicationDidFinishLaunching`).
+    private var pendingOpenPaths: [String] = []
+    private var hasFinishedLaunching = false
+
+    /// Finder (Open With, a double click on a `.fastview` file), a drop on the Dock icon, and
+    /// `open -a FastView <path>`. One window, so only the first path is opened.
+    public func application(_ application: NSApplication, open urls: [URL]) {
+        let paths = urls.filter { $0.isFileURL }.map { $0.path }
+        // AppKit also hands over the command-line path as an open request; launch already opened it.
+        let launchArgument = CommandLine.arguments.count > 1 ? URL(fileURLWithPath: CommandLine.arguments[1]).standardized.path : nil
+        guard let path = paths.first(where: { URL(fileURLWithPath: $0).standardized.path != launchArgument }) else { return }
+        guard hasFinishedLaunching else {
+            pendingOpenPaths.append(path)
+            return
+        }
+        windowController?.window?.makeKeyAndOrderFront(nil)
+        open(path: path)
+    }
+
     public func applicationDidFinishLaunching(_ notification: Notification) {
         setupMenuBar()
+        hasFinishedLaunching = true
 
         let initialPath = getInitialPath()
 
@@ -67,7 +88,14 @@ public class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation,
         let lastSavedSelectedItemId = UserDefaults.standard.string(forKey: AppDelegate.lastSelectedItemIdKey)
         let targetItem = lastSavedSelectedItemId ?? lastSavedSelectedItem
 
-        if CommandLine.arguments.count > 1, let suppliedPath = initialPath {
+        if let documentPath = pendingOpenPaths.first {
+            // Launched to open a document: it replaces the last location.
+            pendingOpenPaths.removeAll()
+            DispatchQueue.main.async {
+                self.open(path: documentPath)
+                windowController.splitVC.restoreSelectionAndDualState()
+            }
+        } else if CommandLine.arguments.count > 1, let suppliedPath = initialPath {
             let loc = NavigationManager.locationForPath(suppliedPath)
             saveLastOpenedPath(suppliedPath)
 
